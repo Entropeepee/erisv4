@@ -1,0 +1,27 @@
+# ═══════════════════════════════════════════════════════════
+# Eris Echo v4 — Dependencies
+# ═══════════════════════════════════════════════════════════
+
+# CORE (runs everywhere, no GPU needed)
+numpy>=1.24
+
+# SERVER (for web UI + API)
+fastapi>=0.104
+uvicorn>=0.24
+httpx>=0.25
+
+# GPU ACCELERATION (RTX 5080 / CUDA 13.2)
+# Uncomment when CUDA toolkit is installed:
+# cupy-cuda13x>=14.0
+
+# EMBEDDING MODEL (for semantic memory retrieval)
+# Uncomment when ready to add embeddings:
+# onnxruntime-gpu>=1.17
+# sentence-transformers>=2.3
+
+# VECTOR INDEX (upgrade from brute-force)
+# Uncomment when ready:
+# faiss-gpu-cuvs>=1.14
+
+# TESTING
+pytest>=8.0

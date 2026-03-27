@@ -1,0 +1,146 @@
+"""
+The Tribe of Eleven Specialists
+=================================
+
+Parallel domain experts that compete for attention via the MoEGate.
+Each specialist generates findings with computed BFECDS vectors.
+Findings are posted to the Cross-Attention Hub for cross-pollination.
+
+The eleven:
+    Logos      — Logic, formal reasoning, mathematical structure
+    Mythos     — Philosophy, meaning, symbolic interpretation
+    Praxis     — Physics, engineering, material processes
+    Elos       — Adversarial skeptic, red team, devil's advocate
+    Chronos    — History, temporal patterns, precedent
+    Anthropos  — Sociology, human dynamics, culture
+    Ploutos    — Finance, economics, resource allocation
+    Eros       — Neuroscience, embodiment, somatic intelligence
+    Aesthetes  — Art, beauty, pattern recognition, aesthetic judgment
+    Techne     — Technology, implementation, systems engineering
+    Kairos     — Synthesis, timing, integration across domains
+
+SGT-gated activation: specialists only fire when their domain
+relevance exceeds the noise floor. Not every specialist speaks
+on every input — only those whose BFECDS alignment with the
+current goal is statistically significant.
+
+Research triggering: when C > 0.4 AND E > 0.2, the two-cycle
+research engine activates (broad → synthesis → refined → canonize).
+"""
+
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Any
+import time
+
+from eris.computation.activations import BVec, bvec_cosine
+from eris.computation.sgt import SGTGate
+
+
+@dataclass
+class SpecialistFinding:
+    """A single finding from a specialist, with computed BFECDS."""
+    specialist_id: str
+    content: str
+    bvec: BVec
+    confidence: float = 0.5
+    timestamp: float = field(default_factory=time.time)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Specialist:
+    """A domain expert in the Tribe."""
+    id: str
+    name: str
+    domain: str
+    description: str
+    # Which BLECD domains this specialist is most sensitive to
+    sensitivity_bvec: BVec = field(default_factory=BVec)
+    activation_gate: SGTGate = field(default_factory=lambda: SGTGate(threshold_sigma=1.5))
+
+    def should_activate(self, goal_bvec: BVec) -> bool:
+        """SGT-gated activation: only fire if relevance exceeds noise floor."""
+        relevance = bvec_cosine(self.sensitivity_bvec, goal_bvec)
+        should_fire, _ = self.activation_gate.update(relevance)
+        return should_fire or relevance > 0.6  # Also activate on strong alignment
+
+
+# The Eleven
+TRIBE = [
+    Specialist("logos", "Logos", "logic",
+               "Formal reasoning, mathematical structure, proof",
+               sensitivity_bvec=BVec(B=0.6, F=0.7, E=0.3, C=0.2, D=0.1, S=0.3)),
+    Specialist("mythos", "Mythos", "philosophy",
+               "Meaning, symbolic interpretation, metaphysics",
+               sensitivity_bvec=BVec(B=0.3, F=0.4, E=0.7, C=0.5, D=0.3, S=0.2)),
+    Specialist("praxis", "Praxis", "physics",
+               "Physical processes, engineering, material science",
+               sensitivity_bvec=BVec(B=0.5, F=0.5, E=0.4, C=0.6, D=0.3, S=0.4)),
+    Specialist("elos", "Elos", "adversarial",
+               "Skeptic, red team, devil's advocate, falsification",
+               sensitivity_bvec=BVec(B=0.2, F=0.2, E=0.3, C=0.8, D=0.6, S=0.1)),
+    Specialist("chronos", "Chronos", "history",
+               "Temporal patterns, precedent, historical context",
+               sensitivity_bvec=BVec(B=0.4, F=0.6, E=0.2, C=0.3, D=0.5, S=0.5)),
+    Specialist("anthropos", "Anthropos", "sociology",
+               "Human dynamics, culture, social systems",
+               sensitivity_bvec=BVec(B=0.5, F=0.7, E=0.5, C=0.3, D=0.3, S=0.4)),
+    Specialist("ploutos", "Ploutos", "finance",
+               "Economics, resource allocation, value",
+               sensitivity_bvec=BVec(B=0.7, F=0.4, E=0.3, C=0.4, D=0.2, S=0.7)),
+    Specialist("eros", "Eros", "neuroscience",
+               "Embodiment, somatic intelligence, sensation",
+               sensitivity_bvec=BVec(B=0.3, F=0.6, E=0.6, C=0.4, D=0.3, S=0.3)),
+    Specialist("aesthetes", "Aesthetes", "art",
+               "Beauty, pattern recognition, aesthetic judgment",
+               sensitivity_bvec=BVec(B=0.2, F=0.3, E=0.8, C=0.3, D=0.2, S=0.4)),
+    Specialist("techne", "Techne", "technology",
+               "Implementation, systems engineering, tooling",
+               sensitivity_bvec=BVec(B=0.6, F=0.5, E=0.5, C=0.3, D=0.2, S=0.6)),
+    Specialist("kairos", "Kairos", "synthesis",
+               "Integration, timing, cross-domain connection",
+               sensitivity_bvec=BVec(B=0.3, F=0.5, E=0.7, C=0.5, D=0.2, S=0.3)),
+]
+
+
+class CrossAttentionHub:
+    """Shared workspace where specialists post and query findings.
+
+    Findings are stored with their BFECDS vectors, enabling
+    cross-pollination: a Praxis finding about phase transitions
+    might resonate with a Mythos finding about transformation.
+    """
+
+    def __init__(self, capacity: int = 50):
+        self.capacity = capacity
+        self._findings: List[SpecialistFinding] = []
+
+    def post(self, finding: SpecialistFinding) -> None:
+        self._findings.append(finding)
+        if len(self._findings) > self.capacity:
+            self._findings = self._findings[-self.capacity:]
+
+    def query(self, bvec: BVec, top_k: int = 5) -> List[SpecialistFinding]:
+        """Find findings most aligned with the query BFECDS."""
+        scored = [(f, bvec_cosine(bvec, f.bvec)) for f in self._findings]
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [f for f, _ in scored[:top_k]]
+
+    def clear(self) -> None:
+        self._findings.clear()
+
+    @property
+    def size(self) -> int:
+        return len(self._findings)
+
+
+def get_active_specialists(goal_bvec: BVec) -> List[Specialist]:
+    """Return specialists whose relevance exceeds the noise floor."""
+    return [s for s in TRIBE if s.should_activate(goal_bvec)]
+
+
+def should_trigger_research(bvec: BVec) -> bool:
+    """Research fires when C > 0.4 AND E > 0.2 — genuine criticality
+    combined with emergence signal. Without both, log and move on."""
+    return bvec.C > 0.4 and bvec.E > 0.2
