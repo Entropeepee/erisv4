@@ -18,7 +18,7 @@ import numpy as np
 import os
 
 # ─── GPU Setup ───────────────────────────────────────────────────────────
-VRAM_CAP_GB: float = 13.5  # Hard cap — leave headroom below 16GB
+VRAM_CAP_GB: float = 9.5  # Reduced from 13.5 to leave 6.5GB headroom for Unreal Engine 5 & NVIDIA ACE models
 
 try:
     import cupy as cp
