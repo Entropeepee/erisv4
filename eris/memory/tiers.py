@@ -81,6 +81,15 @@ class MemoryRecord:
         age_hours = (time.time() - self.timestamp) / 3600.0
         return math.exp(-math.log(2) * age_hours / max(half_life_hours, 0.01))
 
+    def reinforce(self) -> None:
+        """Reinforce the memory by resetting its timestamp.
+        This naturally counteracts the Ebbinghaus decay curve.
+        """
+        self.access_count += 1
+        self.last_accessed = time.time()
+        # Partial reset of timestamp (e.g. 50% closer to now)
+        self.timestamp += (self.last_accessed - self.timestamp) * 0.5
+
     def to_dict(self) -> Dict[str, Any]:
         """Serialize for JSONL storage."""
         d = {
@@ -357,7 +366,13 @@ class MemorySystem:
 
         # Sort by score descending
         unique.sort(key=lambda x: x[1], reverse=True)
-        return [rec for rec, _ in unique[:top_k]]
+        
+        # Reinforce retrieved memories to combat Ebbinghaus decay
+        results = [rec for rec, _ in unique[:top_k]]
+        for rec in results:
+            rec.reinforce()
+            
+        return results
 
     def consolidate(self) -> Dict[str, int]:
         """SGT-gated consolidation: promote worthy memories up tiers.

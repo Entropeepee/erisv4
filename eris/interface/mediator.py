@@ -56,6 +56,7 @@ class LLMResponse:
     model: str
     latency_ms: float
     tokens_used: int = 0
+    reasoning: str = ""
     raw: Optional[Dict[str, Any]] = None
 
     def __repr__(self) -> str:
@@ -106,11 +107,21 @@ class OllamaBackend(LLMBackend):
             resp = await client.post(f"{self.base_url}/api/generate", json=payload)
             resp.raise_for_status()
             data = resp.json()
+        full_text = data.get("response", "")
+        reasoning = ""
+        text = full_text
+        import re
+        match = re.search(r"<think>(.*?)</think>", full_text, flags=re.DOTALL)
+        if match:
+            reasoning = match.group(1).strip()
+            text = full_text.replace(match.group(0), "").strip()
+
         return LLMResponse(
-            text=data.get("response", ""),
+            text=text,
             provider="ollama",
             model=self.model,
             latency_ms=(time.time() - t0) * 1000,
+            reasoning=reasoning,
             raw=data,
         )
 
@@ -142,7 +153,7 @@ class OpenAIBackend(LLMBackend):
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-        async with httpx.AsyncClient(http2=True, timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(
                 f"{self.base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {self.api_key}",
@@ -153,12 +164,17 @@ class OpenAIBackend(LLMBackend):
             resp.raise_for_status()
             data = resp.json()
 
-        text = data["choices"][0]["message"]["content"]
+        msg = data["choices"][0]["message"]
+        text = msg.get("content", "")
+        reasoning = msg.get("reasoning_content", "")
+        if reasoning and not text:
+            text = reasoning
+            reasoning = ""
         tokens = data.get("usage", {}).get("total_tokens", 0)
         return LLMResponse(
             text=text, provider="openai", model=self.model,
             latency_ms=(time.time() - t0) * 1000,
-            tokens_used=tokens, raw=data,
+            tokens_used=tokens, reasoning=reasoning, raw=data,
         )
 
     def is_available(self) -> bool:
@@ -335,6 +351,9 @@ class LLMMediator:
             try:
                 return await backend.generate(prompt, system, max_tokens, temperature)
             except Exception as e:
+                print(f"[LLMMediator] Backend {backend.__class__.__name__} failed: {e}")
+                import traceback
+                traceback.print_exc()
                 continue  # Try next backend
         return None
 
@@ -372,3 +391,22 @@ class LLMMediator:
             tasks = list(pending)
 
         return None
+
+    async def ensemble(self, prompt: str, system: str = "",
+                       max_tokens: int = 2000,
+                       temperature: float = 0.7) -> List[LLMResponse]:
+        """Fire all available backends in parallel for MoE synthesis."""
+        available = self.available_backends
+        if not available:
+            return []
+
+        async def _try_backend(backend: LLMBackend) -> Optional[LLMResponse]:
+            try:
+                return await backend.generate(prompt, system, max_tokens, temperature)
+            except Exception as e:
+                print(f"[Ensemble] Backend {backend.name} failed: {e}")
+                return None
+
+        tasks = [asyncio.create_task(_try_backend(b)) for b in available]
+        results = await asyncio.gather(*tasks)
+        return [r for r in results if r is not None]

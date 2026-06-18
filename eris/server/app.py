@@ -38,6 +38,8 @@ except ImportError:
 from eris.orchestrator import ErisOrchestrator
 from eris.sandbox.executor import SandboxExecutor
 from eris.knowledge.extractor import KnowledgeExtractor
+from eris.interface.tts import TTSEngine
+from fastapi import Response
 
 
 class ChatRequest(BaseModel if HAS_FASTAPI else object):
@@ -53,6 +55,10 @@ class SandboxRequest(BaseModel if HAS_FASTAPI else object):
 class IngestRequest(BaseModel if HAS_FASTAPI else object):
     text: str = ""
     title: str = ""
+
+class TTSGenerateRequest(BaseModel if HAS_FASTAPI else object):
+    text: str = ""
+    voice_id: str = ""
 
 
 def create_app(
@@ -84,6 +90,8 @@ def create_app(
         use_frt=use_frt,
     )
 
+    tts_engine = TTSEngine()
+
     # WebSocket connections for real-time metrics
     ws_connections: list = []
 
@@ -106,6 +114,7 @@ def create_app(
 
         return {
             "response": result.response_text,
+            "reasoning": getattr(result, 'reasoning_text', ''),
             "input_bvec": result.input_bvec.as_dict() if result.input_bvec else None,
             "response_bvec": result.response_bvec.as_dict() if result.response_bvec else None,
             "coherence": result.coherence,
@@ -158,6 +167,45 @@ def create_app(
             "bvecs": [d.bvec.as_dict() if d.bvec else None for d in descriptors],
         }
 
+    async def _periodic_dream_loop():
+        while True:
+            await asyncio.sleep(60 * 15)  # Every 15 minutes
+            try:
+                report = await orchestrator.run_dream_cycle()
+                print(f"[Dream Loop] Processed {report['tensions_processed']} tensions. Resolved: {report['tensions_resolved']}")
+            except Exception as e:
+                print(f"[Dream Loop Error] {e}")
+
+    @app.on_event("startup")
+    async def startup_event():
+        asyncio.create_task(_periodic_dream_loop())
+
+    @app.get("/api/tts/voices")
+    async def get_tts_voices():
+        """Get available TTS voices."""
+        return {"voices": tts_engine.get_voices(), "default": {"engine": "pyttsx3", "id": ""}}
+
+    @app.post("/api/tts/generate")
+    async def generate_tts(req: TTSGenerateRequest):
+        """Generate TTS audio."""
+        wav_bytes = await tts_engine._generate_audio_async(req.text, req.voice_id)
+        if not wav_bytes:
+            return JSONResponse({"error": "TTS generation failed."}, status_code=500)
+        return Response(content=wav_bytes, media_type="audio/wav")
+
+    @app.get("/api/status")
+    async def get_status():
+        """Check if LLM is ready."""
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                resp = await client.get("http://localhost:11434/api/tags")
+                if resp.status_code == 200:
+                    return {"llm_ready": True}
+        except Exception:
+            pass
+        return {"llm_ready": False}
+
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         """WebSocket for real-time metrics streaming."""
@@ -186,6 +234,8 @@ def create_app(
 
     return app
 
+# Create the global application instance for uvicorn
+app = create_app() if HAS_FASTAPI else None
 
 # Minimal embedded UI (when static/index.html doesn't exist yet)
 _MINIMAL_UI = """<!DOCTYPE html>
@@ -244,7 +294,6 @@ ws.onmessage = (e) => {
 if __name__ == "__main__":
     if HAS_FASTAPI:
         import uvicorn
-        app = create_app()
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+        uvicorn.run("eris.server.app:app", host="0.0.0.0", port=8000, reload=True)
     else:
         print("FastAPI not installed. Run: pip install fastapi uvicorn")

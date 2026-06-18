@@ -83,6 +83,7 @@ from eris.metacognition.dreaming import DreamingLoop
 class ProcessingResult:
     """Full result of processing one user message."""
     response_text: str = ""
+    reasoning_text: str = ""
     input_bvec: Optional[BVec] = None
     response_bvec: Optional[BVec] = None
     coherence: float = 0.0
@@ -144,6 +145,7 @@ class ErisOrchestrator:
 
         # Layer 6: LLM mediator (Broca's area)
         self.mediator = LLMMediator()
+        self.deep_mediator = LLMMediator()
 
         # Layer 4: Metacognition
         self.dreaming_loop = DreamingLoop(
@@ -154,12 +156,15 @@ class ErisOrchestrator:
 
         # SGT gate for dissonance detection
         self._dissonance_gate = SGTGate(threshold_sigma=2.0, ema_alpha=0.1)
-        # We can add a default LLM backend here if we want, 
-        # but it's typically injected by the caller.
-        from eris.interface.mediator import OpenAIBackend
-        self.llm_backends: List[LLMBackend] = [
-            OpenAIBackend(model="qwen", api_key="sk-no-key", base_url="http://localhost:8080/v1")
-        ]
+        # Dual-path LLM Router Configuration
+        from eris.interface.mediator import OllamaBackend, AnthropicBackend, OpenAIBackend, GeminiBackend
+        # Fast Path (3GB VRAM)
+        self.mediator.add_backend(OllamaBackend(model="gemma:2b"))
+        # Deep Path MoE (Mixture of Experts)
+        self.deep_mediator.add_backend(OllamaBackend(model="gpt-oss:20b"))
+        self.deep_mediator.add_backend(AnthropicBackend(api_key=os.environ.get("ANTHROPIC_API_KEY", "")))
+        self.deep_mediator.add_backend(OpenAIBackend(api_key=os.environ.get("OPENAI_API_KEY", "")))
+        self.deep_mediator.add_backend(GeminiBackend(api_key=os.environ.get("GEMINI_API_KEY", "")))
 
         # Turn counter
         self.turn_count: int = 0
@@ -254,13 +259,41 @@ class ErisOrchestrator:
             user_message, winner, memory_text, input_bvec, result.regime
         )
 
-        llm_response = await self.mediator.generate(
-            prompt=prompt,
-            system=system_context or self._default_system_prompt(),
-        )
+        # LLM ROUTER: MoE Synthesis & VRAM Optimization
+        if result.dCdX > 0.3 or result.coherence < 0.2:
+            print("[ROUTER] Complex thought detected (dCdX > 0.3). Activating MoE Synthesis.")
+            # Fire all experts in parallel
+            expert_responses = await self.deep_mediator.ensemble(
+                prompt=prompt,
+                system=system_context or self._default_system_prompt()
+            )
+            
+            if len(expert_responses) > 1:
+                print(f"[MoE] Synthesizing {len(expert_responses)} expert responses...")
+                synthesis_prompt = "We have consulted multiple AI experts. Synthesize their insights into the ultimate response:\n\n"
+                for idx, r in enumerate(expert_responses):
+                    synthesis_prompt += f"--- EXPERT {idx+1} ({r.provider}) ---\n{r.text}\n\n"
+                synthesis_prompt += "\nNow, provide the final synthesized response directly:"
+                
+                # Synthesize using the local deep model
+                llm_response = await self.deep_mediator.generate(
+                    prompt=synthesis_prompt,
+                    system="You are Eris. Synthesize the expert opinions."
+                )
+            elif len(expert_responses) == 1:
+                llm_response = expert_responses[0]
+            else:
+                llm_response = None
+        else:
+            print("[ROUTER] Conversational thought. Routing to FAST path.")
+            llm_response = await self.mediator.generate(
+                prompt=prompt,
+                system=system_context or self._default_system_prompt(),
+            )
 
         if llm_response:
             result.response_text = llm_response.text
+            result.reasoning_text = getattr(llm_response, 'reasoning', '')
             result.llm_provider = f"{llm_response.provider}/{llm_response.model}"
         else:
             # No LLM available — use the specialist finding directly

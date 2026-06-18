@@ -1,0 +1,5 @@
+eris_data/
+__pycache__/
+*.pyc
+node_modules/
+.env
