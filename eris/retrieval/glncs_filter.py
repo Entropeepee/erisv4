@@ -40,6 +40,7 @@ Usage:
 from __future__ import annotations
 from typing import Optional
 import numpy as np
+from eris.config import to_numpy, xp
 
 from eris.computation.shrinkage import davidian_weight
 
@@ -136,7 +137,7 @@ class GLNCSFilter:
             magnitudes = np.abs(compressed)
             mean_mag = np.maximum(np.mean(magnitudes, axis=-1, keepdims=True), 1e-10)
             snr = magnitudes / mean_mag
-            weights = np.asarray(davidian_weight(
+            weights = to_numpy(davidian_weight(
                 snr.ravel(), alpha=1.0, beta=0.3, gamma=1.0, delta=0.0
             )).reshape(compressed.shape)
             return (compressed * weights).astype(np.float32)

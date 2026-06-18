@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict, Any
 from collections import deque
 import numpy as np
+from eris.config import to_numpy, xp
 import math
 
 from eris.computation.activations import BVec, bvec_cosine, bvec_distance
@@ -211,15 +212,15 @@ class MoEGate:
 
         # Davidian shrinkage on coupling spectrum: denoise
         total_coupling = elastic + plastic
-        mean_c = max(float(np.mean(total_coupling)), 1e-10)
+        mean_c = max(float(xp.mean(total_coupling)), 1e-10)
         snr = total_coupling / mean_c
-        weights = np.asarray(davidian_weight(
+        weights = to_numpy(davidian_weight(
             snr, alpha=1.0, beta=0.5, gamma=1.0, delta=0.0
         )).ravel()
 
         # Net constructive interference (shrunk)
-        net = float(np.sum((elastic - plastic) * weights))
-        norm = float(np.sum(total_coupling * weights))
+        net = float(xp.sum((elastic - plastic) * weights))
+        norm = float(xp.sum(total_coupling * weights))
         if norm < 1e-10:
             return 0.0
 

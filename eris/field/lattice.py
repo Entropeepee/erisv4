@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Dict, List, Tuple, Optional, Set
 import numpy as np
+from eris.config import to_numpy, xp
 
 
 class GateType(IntEnum):

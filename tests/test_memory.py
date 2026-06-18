@@ -6,6 +6,7 @@ Run: cd eris_echo_v4 && python -m pytest tests/test_memory.py -v
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import numpy as np
+from eris.config import to_numpy, xp
 import tempfile
 import pytest
 
@@ -52,7 +53,7 @@ class TestFieldCompiler:
         from eris.field.compiler import compile_contradiction, inject_seeds
 
         field = FractalField(size=32)
-        phi_before = np.asarray(field.phi).copy()
+        phi_before = to_numpy(field.phi).copy()
 
         a = BVec(B=0.9, F=0.1, E=0.1, C=0.1, D=0.1, S=0.1)
         b = BVec(B=0.1, F=0.9, E=0.9, C=0.9, D=0.9, S=0.9)
@@ -60,7 +61,7 @@ class TestFieldCompiler:
                                        sgt_threshold=1.0, sgt_mean=0.0, sgt_var=0.01)
         inject_seeds(field, result)
 
-        phi_after = np.asarray(field.phi)
+        phi_after = to_numpy(field.phi)
         diff = np.sum(np.abs(phi_after - phi_before))
         assert diff > 0.01, "Injecting seeds should modify the field"
 

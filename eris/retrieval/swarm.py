@@ -29,6 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Dict
 import numpy as np
+from eris.config import to_numpy, xp
 
 from eris.computation.activations import BVec, bvec_cosine, bvec_distance
 from eris.memory.tiers import MemorySystem, MemoryRecord

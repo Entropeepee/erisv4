@@ -6,6 +6,7 @@ Run: cd eris_echo_v4 && python -m pytest tests/test_infrastructure.py -v
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import numpy as np
+from eris.config import to_numpy, xp
 import tempfile
 import pytest
 
@@ -15,7 +16,8 @@ import pytest
 class TestValidator:
     def test_safe_code_passes(self):
         from eris.sandbox.validator import validate_code
-        ok, msg = validate_code("import numpy as np\nprint(np.pi)")
+        ok, msg = validate_code("import numpy as np
+from eris.config import to_numpy, xp\nprint(np.pi)")
         assert ok, msg
 
     def test_blocked_import_os(self):

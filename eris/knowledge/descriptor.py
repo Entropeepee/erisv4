@@ -42,6 +42,7 @@ import hashlib
 import io
 import time
 import numpy as np
+from eris.config import to_numpy, xp
 
 from eris.computation.activations import BVec
 
@@ -82,8 +83,8 @@ class ErisDescriptor:
         f.run(pde_steps)
 
         bvec = f.compute_bvec()
-        phi = np.asarray(f.phi).copy()
-        theta = np.asarray(f.theta).copy()
+        phi = to_numpy(f.phi).copy()
+        theta = to_numpy(f.theta).copy()
 
         return cls(
             title=title or text[:60],

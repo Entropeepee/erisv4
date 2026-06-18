@@ -30,6 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Any
 import numpy as np
+from eris.config import to_numpy, xp
 import json
 import os
 import time

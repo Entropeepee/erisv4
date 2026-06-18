@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple
 import time
 import numpy as np
+from eris.config import to_numpy, xp
 
 
 @dataclass

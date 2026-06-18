@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Tuple, Dict, Set, Optional
 import numpy as np
+from eris.config import to_numpy, xp
 
 from eris.field.lattice import HexLogicGrid, hex_neighbor
 
@@ -163,14 +164,14 @@ class SymbolicJetTracer:
                 gradient = np.diff(energy_arr)
                 # Torsion = second derivative (curvature of energy along path)
                 second_deriv = np.diff(gradient)
-                torsion = float(np.sqrt(np.mean(second_deriv ** 2)))
+                torsion = float(np.sqrt(xp.mean(second_deriv ** 2)))
             else:
                 torsion = 0.0
 
             jets.append(SymbolicJet(
                 path=path,
-                total_energy=float(np.sum(energy_arr)),
-                mean_energy=float(np.mean(energy_arr)),
+                total_energy=float(xp.sum(energy_arr)),
+                mean_energy=float(xp.mean(energy_arr)),
                 torsion_signature=torsion,
             ))
 

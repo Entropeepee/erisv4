@@ -21,7 +21,6 @@ import os
 VRAM_CAP_GB: float = 13.5  # Hard cap — leave headroom below 16GB
 
 try:
-    raise ImportError("Forced CPU: CUDA 13.2 FP8 headers broken on Blackwell")
     import cupy as cp
     from cupy import fft as cupyfft
 

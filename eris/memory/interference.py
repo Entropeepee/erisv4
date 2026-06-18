@@ -44,6 +44,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Tuple, Dict
 import numpy as np
+from eris.config import to_numpy, xp
 
 from eris.computation.activations import BVec, bvec_distance
 from eris.computation.shrinkage import davidian_weight, DavidianParams
@@ -86,7 +87,7 @@ def _field_integral(phi_a, theta_a, phi_b, theta_b) -> InterferenceResult:
     tb = theta_b[:min_h, :min_w]
 
     integrand = pa * pb * np.cos(ta - tb)
-    raw = float(np.mean(integrand))
+    raw = float(xp.mean(integrand))
 
     # Normalize by geometric mean of field energies
     energy_a = float(np.mean(pa ** 2))
@@ -180,7 +181,7 @@ def _csba_coupling_geometry(bvec_a: BVec, bvec_b: BVec) -> InterferenceResult:
 
         # Davidian weights: which domain couplings are signal vs noise?
         # Use moderate shrinkage (β=0.5) to be conservative
-        weights = np.asarray(davidian_weight(
+        weights = to_numpy(davidian_weight(
             snr, alpha=1.0, beta=0.5, gamma=1.0, delta=0.0
         )).ravel()
 

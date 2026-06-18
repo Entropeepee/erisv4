@@ -14,6 +14,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
+from eris.config import to_numpy, xp
 import tempfile
 import pytest
 
@@ -28,7 +29,7 @@ class TestFractalPDE:
 
         field = FractalField(size=32)
 
-        phi_np = np.asarray(field.phi)
+        phi_np = to_numpy(field.phi)
         assert phi_np.shape == (32, 32)
         # Boundary should be zero (Dirichlet)
         assert phi_np[0, :].max() == 0.0
@@ -46,7 +47,7 @@ class TestFractalPDE:
         for _ in range(100):
             field.step()
 
-        phi_np = np.asarray(field.phi)
+        phi_np = to_numpy(field.phi)
         assert phi_np.min() >= 0.0, f"phi went negative: {phi_np.min()}"
         assert phi_np.max() <= 1.0, f"phi exceeded 1: {phi_np.max()}"
         assert phi_np[0, :].max() == 0.0, "Top boundary violated"
@@ -57,10 +58,10 @@ class TestFractalPDE:
         from eris.field.pde import FractalField
 
         field = FractalField(size=32)
-        initial_energy = float(np.sum(np.asarray(field.phi)))
+        initial_energy = float(np.sum(to_numpy(field.phi)))
 
         field.run(50)
-        final_energy = float(np.sum(np.asarray(field.phi)))
+        final_energy = float(np.sum(to_numpy(field.phi)))
 
         # Should decay to near zero (only initial noise, and decay removes it)
         assert final_energy <= initial_energy + 0.01, (
@@ -74,7 +75,7 @@ class TestFractalPDE:
         field = FractalField(size=64)
         field.seed_from_text("The quick brown fox jumps over the lazy dog")
 
-        phi_np = np.asarray(field.phi)
+        phi_np = to_numpy(field.phi)
         # Should have some energy in the interior
         interior = phi_np[1:-1, 1:-1]
         assert interior.max() > 0.01, "Seeded field has no energy"
@@ -92,7 +93,7 @@ class TestFractalPDE:
         f2.seed_from_text("hello world")
 
         np.testing.assert_array_equal(
-            np.asarray(f1.phi), np.asarray(f2.phi),
+            to_numpy(f1.phi), to_numpy(f2.phi),
             err_msg="Same text produced different fields"
         )
 
@@ -106,7 +107,7 @@ class TestFractalPDE:
         f2 = FractalField(size=32)
         f2.seed_from_text("goodbye world")
 
-        diff = float(np.sum(np.abs(np.asarray(f1.phi) - np.asarray(f2.phi))))
+        diff = float(np.sum(np.abs(to_numpy(f1.phi) - to_numpy(f2.phi))))
         assert diff > 0.01, "Different texts produced identical fields"
 
     def test_pde_produces_bvec(self):
@@ -137,8 +138,8 @@ class TestFractalPDE:
             restored = FractalField.load_checkpoint(path)
 
             np.testing.assert_allclose(
-                np.asarray(field.phi),
-                np.asarray(restored.phi),
+                to_numpy(field.phi),
+                to_numpy(restored.phi),
                 atol=1e-6,
             )
             np.testing.assert_allclose(
@@ -455,7 +456,7 @@ class TestFRT:
         field = FractalField(size=32)
         field.seed_from_text("Dual path test", use_frt=True)
         # Should have nonzero phi in interior
-        phi_np = np.asarray(field.phi)
+        phi_np = to_numpy(field.phi)
         assert phi_np[1:-1, 1:-1].max() > 0.01
         # Run PDE on top of FRT-seeded field
         field.run(20)

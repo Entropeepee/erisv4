@@ -172,6 +172,7 @@ class CorpusProcessor:
         from eris.knowledge.descriptor import ErisDescriptor
         from eris.memory.tiers import MemoryRecord
         import numpy as np
+        from eris.config import to_numpy, xp
 
         stats = {"loaded": 0, "errors": 0, "skipped": 0}
         eris_dir = self.extractor.output_dir

@@ -6,6 +6,7 @@ Run: cd eris_echo_v4 && python -m pytest tests/test_computation.py -v
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import numpy as np
+from eris.config import to_numpy, xp
 import pytest
 
 
@@ -16,14 +17,14 @@ class TestDavidianShrinkage:
         from eris.computation.shrinkage import davidian_weight
         s = np.linspace(0.1, 10.0, 50).astype(np.float32)
         wiener = s / (s + 1.0)
-        dav = np.asarray(davidian_weight(s, alpha=1.0, beta=1.0, gamma=1.0, delta=0.0))
+        dav = to_numpy(davidian_weight(s, alpha=1.0, beta=1.0, gamma=1.0, delta=0.0))
         np.testing.assert_allclose(dav, wiener, atol=0.05)
 
     def test_kill_zone(self):
         """δ>0 should suppress signals below the dead zone."""
         from eris.computation.shrinkage import davidian_weight
         s = np.array([0.1, 0.5, 2.0, 5.0], dtype=np.float32)
-        w = np.asarray(davidian_weight(s, alpha=1.0, beta=1.0, gamma=1.0, delta=1.0, smooth=False))
+        w = to_numpy(davidian_weight(s, alpha=1.0, beta=1.0, gamma=1.0, delta=1.0, smooth=False))
         assert w[0] < 0.01
         assert w[1] < 0.01
         assert w[3] > 0.3
@@ -32,8 +33,8 @@ class TestDavidianShrinkage:
         """Higher γ should suppress low-SNR more aggressively."""
         from eris.computation.shrinkage import davidian_weight
         s = np.array([0.5, 5.0], dtype=np.float32)
-        w1 = np.asarray(davidian_weight(s, gamma=1.0))
-        w2 = np.asarray(davidian_weight(s, gamma=2.0))
+        w1 = to_numpy(davidian_weight(s, gamma=1.0))
+        w2 = to_numpy(davidian_weight(s, gamma=2.0))
         assert w2[0] < w1[0], "Higher γ should suppress low SNR more"
 
     def test_shrink_toward_mean(self):

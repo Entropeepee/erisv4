@@ -221,7 +221,7 @@ class ErisOrchestrator:
 
         # ── Layer 5: MoEGate selects winner via wave interference ─────
         tau_rms = float(to_numpy(
-            np.sqrt(np.mean(np.asarray(self.field.tau) ** 2))
+            np.sqrt(np.mean(to_numpy(self.field.tau) ** 2))
         )) if hasattr(self.field, 'tau') else 0.0
 
         winner = self.moe_gate.select_winner(

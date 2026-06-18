@@ -67,6 +67,7 @@ from typing import List, Tuple, Optional
 import hashlib
 import math
 import numpy as np
+from eris.config import to_numpy, xp
 
 
 @dataclass

@@ -55,6 +55,21 @@ class FieldGateType(Enum):
     DIODE = "diode"   # Irreversible flow: asymmetric φ gradient
 
 
+@dataclass
+class GateInstruction:
+    """A discrete instruction for the hex lattice SLGP worker."""
+    q: int
+    r: int
+    direction: int
+    gate_type: FieldGateType
+    weight: float
+
+@dataclass
+class GateProgram:
+    """A collection of instructions for the SLGP worker."""
+    instructions: List[GateInstruction] = field(default_factory=list)
+
+
 # Domain pair → gate type mapping (from BLC paper Appendix C)
 # Each gate is defined by its TWO dominant BLECD domains
 DOMAIN_PAIR_GATE = {
