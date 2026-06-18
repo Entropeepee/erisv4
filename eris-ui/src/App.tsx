@@ -25,6 +25,11 @@ function App() {
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+  
+  const [volume, setVolume] = useState(1.0);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -103,15 +108,20 @@ function App() {
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
+        activeAudioRef.current = audio;
+        audio.volume = isMuted ? 0 : volume;
         
         const source = audioCtxRef.current.createMediaElementSource(audio);
         source.connect(analyserRef.current!);
         analyserRef.current!.connect(audioCtxRef.current.destination);
 
-        audio.onplay = () => setIsSpeaking(true);
+        audio.onplay = () => { setIsSpeaking(true); setIsPaused(false); };
+        audio.onpause = () => setIsPaused(true);
         audio.onended = () => {
           setIsSpeaking(false);
+          setIsPaused(false);
           source.disconnect();
+          if (activeAudioRef.current === audio) activeAudioRef.current = null;
         };
         audio.play();
       }
@@ -141,9 +151,43 @@ function App() {
     }
   };
 
+  const handleStop = () => {
+    if (activeAudioRef.current) {
+      activeAudioRef.current.pause();
+      activeAudioRef.current.currentTime = 0;
+      setIsSpeaking(false);
+      setIsPaused(false);
+    }
+  };
+
+  const handlePauseToggle = () => {
+    if (activeAudioRef.current) {
+      if (activeAudioRef.current.paused) activeAudioRef.current.play();
+      else activeAudioRef.current.pause();
+    }
+  };
+
+  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const vol = parseFloat(e.target.value);
+    setVolume(vol);
+    if (activeAudioRef.current) {
+      activeAudioRef.current.volume = isMuted ? 0 : vol;
+    }
+  };
+
+  const toggleMute = () => {
+    const newMuted = !isMuted;
+    setIsMuted(newMuted);
+    if (activeAudioRef.current) {
+      activeAudioRef.current.volume = newMuted ? 0 : volume;
+    }
+  };
+
   const sendMessage = async () => {
     if (!input.trim() || isProcessing) return;
     
+    handleStop(); // Stop any currently playing audio when sending a new message
+
     const text = input.trim();
     setInput('');
     setMessages(prev => [...prev, { role: 'user', text, id: Date.now().toString() }]);
@@ -273,6 +317,28 @@ function App() {
           >
             Test Voice
           </button>
+          
+          <div className="audio-controls" style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem', marginTop: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem' }}>
+              <button onClick={handlePauseToggle} disabled={!isSpeaking && !isPaused} style={{ flex: 1, padding: '0.5rem' }}>
+                {isPaused ? '▶️ Play' : '⏸ Pause'}
+              </button>
+              <button onClick={handleStop} disabled={!isSpeaking && !isPaused} style={{ flex: 1, padding: '0.5rem', background: '#5a3b5a' }}>
+                ⏹ Stop
+              </button>
+              <button onClick={toggleMute} style={{ padding: '0.5rem' }}>
+                {isMuted ? '🔇' : '🔊'}
+              </button>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Volume</span>
+              <input 
+                type="range" min="0" max="1" step="0.05" 
+                value={volume} onChange={handleVolumeChange}
+                style={{ flex: 1 }}
+              />
+            </div>
+          </div>
         </div>
       </div>
     </>

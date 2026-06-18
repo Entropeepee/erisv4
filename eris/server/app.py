@@ -188,7 +188,10 @@ def create_app(
     @app.post("/api/tts/generate")
     async def generate_tts(req: TTSGenerateRequest):
         """Generate TTS audio."""
-        wav_bytes = await tts_engine._generate_audio_async(req.text, req.voice_id)
+        import re
+        # Strip common markdown to prevent reading asterisks/hashes out loud
+        clean_text = re.sub(r'[*_`#~]', '', req.text)
+        wav_bytes = await tts_engine._generate_audio_async(clean_text, req.voice_id)
         if not wav_bytes:
             return JSONResponse({"error": "TTS generation failed."}, status_code=500)
         return Response(content=wav_bytes, media_type="audio/wav")
