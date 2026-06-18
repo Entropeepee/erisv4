@@ -240,6 +240,8 @@ class ErisOrchestrator:
             coherence=result.coherence,
             tau_rms=tau_rms,
             dCdX=result.dCdX,
+            field=self.field,
+            input_text=user_message,
         )
 
         if winner:

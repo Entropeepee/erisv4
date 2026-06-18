@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BCDC Field — Live Engine View</title>
+<style>
+  :root{
+    --bg:#07080d; --panel:#10131c; --panel2:#161a26; --line:#232838;
+    --ink:#e7ecf5; --dim:#8b93a7; --faint:#5a6276;
+    --accent:#7dd3fc; --plastic:#fb7185; --elastic:#60a5fa; --ok:#4ade80;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans)}
+  body{display:grid;grid-template-columns:1fr 280px;grid-template-rows:48px 1fr;gap:1px;
+       background:var(--line);height:100vh;overflow:hidden}
+  header{grid-column:1/-1;background:var(--panel);display:flex;align-items:center;gap:18px;padding:0 16px}
+  header .title{font-weight:700;letter-spacing:.2px}
+  header .title b{color:var(--accent)}
+  header .sub{color:var(--faint);font-size:11px;font-family:var(--mono)}
+  header .spacer{flex:1}
+  
+  main{position:relative;background:radial-gradient(ellipse at center,#0a0c14 0%,#05060a 100%);
+       display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{image-rendering:pixelated;box-shadow:0 0 80px rgba(80,120,200,.18);border-radius:6px;}
+  .hud{position:absolute;top:10px;left:12px;font-family:var(--mono);font-size:11px;color:var(--dim);
+       background:rgba(7,8,13,.6);border:1px solid var(--line);border-radius:8px;padding:8px 10px;line-height:1.6;pointer-events:none}
+  .hud b{color:var(--ink)}
+  .viewbar{position:absolute;bottom:10px;left:50%;transform:translateX(-50%)}
+  .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:12px}
+  .seg button{background:var(--panel2);color:var(--dim);border:0;padding:6px 12px;cursor:pointer;font-family:var(--mono)}
+  .seg button.on{background:var(--accent);color:#04121b;font-weight:700}
+  
+  aside.met{background:var(--panel);overflow-y:auto;padding:16px;font-family:var(--mono)}
+  h4{margin:14px 0 7px;font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--faint);font-weight:600}
+  h4:first-child{margin-top:2px}
+  .met .big{display:flex;justify-content:space-between;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--line)}
+  .met .big .k{color:var(--dim);font-size:11px} .met .big .val{font-size:17px;color:var(--ink)}
+  .note{font-size:11px;color:var(--faint);line-height:1.5;margin-top:10px;font-family:var(--sans)}
+  .pill{display:inline-block;font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:20px;border:1px solid var(--line)}
+  .status{font-size:12px; color:var(--accent); font-family:var(--mono);}
+  .status.offline{color:var(--plastic);}
+</style>
+</head>
+<body>
+<header>
+  <div class="title">Eris Echo <b>Living Field</b></div>
+  <div class="sub">Backend sync mode</div>
+  <div class="spacer"></div>
+  <div id="connStatus" class="status offline">Disconnected</div>
+</header>
+
+<!-- CENTER: the field -->
+<main>
+  <canvas id="cv" width="560" height="560"></canvas>
+  <div class="hud" id="hud"></div>
+  <div class="viewbar seg" id="viewSeg">
+    <button data-view="field" class="on">Field (φ/θ)</button>
+    <button data-view="phase">Phase (θ)</button>
+    <button data-view="coher">Local Coherence</button>
+    <button data-view="regime">Plastic/Elastic</button>
+  </div>
+</main>
+
+<!-- RIGHT: live readouts -->
+<aside class="met">
+  <h4>Live State</h4>
+  <div class="big"><span class="k">regime</span><span class="val" id="m-regime_str" style="color:var(--accent)">—</span></div>
+  <div class="big"><span class="k">global coherence C</span><span class="val" id="m-C">—</span></div>
+  <div class="big"><span class="k">dC/dX ratio</span><span class="val" id="m-dCdX">—</span></div>
+  <div class="big"><span class="k">mean amplitude φ̄</span><span class="val" id="m-phi">—</span></div>
+  <div class="big"><span class="k">plastic %</span><span class="val" id="m-plastic">—</span></div>
+
+  <h4>What you are seeing</h4>
+  <div class="note">
+    This window streams the LIVE cognitive field from the Eris engine. It flows as she processes input, resolves logic, or dreams.
+    <br><br>
+    <span class="pill" style="color:var(--elastic)">elastic</span> absorbs input smoothly.<br><br>
+    <span class="pill" style="color:var(--plastic)">plastic</span> restructures deep knowledge.<br><br>
+    <span class="pill" style="color:#fbbf24">transfixed</span> stuck generating output without changing understanding.
+  </div>
+</aside>
+
+<script>
+let fieldData = null;
+let view = 'field';
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+
+document.getElementById('viewSeg').addEventListener('click', e => {
+  if(e.target.dataset.view) {
+    view = e.target.dataset.view;
+    document.querySelectorAll('#viewSeg button').forEach(b => b.classList.toggle('on', b.dataset.view === view));
+    if (fieldData) draw();
+  }
+});
+
+function hsl(h,s,l) { return `hsl(${h},${s}%,${l}%)`; }
+
+function draw() {
+  if (!fieldData) return;
+  const N = fieldData.size || 64;
+  const cell = cv.width / N;
+  ctx.fillStyle = '#05060a';
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  
+  const {phi, theta, regime, lc} = fieldData;
+  if (!phi || !theta) return;
+
+  const phiFlat = phi.flat();
+  const thetaFlat = theta.flat();
+  const regFlat = regime ? regime.flat() : new Float32Array(N*N);
+  const lcFlat = lc && lc.length ? lc.flat() : new Float32Array(N*N);
+
+  for(let y=0; y<N; y++) {
+    for(let x=0; x<N; x++) {
+      const i = y*N + x;
+      const f = phiFlat[i];
+      const th = thetaFlat[i];
+      let col;
+      
+      if (view === 'field') {
+        if(f < 0.02) continue;
+        col = hsl(th * 57.2958 % 360, 92, Math.min(72, 14 + f * 68));
+      } else if (view === 'phase') {
+        col = hsl(th * 57.2958 % 360, 85, 52);
+      } else if (view === 'coher') {
+        const c = lcFlat[i] || 0;
+        col = hsl(170 - 110*c, 70, 18 + 44*c);
+      } else {
+        col = regFlat[i] > 0.5 ? 'rgba(251,113,133,.9)' : 'rgba(96,165,250,.55)';
+      }
+      ctx.fillStyle = col;
+      ctx.fillRect(x*cell, y*cell, cell+0.6, cell+0.6);
+    }
+  }
+  
+  updateMetrics(phiFlat, regFlat);
+}
+
+function updateMetrics(phiFlat, regFlat) {
+  const meanphi = phiFlat.reduce((a,b)=>a+b,0) / phiFlat.length;
+  const plastic = regFlat.reduce((a,b)=>a+(b>0.5?1:0),0) / regFlat.length;
+  
+  document.getElementById('m-C').textContent = fieldData.coherence ? fieldData.coherence.toFixed(3) : '—';
+  document.getElementById('m-dCdX').textContent = fieldData.dCdX ? fieldData.dCdX.toFixed(4) : '—';
+  document.getElementById('m-phi').textContent = meanphi.toFixed(3);
+  document.getElementById('m-plastic').textContent = (plastic * 100).toFixed(0) + '%';
+  document.getElementById('m-regime_str').textContent = fieldData.regime_str || '—';
+  
+  const rEl = document.getElementById('m-regime_str');
+  if (fieldData.regime_str === 'transfixed') rEl.style.color = 'var(--plastic)';
+  else if (fieldData.regime_str === 'plastic') rEl.style.color = '#fbbf24';
+  else rEl.style.color = 'var(--elastic)';
+
+  document.getElementById('hud').innerHTML = `step: <b>${fieldData.step_count || 0}</b>`;
+}
+
+function connect() {
+  const wsUrl = `ws://${location.host}/ws/field`;
+  const ws = new WebSocket(wsUrl);
+  const st = document.getElementById('connStatus');
+  
+  ws.onopen = () => {
+    st.textContent = '● Live Sync';
+    st.className = 'status';
+  };
+  ws.onclose = () => {
+    st.textContent = 'Disconnected (retrying...)';
+    st.className = 'status offline';
+    setTimeout(connect, 2000);
+  };
+  ws.onmessage = (e) => {
+    try {
+      fieldData = JSON.parse(e.data);
+      draw();
+    } catch(err) { console.error("Parse error", err); }
+  };
+}
+
+connect();
+</script>
+</body>
+</html>

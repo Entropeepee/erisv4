@@ -58,6 +58,9 @@ class TestFractalPDE:
         from eris.field.pde import FractalField
 
         field = FractalField(size=32)
+        field.p.sigma_noise = 0.0  # Disable noise to test purely deterministic decay
+        field.p.memory_coupling = 0.0  # Disable background memory bias
+        field.p.activations = {}  # No external forcing
         initial_energy = float(np.sum(to_numpy(field.phi)))
 
         field.run(50)
@@ -143,8 +146,8 @@ class TestFractalPDE:
                 atol=1e-6,
             )
             np.testing.assert_allclose(
-                np.asarray(field.theta),
-                np.asarray(restored.theta),
+                to_numpy(field.theta),
+                to_numpy(restored.theta),
                 atol=1e-6,
             )
             assert restored.step_count == field.step_count

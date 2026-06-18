@@ -1,5 +1,7 @@
-"""
-FRACTAL PDE - Field Evolution Substrate (BCDC Unified Engine v3)
+import os
+
+CODE = """"""
+FRACTAL PDE — Field Evolution Substrate (BCDC Unified Engine v3)
 ================================================================
 
 Replaced old advection PDE with the Kuramoto coupled-oscillator phase model
@@ -32,7 +34,7 @@ def get_bge_m3_embedding(text: str, dim: int = 256) -> np.ndarray:
     n = np.linalg.norm(vec)
     return vec / n if n > 0 else vec
 
-# ----------------------------- unifying primitives (CuPy ported) -----------------------------
+# ─────────────────────────── unifying primitives (CuPy ported) ───────────────────────────
 def hill_power(s, alpha=1.0, beta=0.5, gamma=1.0, delta=0.0):
     s_shift = xp.maximum(s - delta, 0.0)
     sa = xp.power(s_shift, alpha)
@@ -271,19 +273,7 @@ class FractalField:
         # Apply Eris attention modulator to full phi evolution 
         # (combining BCDC engine dphi and Eris memory bias)
         phi_new = phi + p.dt * self.attention * (dphi + memory_bias) + p.sigma_noise * np.sqrt(p.dt) * eta
-        
-        # If completely unseeded/inactive, gradual baseline decay to keep it quiet
-        if not p.activations and xp.max(self.phi) < 0.5:
-            phi_new *= 0.95
-            
-        self.phi = xp.clip(phi_new, 0.0, p.B_max - 1e-4)
-        
-        # Enforce Dirichlet boundaries
-        self.phi[0, :] = 0.0
-        self.phi[-1, :] = 0.0
-        self.phi[:, 0] = 0.0
-        self.phi[:, -1] = 0.0
-        
+        self.phi = xp.clip(phi_new, 1e-4, p.B_max - 1e-4)
         
         self._phase_step()
 
@@ -305,10 +295,13 @@ class FractalField:
         return compute_bvec_from_field(self.phi, self.theta, self.tau, self.phi_prev)
 
     def _update_global_observables(self) -> None:
-        C = float(xp.abs(xp.mean(xp.exp(1j * self.theta))))
-        gtheta_x = wrap_diff(xp.roll(self.theta, -1, 1), self.theta)
-        gtheta_y = wrap_diff(xp.roll(self.theta, -1, 0), self.theta)
-        X = float(xp.sum(self.phi * (gtheta_x + gtheta_y)))
+        phi_np = to_numpy(self.phi)
+        theta_np = to_numpy(self.theta)
+        
+        C = float(np.abs(np.mean(np.exp(1j * theta_np))))
+        gtheta_x = wrap_diff(np.roll(theta_np, -1, 1), theta_np)
+        gtheta_y = wrap_diff(np.roll(theta_np, -1, 0), theta_np)
+        X = float(np.sum(phi_np * (gtheta_x + gtheta_y)))
         
         self._coherence_history.append(C)
         self._exchange_history.append(X)
@@ -331,24 +324,7 @@ class FractalField:
     def dCdX(self) -> float:
         return self._dCdX_history[-1] if self._dCdX_history else 0.0
 
-    def save_checkpoint(self, path: str) -> None:
-        np.savez(path, phi=to_numpy(self.phi), theta=to_numpy(self.theta), step_count=self.step_count)
-
-    @classmethod
-    def load_checkpoint(cls, path: str, params: Optional[BCDCParams] = None) -> "FractalField":
-        data = np.load(path)
-        phi = data["phi"]
-        size = phi.shape[0]
-        field = cls(size=size, params=params)
-        from eris.config import to_gpu
-        field.phi = to_gpu(phi)
-        field.theta = to_gpu(data["theta"])
-        field.phi_prev = xp.copy(field.phi)
-        field.step_count = int(data.get("step_count", 0))
-        return field
-
     def detect_regime(self) -> str:
-        """Determines cognitive phase based on dC/dX ratio."""
         if len(self._dCdX_history) < 5:
             return "warmup"
         recent_dCdX = self._dCdX_history[-5:]
@@ -361,44 +337,20 @@ class FractalField:
         else:
             return "elastic"
 
-    def clone(self) -> "FractalField":
+    def probe_reactivity(self, amp=0.45, steps=12):
         import copy
-        new_field = FractalField(size=self.size, params=self.p)
-        new_field.phi = xp.copy(self.phi)
-        new_field.theta = xp.copy(self.theta)
-        new_field.phi_prev = xp.copy(self.phi_prev)
-        new_field.theta_prev = xp.copy(self.theta_prev)
-        new_field.tau = xp.copy(self.tau)
-        new_field.memory = xp.copy(self.memory)
-        new_field.attention = xp.copy(self.attention)
-        new_field.regime = xp.copy(self.regime)
-        new_field._flux_phi = xp.copy(self._flux_phi)
-        new_field._flux_theta = xp.copy(self._flux_theta)
-        new_field._lc = xp.copy(self._lc)
-        new_field.step_count = self.step_count
-        new_field._C_hist = self._C_hist.copy()
-        new_field._X_hist = self._X_hist.copy()
-        new_field._coherence_history = self._coherence_history.copy()
-        new_field._exchange_history = self._exchange_history.copy()
-        new_field._dCdX_history = self._dCdX_history.copy()
-        return new_field
-
-    def probe_reactivity(self, input_text: str = "", use_frt: bool = False, steps: int = 12):
-        """The real transfixion test: does the field RESPOND to actual input over a window?"""
-        base = self.clone()
-        pert = self.clone()
-        
-        if input_text:
-            pert.seed_from_text(input_text, use_frt=use_frt)
-            
+        base = copy.deepcopy(self); pert = copy.deepcopy(self)
+        s = self.size; cy = cx = s // 2; r = s // 6
+        yy, xx = np.mgrid[0:s, 0:s]
+        mask = to_gpu((((xx - cx) ** 2 + (yy - cy) ** 2) < r * r).astype(np.float32))
+        pert.phi = xp.clip(pert.phi + amp * mask, 1e-4, pert.p.B_max - 1e-4)
+        pert.theta = xp.where(mask, (pert.theta + np.pi) % (2 * np.pi), pert.theta)
         C0 = float(xp.abs(xp.mean(xp.exp(1j * base.theta))))
         for _ in range(steps):
-            base.step()
-            pert.step()
-            
+            base.step(); pert.step()
         divergence = float(to_numpy(xp.mean(xp.abs(pert.phi - base.phi))))
         dC = float(abs(pert._coherence_history[-1] - base._coherence_history[-1]))
-        return {"input_text": input_text[:20], "field_divergence": divergence,
+        return {"input_amp": amp, "field_divergence": divergence,
                 "coherence_response": dC, "C_baseline": C0}
 
     def snapshot(self) -> Dict[str, Any]:
@@ -438,3 +390,7 @@ class FractalField:
         field.tau = to_gpu(data["tau"])
         field.phi_prev = to_gpu(data["phi_prev"])
         return field
+"""
+
+with open(os.path.join("C:\\Users\\david\\.gemini\\antigravity\\scratch\\erisv4\\eris\\field\\pde.py"), "w") as f:
+    f.write(CODE)

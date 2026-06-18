@@ -92,14 +92,21 @@ class TransfixionDetector:
         self._dCdX_history.append(dCdX)
         self._coherence_history.append(coherence)
 
-    def is_transfixed(self) -> bool:
-        """Are we stuck? Uses BOTH conservation law AND diversity check.
+    def is_transfixed(self, field: Optional[Any] = None, input_text: str = "") -> bool:
+        """Are we stuck? Uses physical reactivity probe if field provided, else falls back to history.
 
-        Primary: dC/dX stagnation with nonzero coherence
-            = reporting coupling without exchanging (hallucination)
-        Secondary: low BFECDS diversity in broadcast history
-            = ruminating on the same pattern
+        Primary (v4): The BCDC Reactivity Probe directly measures input-reactivity.
+        Secondary: Conservation law and BFECDS diversity checks.
         """
+        if field is not None and hasattr(field, 'probe_reactivity') and input_text:
+            # Physical transfixion test: measure actual input-reactivity
+            reactivity = field.probe_reactivity(input_text=input_text, steps=12)
+            div = reactivity["field_divergence"]
+            dC = reactivity["coherence_response"]
+            # If the field absorbs actual new input but doesn't change state
+            # or coherence significantly, it's transfixed (stuck in an attractor).
+            return div < 0.05 and dC < 0.01
+
         if len(self._dCdX_history) < self.history_length // 2:
             return False
 
@@ -229,7 +236,9 @@ class MoEGate:
     def select_winner(self, findings: List[SpecialistFinding],
                       coherence: float = 0.0,
                       tau_rms: float = 0.0,
-                      dCdX: float = 0.0) -> Optional[SpecialistFinding]:
+                      dCdX: float = 0.0,
+                      field: Optional[Any] = None,
+                      input_text: str = "") -> Optional[SpecialistFinding]:
         """Select winning bid via wave interference, with transfixion override.
 
         Normal: highest interference score wins.
@@ -240,7 +249,7 @@ class MoEGate:
             return None
 
         # Record for transfixion tracking
-        is_stuck = self.transfixion_detector.is_transfixed()
+        is_stuck = self.transfixion_detector.is_transfixed(field=field, input_text=input_text)
         hallucinating = False
         if self.goal_bvec:
             hallucinating = self.transfixion_detector.check_hallucination_signature(

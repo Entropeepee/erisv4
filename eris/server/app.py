@@ -225,6 +225,37 @@ def create_app(
             if websocket in ws_connections:
                 ws_connections.remove(websocket)
 
+    @app.websocket("/ws/field")
+    async def websocket_field_endpoint(websocket: WebSocket):
+        """WebSocket for real-time field state streaming."""
+        await websocket.accept()
+        from eris.config import to_numpy
+        try:
+            while True:
+                # Only send if field exists
+                if orchestrator.field is not None:
+                    # Extract live arrays
+                    phi = to_numpy(orchestrator.field.phi).tolist()
+                    theta = to_numpy(orchestrator.field.theta).tolist()
+                    regime = to_numpy(orchestrator.field.regime).tolist()
+                    lc = to_numpy(orchestrator.field._lc).tolist() if hasattr(orchestrator.field, '_lc') else []
+
+                    await websocket.send_json({
+                        "size": orchestrator.field.size,
+                        "step_count": orchestrator.field.step_count,
+                        "phi": phi,
+                        "theta": theta,
+                        "regime": regime,
+                        "lc": lc,
+                        "coherence": orchestrator.field.coherence,
+                        "dCdX": orchestrator.field.dCdX,
+                        "regime_str": orchestrator.field.detect_regime(),
+                    })
+                # 10 fps is enough for the visualizer without overloading
+                await asyncio.sleep(0.1)
+        except Exception:
+            pass
+
     @app.get("/", response_class=HTMLResponse)
     async def index():
         """Serve the web UI."""

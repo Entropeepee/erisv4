@@ -272,6 +272,12 @@ function App() {
                 <Avatar3D isTalking={isSpeaking} vitals={vitals || { dCdX: 0.0, coherence: 0.0 }} analyser={analyser} />
               </div>
             )}
+            <button 
+              onClick={() => window.open('/visualizer.html', '_blank', 'width=840,height=600,menubar=no,toolbar=no')} 
+              style={{ padding: '0.5rem 1rem', background: 'var(--accent-primary)', border: 'none', borderRadius: '4px', color: 'white', cursor: 'pointer', marginTop: '1rem', width: '100%', fontFamily: 'var(--mono-font)' }}
+            >
+              Open Live Field Visualizer
+            </button>
           </div>
         </div>
 
