@@ -154,6 +154,12 @@ class ErisOrchestrator:
 
         # SGT gate for dissonance detection
         self._dissonance_gate = SGTGate(threshold_sigma=2.0, ema_alpha=0.1)
+        # We can add a default LLM backend here if we want, 
+        # but it's typically injected by the caller.
+        from eris.interface.mediator import OpenAIBackend
+        self.llm_backends: List[LLMBackend] = [
+            OpenAIBackend(model="qwen", api_key="sk-no-key", base_url="http://localhost:8080/v1")
+        ]
 
         # Turn counter
         self.turn_count: int = 0

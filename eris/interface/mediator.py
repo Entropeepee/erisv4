@@ -126,10 +126,11 @@ class OllamaBackend(LLMBackend):
 class OpenAIBackend(LLMBackend):
     """OpenAI API (GPT-4o, etc.)"""
 
-    def __init__(self, model: str = "gpt-4o", api_key: str = ""):
+    def __init__(self, model: str = "gpt-4o", api_key: str = "", base_url: str = "https://api.openai.com/v1"):
         self.name = "openai"
         self.model = model
         self.api_key = api_key
+        self.base_url = base_url
 
     async def generate(self, prompt: str, system: str = "",
                        max_tokens: int = 2000,
@@ -143,7 +144,7 @@ class OpenAIBackend(LLMBackend):
 
         async with httpx.AsyncClient(http2=True, timeout=30.0) as client:
             resp = await client.post(
-                "https://api.openai.com/v1/chat/completions",
+                f"{self.base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {self.api_key}",
                          "Content-Type": "application/json"},
                 json={"model": self.model, "messages": messages,
