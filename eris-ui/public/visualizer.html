@@ -79,7 +79,8 @@
     <br><br>
     <span class="pill" style="color:var(--elastic)">elastic</span> absorbs input smoothly.<br><br>
     <span class="pill" style="color:var(--plastic)">plastic</span> restructures deep knowledge.<br><br>
-    <span class="pill" style="color:#fbbf24">transfixed</span> stuck generating output without changing understanding.
+    <span class="pill" style="color:#fbbf24">transfixed</span> stuck generating output without changing understanding.<br><br>
+    <span class="pill" style="color:var(--dim)">warmup</span> calibrating field parameters.
   </div>
 </aside>
 
@@ -106,13 +107,29 @@ function draw() {
   ctx.fillStyle = '#05060a';
   ctx.fillRect(0, 0, cv.width, cv.height);
   
-  const {phi, theta, regime, lc} = fieldData;
+  const {phi, theta} = fieldData;
   if (!phi || !theta) return;
 
   const phiFlat = phi.flat();
   const thetaFlat = theta.flat();
-  const regFlat = regime ? regime.flat() : new Float32Array(N*N);
-  const lcFlat = lc && lc.length ? lc.flat() : new Float32Array(N*N);
+  const regFlat = new Float32Array(N*N);
+  const lcFlat = new Float32Array(N*N);
+
+  // Compute regime and lc on the frontend to save bandwidth
+  for(let y=0; y<N; y++) {
+    for(let x=0; x<N; x++) {
+      const i = y*N + x;
+      const f = phiFlat[i];
+      regFlat[i] = f > 0.5 ? 1.0 : 0.0;
+      
+      const xp = x < N-1 ? x+1 : x;
+      const yp = y < N-1 ? y+1 : y;
+      const t1 = thetaFlat[y*N + xp];
+      const t2 = thetaFlat[yp*N + x];
+      const dth = Math.abs(thetaFlat[i] - t1) + Math.abs(thetaFlat[i] - t2);
+      lcFlat[i] = Math.max(0, 1 - dth/3.14);
+    }
+  }
 
   for(let y=0; y<N; y++) {
     for(let x=0; x<N; x++) {
@@ -153,6 +170,7 @@ function updateMetrics(phiFlat, regFlat) {
   const rEl = document.getElementById('m-regime_str');
   if (fieldData.regime_str === 'transfixed') rEl.style.color = 'var(--plastic)';
   else if (fieldData.regime_str === 'plastic') rEl.style.color = '#fbbf24';
+  else if (fieldData.regime_str === 'warmup') rEl.style.color = 'var(--dim)';
   else rEl.style.color = 'var(--elastic)';
 
   document.getElementById('hud').innerHTML = `step: <b>${fieldData.step_count || 0}</b>`;

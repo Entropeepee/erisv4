@@ -237,24 +237,25 @@ def create_app(
                     # Extract live arrays
                     phi = to_numpy(orchestrator.field.phi).tolist()
                     theta = to_numpy(orchestrator.field.theta).tolist()
-                    regime = to_numpy(orchestrator.field.regime).tolist()
-                    lc = to_numpy(orchestrator.field._lc).tolist() if hasattr(orchestrator.field, '_lc') else []
 
                     await websocket.send_json({
                         "size": orchestrator.field.size,
                         "step_count": orchestrator.field.step_count,
                         "phi": phi,
                         "theta": theta,
-                        "regime": regime,
-                        "lc": lc,
+
                         "coherence": orchestrator.field.coherence,
                         "dCdX": orchestrator.field.dCdX,
                         "regime_str": orchestrator.field.detect_regime(),
                     })
                 # 10 fps is enough for the visualizer without overloading
                 await asyncio.sleep(0.1)
-        except Exception:
+        except WebSocketDisconnect:
             pass
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[WS Field Error] {e}")
 
     @app.get("/", response_class=HTMLResponse)
     async def index():
