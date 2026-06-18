@@ -30,18 +30,24 @@ function App() {
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    // Fetch Voices
-    fetch('/api/tts/voices')
-      .then(res => res.json())
-      .then(data => {
-        if (data.voices) {
-          setVoices(data.voices);
-          if (data.voices.length > 0) {
-            setSelectedVoice(data.voices[0].id);
+    // Fetch Voices with retry
+    const fetchVoices = () => {
+      fetch('/api/tts/voices')
+        .then(res => res.json())
+        .then(data => {
+          if (data.voices) {
+            setVoices(data.voices);
+            if (data.voices.length > 0) {
+              setSelectedVoice(data.voices[0].id);
+            }
           }
-        }
-      })
-      .catch(console.error);
+        })
+        .catch(err => {
+          console.log("Backend not ready for TTS voices, retrying in 2s...");
+          setTimeout(fetchVoices, 2000);
+        });
+    };
+    fetchVoices();
 
     // Connect WebSocket for vitals
     const connectWs = () => {
