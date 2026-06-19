@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BCDC Field — Living Field Console</title>
+<style>
+  :root{
+    --bg:#07080d; --panel:#10131c; --panel2:#161a26; --line:#232838;
+    --ink:#e7ecf5; --dim:#8b93a7; --faint:#5a6276;
+    --accent:#7dd3fc; --plastic:#fb7185; --elastic:#60a5fa; --ok:#4ade80;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans)}
+  body{display:flex;align-items:center;justify-content:center;background:#000000;height:100vh;margin:0;overflow:hidden;}
+  header{grid-column:1/-1;background:var(--panel);display:flex;align-items:center;gap:18px;padding:0 16px}
+  header .title{font-weight:700;letter-spacing:.2px}
+  header .title b{color:var(--accent)}
+  header .sub{color:var(--faint);font-size:11px;font-family:var(--mono)}
+  header .spacer{flex:1}
+  aside{background:var(--panel);overflow-y:auto;padding:12px}
+  aside::-webkit-scrollbar{width:8px}aside::-webkit-scrollbar-thumb{background:#222838;border-radius:4px}
+  main{position:relative;background:radial-gradient(ellipse at center,#0a0c14 0%,#05060a 100%);
+       display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{image-rendering:pixelated;box-shadow:0 0 80px rgba(80,120,200,.18);border-radius:6px;cursor:crosshair}
+  .hud{position:absolute;top:10px;left:12px;font-family:var(--mono);font-size:11px;color:var(--dim);
+       background:rgba(7,8,13,.6);border:1px solid var(--line);border-radius:8px;padding:8px 10px;line-height:1.6;pointer-events:none}
+  .hud b{color:var(--ink)}
+  .viewbar{position:absolute;bottom:10px;left:50%;transform:translateX(-50%)}
+  .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:12px}
+  .seg button{background:var(--panel2);color:var(--dim);border:0;padding:6px 12px;cursor:pointer;font-family:var(--mono)}
+  .seg button.on{background:var(--accent);color:#04121b;font-weight:700}
+  h4{margin:14px 0 7px;font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--faint);font-weight:600}
+  h4:first-child{margin-top:2px}
+  .sld{margin:7px 0}
+  .sld .row{display:flex;justify-content:space-between;align-items:baseline;font-size:12px}
+  .sld label{color:var(--ink)} .sld .v{font-family:var(--mono);font-size:11px;color:var(--accent)}
+  input[type=range]{width:100%;height:4px;-webkit-appearance:none;background:#2a3142;border-radius:3px;margin-top:5px}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;
+       background:var(--accent);cursor:pointer;border:2px solid #0a0d14}
+  input[type=range]::-moz-range-thumb{width:13px;height:13px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid #0a0d14}
+  .chips{display:flex;flex-wrap:wrap;gap:5px}
+  .chip{font-family:var(--mono);font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--line);
+        background:var(--panel2);color:var(--faint);cursor:pointer;user-select:none}
+  .chip.on{border-color:var(--accent);color:var(--accent);background:rgba(125,211,252,.08)}
+  .btn{width:100%;padding:8px;margin:4px 0;border-radius:8px;border:1px solid var(--line);
+       background:var(--panel2);color:var(--ink);font-size:12px;cursor:pointer;font-family:var(--sans)}
+  .btn:hover{border-color:var(--accent)}
+  .btn.warn{color:var(--plastic)} .btn.warn:hover{border-color:var(--plastic)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .rowflex{display:flex;gap:6px;align-items:center}
+  select,input[type=text],input[type=number]{width:100%;background:var(--panel2);border:1px solid var(--line);
+       color:var(--ink);border-radius:7px;padding:6px;font-size:12px;font-family:var(--sans)}
+  .met{font-family:var(--mono)}
+  .met .big{display:flex;justify-content:space-between;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--line)}
+  .met .big .k{color:var(--dim);font-size:11px} .met .big .val{font-size:17px;color:var(--ink)}
+  .bar{height:7px;background:#1b2030;border-radius:4px;overflow:hidden;margin:3px 0 8px}
+  .bar > span{display:block;height:100%;background:var(--accent);width:0%}
+  .dlabel{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:6px}
+  .note{font-size:11px;color:var(--faint);line-height:1.5;margin-top:6px}
+  .pill{display:inline-block;font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:20px;border:1px solid var(--line)}
+</style>
+</head>
+<body>
+
+
+<!-- LEFT: controls -->
+
+
+<!-- CENTER: the field -->
+<main>
+  <canvas id="cv" width="2048" height="2048" style="width:100vw; height:100vh; object-fit:fill;"></canvas>
+  
+  
+</main>
+
+<!-- RIGHT: live readouts -->
+
+
+<script>
+/* ====================== field state ====================== */
+const N = 56, NN = N*N, Bmax = 1.0;
+let phi = new Float32Array(NN), theta = new Float32Array(NN);
+let regime = new Float32Array(NN), omega0 = new Float32Array(NN), lc = new Float32Array(NN);
+let agents = [], paused = false, view = 'field', showTrails = false;
+let lastDrive = {S:0,D:0,F:0,TH:0,B:0,E:0,IBT:0,ZBT:0}, lastC = 0, lastLc = 0, reactScore = null;
+const DOM = ['S','D','F','TH','B','E','IBT','ZBT'];
+const WE = {S:1.0,D:1.0,F:0.2,TH:1.0,B:1.0,E:0.3,IBT:1.0,ZBT:1.0};
+const WP = {S:0.3,D:1.0,F:1.0,TH:1.0,B:1.0,E:1.5,IBT:1.0,ZBT:1.0};
+
+/* ====================== parameters (slider surface) ====================== */
+const P = { dt:0.05, r_sat:0.65, d_decay:0.28, alpha_em:0.10, D_em:1.8,
+  k_fb:0.18, K_phase:1.6, omega_spread:0.5, omega:0.10, sigma_phase:0.04,
+  gamma_bnd:6.0, quiet:0.18, T_c:0.55, a_th:0.20, xi:0.004, zeta:0.004, delta:0.05, yield_hi:0.62,
+  noise:0.06, hp_a:2.0, hp_b:0.55,
+  agentNoise:0.05, agentConfine:0.004, agentDrive:0.15, agentDrag:0.97 };
+const A = {S:1,D:1,F:1,TH:1,B:1,E:1,IBT:1,ZBT:1};
+
+const SLIDERS = {
+  'grp-growth':[['r_sat','Saturation (S)',0,1.2,0.01],['d_decay','Decay (D)',0,0.6,0.01],['alpha_em','Emergence (E)',0,0.4,0.005]],
+  'grp-couple':[['k_fb','Feedback φ↔θ (F)',0,0.6,0.01],['K_phase','Phase coupling (Kuramoto)',0,3,0.05],['omega_spread','Phase disorder',0,1.5,0.05]],
+  'grp-bound':[['gamma_bnd','Boundary (B)',0,10,0.1],['T_c','Criticality Tc (TH)',0.2,0.9,0.01],['xi','∞-trigger (IBT)',0,0.02,0.001],['zeta','0-trigger (ZBT)',0,0.02,0.001],['yield_hi','Yield → plastic',0.3,0.95,0.01]],
+  'grp-noise':[['noise','Noise σ (colored)',0,0.2,0.005]],
+  'grp-agent':[['agentNoise','Body jitter',0,0.6,0.02],['agentConfine','Body confinement',0,0.02,0.001],['agentDrive','Body field-coupling',0,0.4,0.01]],
+};
+
+/* ====================== helpers ====================== */
+const idx = (x,y)=>(((y%N)+N)%N)*N + (((x%N)+N)%N);
+function gauss(){ let u=Math.random(),v=Math.random(); return Math.sqrt(-2*Math.log(u+1e-12))*Math.cos(6.28318*v); }
+function hill(s,a,b,g,d){ const z=Math.max(s-d,0); const za=Math.pow(z,a); return Math.pow(za/(za+b+1e-12),g); }
+function sgate(s,c,w,k){ return 1/(1+Math.exp(-(s-c)*(k/Math.max(w,1e-6)))); }
+function coloredNoise(){
+  let w=new Float32Array(NN); for(let i=0;i<NN;i++) w[i]=gauss();
+  for(let s=0;s<3;s++){ const t=new Float32Array(NN);
+    for(let y=0;y<N;y++)for(let x=0;x<N;x++)
+      t[y*N+x]=0.5*w[y*N+x]+0.125*(w[idx(x+1,y)]+w[idx(x-1,y)]+w[idx(x,y+1)]+w[idx(x,y-1)]);
+    w=t; }
+  let m=0; for(const z of w)m+=z; m/=NN; let v=0; for(const z of w)v+=(z-m)*(z-m); v=Math.sqrt(v/NN)+1e-9;
+  for(let i=0;i<NN;i++) w[i]=(w[i]-m)/v; return w;
+}
+function quench(){ for(let i=0;i<NN;i++) omega0[i]=P.omega+P.omega_spread*gauss(); }
+
+/* ====================== BCDC v3 step ====================== */
+function step(){ stepField(); for(const a of agents) a.update(); }
+function stepField(){
+  let lcm=0;
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+    const re=Math.cos(theta[y*N+x])+Math.cos(theta[idx(x+1,y)])+Math.cos(theta[idx(x-1,y)])+Math.cos(theta[idx(x,y+1)])+Math.cos(theta[idx(x,y-1)]);
+    const im=Math.sin(theta[y*N+x])+Math.sin(theta[idx(x+1,y)])+Math.sin(theta[idx(x-1,y)])+Math.sin(theta[idx(x,y+1)])+Math.sin(theta[idx(x,y-1)]);
+    const c=Math.hypot(re,im)/5; lc[y*N+x]=c; lcm+=c;
+  } lcm/=NN; lastLc=lcm;
+  for(let i=0;i<NN;i++){ if(phi[i]>P.yield_hi)regime[i]=1; else if(phi[i]<P.yield_hi-0.14)regime[i]=0; }
+  const eta = P.noise>0 ? coloredNoise() : null;
+  const nphi=new Float32Array(NN), nth=new Float32Array(NN);
+  const drv={S:0,D:0,F:0,TH:0,B:0,E:0,IBT:0,ZBT:0};
+  const lower=Bmax-P.quiet, center=Bmax-0.5*P.quiet, dt=P.dt, sq=Math.sqrt(P.dt);
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+    const i=y*N+x, f=phi[i]; const W = regime[i]>0.5?WP:WE;
+    const op={ S:P.r_sat*f*(1-f/Bmax), D:-P.d_decay*f, F:P.k_fb*(lc[i]-lcm)*f,
+      TH:P.a_th*hill(f,P.hp_a,P.hp_b,1,P.T_c)*(1-f),
+      B:-P.gamma_bnd*sgate(f,center,P.quiet,8)*Math.pow(Math.max(f-lower,0),2),
+      E:P.alpha_em*Math.pow(Math.max(f,0),P.D_em),
+      IBT:-P.xi/(Bmax-f+P.delta), ZBT:P.zeta/(f+P.delta) };
+    let d=0; for(const k of DOM){ const term=A[k]*W[k]*op[k]; d+=term; drv[k]+=Math.abs(term); }
+    let nf=f+dt*d; if(eta) nf+=P.noise*sq*eta[i];
+    nphi[i]=Math.min(Math.max(nf,1e-4),Bmax-1e-4);
+    const coup=Math.sin(theta[idx(x+1,y)]-theta[i])+Math.sin(theta[idx(x-1,y)]-theta[i])+Math.sin(theta[idx(x,y+1)]-theta[i])+Math.sin(theta[idx(x,y-1)]-theta[i]);
+    const dth=omega0[i]+P.K_phase*hill(f,P.hp_a,P.hp_b,1,0)*coup;
+    let nt=theta[i]+dt*dth+P.sigma_phase*sq*gauss(); nth[i]=((nt%6.28318)+6.28318)%6.28318;
+  }
+  phi=nphi; theta=nth;
+  for(const k of DOM) lastDrive[k]=drv[k]/NN;
+}
+
+/* ====================== particles / vectors (the body) ====================== */
+class Agent{
+  constructor(x,y,vx=0,vy=0){ this.x=x;this.y=y;this.vx=vx;this.vy=vy; this.hue=Math.random()*360; this.trail=[]; }
+  update(){
+    const i=idx(Math.floor(this.x),Math.floor(this.y));
+    this.vx += Math.cos(theta[i])*phi[i]*P.agentDrive + P.agentNoise*gauss();
+    this.vy += Math.sin(theta[i])*phi[i]*P.agentDrive + P.agentNoise*gauss();
+    const rx=this.x-N/2, ry=this.y-N/2, r2=(rx*rx+ry*ry)/(N*N/4);
+    this.vx -= P.agentConfine*rx*(1+r2); this.vy -= P.agentConfine*ry*(1+r2);
+    this.x+=this.vx; this.y+=this.vy; this.vx*=P.agentDrag; this.vy*=P.agentDrag;
+    this.x=((this.x%N)+N)%N; this.y=((this.y%N)+N)%N;
+    const j=idx(Math.floor(this.x),Math.floor(this.y));
+    phi[j]=Math.min(Bmax-1e-4, phi[j]+0.25);
+    if(showTrails){ this.trail.push([this.x,this.y]); if(this.trail.length>60)this.trail.shift(); }
+  }
+}
+function addParticles(n){ for(let i=0;i<n;i++) agents.push(new Agent(Math.random()*N,Math.random()*N)); }
+function addVectors(n){ for(let i=0;i<n;i++){ const a=Math.random()*6.2832, s=0.4+Math.random()*0.9;
+  agents.push(new Agent(Math.random()*N,Math.random()*N,Math.cos(a)*s,Math.sin(a)*s)); } }
+
+/* ====================== rendering ====================== */
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d'); cv.width=window.innerWidth; cv.height=window.innerHeight; const cell=Math.min(cv.width, cv.height)/N;
+function hsl(h,s,l){ return `hsl(${h},${s}%,${l}%)`; }
+function draw(){
+  if(showTrails){ ctx.fillStyle='rgba(5,6,10,0.16)'; ctx.fillRect(0,0,cv.width,cv.height); }
+  else { ctx.fillStyle='#05060a'; ctx.fillRect(0,0,cv.width,cv.height); }
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+    const i=y*N+x, f=phi[i]; let col;
+    if(view==='field'){ if(f<0.02)continue; col=hsl(theta[i]*57.2958%360,92,Math.min(72,14+f*68)); }
+    else if(view==='phase'){ col=hsl(theta[i]*57.2958%360,85,52); }
+    else if(view==='coher'){ const c=lc[i]; col=hsl(170-110*c,70,18+44*c); }
+    else { col = regime[i]>0.5 ? 'rgba(251,113,133,.9)' : 'rgba(96,165,250,.55)'; }
+    ctx.fillStyle=col; ctx.fillRect(x*cell,y*cell,cell+0.6,cell+0.6);
+  }
+  for(const a of agents){
+    if(showTrails&&a.trail.length>1){ ctx.strokeStyle=hsl(a.hue,90,60); ctx.globalAlpha=.5; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.moveTo(a.trail[0][0]*cell,a.trail[0][1]*cell);
+      for(const p of a.trail) ctx.lineTo(p[0]*cell,p[1]*cell); ctx.stroke(); ctx.globalAlpha=1; }
+    ctx.fillStyle=hsl(a.hue,100,80); ctx.strokeStyle='rgba(255,255,255,.9)'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc(a.x*cell,a.y*cell,4,0,6.2832); ctx.fill(); ctx.stroke();
+  }
+  // drag arrow (launch a vector)
+  if(drag.active && drag.moved){
+    ctx.strokeStyle='rgba(255,255,255,.9)'; ctx.lineWidth=2; ctx.beginPath();
+    ctx.moveTo(drag.sx,drag.sy); ctx.lineTo(drag.ex,drag.ey); ctx.stroke();
+    const ang=Math.atan2(drag.ey-drag.sy,drag.ex-drag.sx);
+    ctx.beginPath(); ctx.moveTo(drag.ex,drag.ey);
+    ctx.lineTo(drag.ex-12*Math.cos(ang-0.4),drag.ey-12*Math.sin(ang-0.4));
+    ctx.lineTo(drag.ex-12*Math.cos(ang+0.4),drag.ey-12*Math.sin(ang+0.4));
+    ctx.closePath(); ctx.fillStyle='rgba(255,255,255,.9)'; ctx.fill();
+    ctx.fillStyle='rgba(125,211,252,.95)'; ctx.beginPath(); ctx.arc(drag.sx,drag.sy,4,0,6.2832); ctx.fill();
+  }
+}
+
+/* ====================== metrics + HUD ====================== */
+const set=(id,v)=>document.getElementById(id).textContent=v;
+function metrics() { return; 
+// 
+  let cre=0,cim=0,sp=0,pl=0; for(let i=0;i<NN;i++){ cre+=Math.cos(theta[i]); cim+=Math.sin(theta[i]); sp+=phi[i]; pl+=regime[i]; }
+  lastC=Math.hypot(cre,cim)/NN; const meanphi=sp/NN, plastic=pl/NN;
+  set('m-C',lastC.toFixed(3)); set('m-lc',lastLc.toFixed(3)); set('m-phi',meanphi.toFixed(3));
+  set('m-plastic',(plastic*100).toFixed(0)+'%');
+  set('m-react', reactScore==null?'— (probe)':(reactScore>0.01?'reactive ✓':'low ⚠'));
+  document.getElementById('m-react').style.color = reactScore==null?'var(--ink)':(reactScore>0.01?'var(--ok)':'var(--plastic)');
+  let mx=1e-6; for(const k of DOM) mx=Math.max(mx,lastDrive[k]);
+  let html=''; for(const k of DOM){ const w=100*lastDrive[k]/mx;
+    html+=`<div class="dlabel"><span>${k}</span><span>${lastDrive[k].toFixed(3)}</span></div><div class="bar"><span style="width:${w}%"></span></div>`; }
+  document.getElementById('drivebars').innerHTML=html;
+  document.getElementById('hud').innerHTML =
+    `view: <b>${view}</b> · C <b>${lastC.toFixed(2)}</b> · local <b>${lastLc.toFixed(2)}</b> · φ̄ <b>${meanphi.toFixed(2)}</b> · plastic <b>${(plastic*100).toFixed(0)}%</b> · body <b>${agents.length}</b>`;
+}
+
+/* ====================== input: encode + probe ====================== */
+function hashStr(s){ let h=5381>>>0; for(let i=0;i<s.length;i++) h=(((h<<5)+h)+s.charCodeAt(i))>>>0; return h; }
+function encodeText(text){
+  if(!text.trim()){ resetField(); return; }
+  const t=text.toLowerCase(); const words=(t.match(/[a-z0-9]+/g))||[];
+  const toks=[...words]; for(let i=0;i<words.length-1;i++) toks.push(words[i]+'_'+words[i+1]);
+  for(let i=0;i<t.length-2;i++) toks.push(t.slice(i,i+3));
+  const dim=256, emb=new Float64Array(dim);
+  for(const tk of toks){ const h=hashStr(tk); emb[h%dim]+=(h&1)?1:-1; }
+  let n=0; for(const z of emb)n+=z*z; n=Math.sqrt(n)||1; for(let i=0;i<dim;i++)emb[i]/=n;
+  const nch=12, bs=Math.floor(dim/nch), en=new Float64Array(nch);
+  for(let b=0;b<nch;b++){ let e=0; for(let j=0;j<bs;j++) e+=emb[b*bs+j]**2; en[b]=e; }
+  let s=0; for(const e of en)s+=e; s+=1e-12; const cos2=Array.from(en,e=>e/s);
+  const ang=cos2.map(c=>Math.acos(Math.sqrt(Math.min(Math.max(c,0),1))));
+  const Re=new Float64Array(NN), Im=new Float64Array(NN);
+  for(let k=0;k<nch;k++){ const a=ang[k],c2=cos2[k],kx=1+(k%3),ky=1+Math.floor(k/3);
+    for(let y=0;y<N;y++)for(let x=0;x<N;x++){ const p=6.28318*(kx*x+ky*y)/N+a; Re[y*N+x]+=c2*Math.cos(p); Im[y*N+x]+=c2*Math.sin(p); } }
+  let mxA=0; for(let i=0;i<NN;i++){ const A2=Math.hypot(Re[i],Im[i]); if(A2>mxA)mxA=A2; }
+  for(let i=0;i<NN;i++){ phi[i]=Math.min(Math.max(Math.hypot(Re[i],Im[i])/(mxA+1e-10)*0.6+0.12,0.02),0.98);
+    theta[i]=((Math.atan2(Im[i],Re[i]))%6.28318+6.28318)%6.28318; }
+  regime.fill(0); quench();
+}
+function probeReactivity(cx=N/2,cy=N/2){
+  const ref=Float32Array.from(phi);
+  for(let dy=-5;dy<=5;dy++)for(let dx=-5;dx<=5;dx++){ const r=Math.hypot(dx,dy); if(r>5)continue;
+    const i=idx(Math.floor(cx)+dx,Math.floor(cy)+dy); phi[i]=Math.min(Bmax-1e-4,phi[i]+0.6*(1-r/5));
+    theta[i]=(theta[i]+Math.PI)%6.28318; }
+  let acc=0; for(let s=0;s<8;s++) step();
+  for(let i=0;i<NN;i++) acc+=Math.abs(phi[i]-ref[i]); reactScore=acc/NN;
+}
+
+/* ====================== presets ====================== */
+const PRESETS = {
+  resonant:{A:{S:1,D:1,F:1,TH:1,B:1,E:1,IBT:1,ZBT:1},p:{r_sat:.65,d_decay:.28,alpha_em:.10,k_fb:.18,K_phase:1.6,omega_spread:.5,gamma_bnd:6,T_c:.55,noise:.06,yield_hi:.62,agentNoise:.05,agentConfine:.004,agentDrive:.15},agents:0,trails:false},
+  brownian:{A:{S:1,D:1,F:0,TH:0,B:0,E:0,IBT:1,ZBT:1},p:{r_sat:.2,d_decay:.30,alpha_em:0,k_fb:0,K_phase:0,omega_spread:.3,gamma_bnd:2,T_c:.55,noise:.14,yield_hi:.9,agentNoise:.45,agentConfine:.006,agentDrive:.02},agents:18,trails:true},
+  spiral:{A:{S:1,D:1,F:1,TH:1,B:1,E:1,IBT:1,ZBT:1},p:{r_sat:.7,d_decay:.22,alpha_em:.12,k_fb:.25,K_phase:2.4,omega_spread:.15,gamma_bnd:5,T_c:.55,noise:.04,yield_hi:.7,agentNoise:.05,agentConfine:.004,agentDrive:.2},agents:0,trails:false},
+  containment:{A:{S:1,D:1,F:1,TH:1,B:1,E:1,IBT:1,ZBT:1},p:{r_sat:.6,d_decay:.18,alpha_em:.06,k_fb:.15,K_phase:1.4,omega_spread:.5,gamma_bnd:9,T_c:.6,noise:.05,yield_hi:.75,agentNoise:.05,agentConfine:.006,agentDrive:.12},agents:0,trails:false},
+  transfix:{A:{S:1,D:1,F:1,TH:1,B:1,E:1,IBT:1,ZBT:1},p:{r_sat:.8,d_decay:.08,alpha_em:.30,k_fb:.45,K_phase:2.6,omega_spread:.2,gamma_bnd:6,T_c:.55,noise:.04,yield_hi:.55,agentNoise:.05,agentConfine:.004,agentDrive:.15},agents:0,trails:false},
+};
+function applyPreset(name){
+  const pr=PRESETS[name]; if(!pr)return;
+  Object.assign(P,pr.p); Object.assign(A,pr.A);
+  showTrails=pr.trails; document.getElementById('trails').checked=pr.trails;
+  agents=[]; for(let i=0;i<pr.agents;i++) agents.push(new Agent(Math.random()*N,Math.random()*N));
+  syncSliders(); syncChips(); resetField();
+}
+
+/* ====================== reset / loop ====================== */
+function resetField(){ for(let i=0;i<NN;i++){ phi[i]=Math.random()*0.1+0.02; theta[i]=Math.random()*6.28318; regime[i]=0; }
+  quench(); reactScore=null; for(const a of agents)a.trail=[]; }
+function loop(){ if(!paused){ step(); } draw(); metrics(); requestAnimationFrame(loop); }
+
+/* ====================== UI ====================== */
+function buildSliders(){
+  for(const grp in SLIDERS){ const host=document.getElementById(grp);
+    for(const [id,label,min,max,stp] of SLIDERS[grp]){
+      const d=document.createElement('div'); d.className='sld';
+      d.innerHTML=`<div class="row"><label>${label}</label><span class="v" id="v-${id}"></span></div>
+        <input type="range" id="s-${id}" min="${min}" max="${max}" step="${stp}">`;
+      host.appendChild(d);
+      const el=d.querySelector('input'); el.value=P[id];
+      el.addEventListener('input',e=>{ P[id]=+e.target.value; document.getElementById('v-'+id).textContent=(+e.target.value).toFixed(3);
+        if(id==='omega_spread')quench(); });
+    } }
+}
+function syncSliders(){ for(const grp in SLIDERS) for(const [id] of SLIDERS[grp]){
+  const el=document.getElementById('s-'+id); if(el){ el.value=P[id]; document.getElementById('v-'+id).textContent=(+P[id]).toFixed(3);} } }
+function buildChips(){ const host=document.getElementById('domainChips');
+  for(const k of DOM){ const c=document.createElement('div'); c.className='chip on'; c.textContent=k; c.dataset.k=k;
+    c.onclick=()=>{ A[k]=A[k]?0:1; c.classList.toggle('on',!!A[k]); }; host.appendChild(c); } }
+function syncChips(){ document.querySelectorAll('.chip').forEach(c=>c.classList.toggle('on',!!A[c.dataset.k])); }
+
+document.getElementById('viewSeg').addEventListener('click',e=>{ if(e.target.dataset.view){ view=e.target.dataset.view;
+  document.querySelectorAll('#viewSeg button').forEach(b=>b.classList.toggle('on',b.dataset.view===view)); } });
+document.getElementById('pauseBtn').onclick=e=>{ paused=!paused; e.target.textContent=paused?'▶ Play':'⏸ Pause'; };
+document.getElementById('preset').onchange=e=>applyPreset(e.target.value);
+document.getElementById('reset').onclick=resetField;
+const acount=()=>Math.max(1,Math.min(500,+document.getElementById('agentCount').value||1));
+document.getElementById('addParticles').onclick=()=>addParticles(acount());
+document.getElementById('addVectors').onclick=()=>addVectors(acount());
+document.getElementById('clearAgents').onclick=()=>agents=[];
+document.getElementById('trails').onchange=e=>{ showTrails=e.target.checked; if(!showTrails)for(const a of agents)a.trail=[]; };
+document.getElementById('encodeBtn').onclick=()=>encodeText(document.getElementById('txt').value);
+document.getElementById('probeBtn').onclick=()=>probeReactivity();
+
+/* ---- click = place particle ; click+drag = launch a vector (length = speed) ---- */
+const drag={active:false,sx:0,sy:0,ex:0,ey:0,moved:false};
+cv.addEventListener('mousedown',e=>{ const r=cv.getBoundingClientRect(); drag.active=true; drag.moved=false;
+  drag.sx=e.clientX-r.left; drag.sy=e.clientY-r.top; drag.ex=drag.sx; drag.ey=drag.sy; });
+cv.addEventListener('mousemove',e=>{ if(!drag.active)return; const r=cv.getBoundingClientRect();
+  drag.ex=e.clientX-r.left; drag.ey=e.clientY-r.top; if(Math.hypot(drag.ex-drag.sx,drag.ey-drag.sy)>5)drag.moved=true; });
+window.addEventListener('mouseup',()=>{ if(!drag.active)return; drag.active=false;
+  const gx=drag.sx/cell, gy=drag.sy/cell;
+  if(!drag.moved){ agents.push(new Agent(gx,gy)); }                              // tap = particle at rest
+  else { const vx=(drag.ex-drag.sx)/cell*0.06, vy=(drag.ey-drag.sy)/cell*0.06;   // drag = vector, speed ∝ length
+         agents.push(new Agent(gx,gy,vx,vy)); } });
+
+
+window.addEventListener('resize', () => {
+  cv.width=window.innerWidth; cv.height=window.innerHeight;
+});
+/* ====================== go ====================== */
+
+
+const bc = new BroadcastChannel('bcdc_sync');
+bc.onmessage = function(e) {
+    if(e.data.type === 'sync') {
+        Object.assign(P, e.data.P);
+        Object.assign(A, e.data.A);
+        paused = e.data.paused;
+        view = e.data.view;
+        showTrails = e.data.showTrails;
+    } else if (e.data.type === 'action') {
+        if(e.data.action === 'preset') { const pr=PRESETS[e.data.name]; if(pr){ Object.assign(P,pr.p); Object.assign(A,pr.A); showTrails=pr.trails; agents=[]; for(let i=0;i<pr.agents;i++) agents.push(new Agent(Math.random()*N,Math.random()*N)); resetField(); } }
+        else if(e.data.action === 'resetField') resetField();
+        else if(e.data.action === 'addParticles') addParticles(e.data.n);
+        else if(e.data.action === 'addVectors') addVectors(e.data.n);
+        else if(e.data.action === 'clearAgents') agents = [];
+        else if(e.data.action === 'encodeText') encodeText(e.data.text);
+        else if(e.data.action === 'probeReactivity') probeReactivity();
+        else if(e.data.action === 'addAgent') agents.push(new Agent(e.data.gx, e.data.gy));
+        else if(e.data.action === 'addAgentV') agents.push(new Agent(e.data.gx, e.data.gy, e.data.vx, e.data.vy));
+    }
+};
+applyPreset('resonant'); loop();
+
+</script>
+</body>
+</html>

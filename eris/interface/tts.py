@@ -2,7 +2,6 @@ import os
 import asyncio
 import tempfile
 import logging
-import edge_tts
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -26,6 +25,8 @@ class TTSEngine:
         return asyncio.run(self._generate_audio_async(text, voice_id))
 
     async def _generate_audio_async(self, text: str, voice_id: str) -> Optional[bytes]:
+        import edge_tts
+        
         if not voice_id:
             voice_id = "en-IE-EmilyNeural"
         

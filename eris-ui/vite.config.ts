@@ -6,11 +6,11 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      '/api': 'http://localhost:8000',
-      '/chat': 'http://localhost:8000',
-      '/vitals': 'http://localhost:8000',
+      '/api': 'http://localhost:8001',
+      '/chat': 'http://localhost:8001',
+      '/vitals': 'http://localhost:8001',
       '/ws': {
-        target: 'ws://localhost:8000',
+        target: 'ws://localhost:8001',
         ws: true
       }
     }

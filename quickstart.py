@@ -192,12 +192,12 @@ def main():
     print("=" * 60)
 
     if args.serve:
-        print("\nStarting server on http://localhost:8000 ...")
+        print("\nStarting server on http://localhost:8001 ...")
         try:
             import uvicorn
             from eris.server.app import create_app
             app = create_app(field_size=64)
-            uvicorn.run(app, host="0.0.0.0", port=8000)
+            uvicorn.run(app, host="0.0.0.0", port=8001)
         except ImportError:
             print("Install FastAPI first: pip install fastapi uvicorn")
 

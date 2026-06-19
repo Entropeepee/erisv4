@@ -22,9 +22,9 @@ import websockets
 from pythonosc.udp_client import SimpleUDPClient
 
 # Configuration
-ERIS_WS_URL = "ws://localhost:8000/ws"
+ERIS_WS_URL = "ws://127.0.0.1:8001/ws"
 UNREAL_OSC_IP = "127.0.0.1"
-UNREAL_OSC_PORT = 8000
+UNREAL_OSC_PORT = 9000
 
 client = SimpleUDPClient(UNREAL_OSC_IP, UNREAL_OSC_PORT)
 

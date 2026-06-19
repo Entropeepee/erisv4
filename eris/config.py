@@ -21,6 +21,8 @@ import os
 VRAM_CAP_GB: float = 9.5  # Reduced from 13.5 to leave 6.5GB headroom for Unreal Engine 5 & NVIDIA ACE models
 
 try:
+    # FORCING CPU FALLBACK TO AVOID CUPY JIT HANG
+    raise ImportError("Forcing CPU fallback")
     import cupy as cp
     from cupy import fft as cupyfft
 

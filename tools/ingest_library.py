@@ -7,7 +7,7 @@ from typing import List
 
 # Configure library path
 DOC_DIR = pathlib.Path.home() / "Documents" / "Eris_Library"
-API_URL = "http://localhost:8000/ingest"
+API_URL = "http://localhost:8001/ingest"
 DELAY_SEC = 0.1
 
 try:

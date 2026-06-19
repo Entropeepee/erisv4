@@ -4,6 +4,7 @@ Eris Echo v4 — FastAPI Server
 
 Endpoints:
     POST /chat              Main conversation endpoint
+    POST /v1/chat/completions OpenAI-compatible endpoint for NVIDIA ACE
     GET  /vitals            Real-time system metrics
     POST /dream             Trigger a dreaming cycle
     GET  /questions          Pending questions from metacognition
@@ -45,6 +46,11 @@ from fastapi import Response
 class ChatRequest(BaseModel if HAS_FASTAPI else object):
     message: str = ""
     system_context: str = ""
+
+class OpenAIChatRequest(BaseModel if HAS_FASTAPI else object):
+    model: str = "eris"
+    messages: list = []
+    temperature: float = 0.7
 
 
 class SandboxRequest(BaseModel if HAS_FASTAPI else object):
@@ -127,6 +133,41 @@ def create_app(
             "latency_ms": result.latency_ms,
             "contradiction_compiled": result.contradiction_compiled,
             "research_triggered": result.research_triggered,
+        }
+
+    @app.post("/v1/chat/completions")
+    async def chat_completions(req: OpenAIChatRequest):
+        """OpenAI-compatible chat completions endpoint for NVIDIA ACE."""
+        message_text = ""
+        system_context = ""
+        for msg in req.messages:
+            if msg.get("role") == "system":
+                system_context += msg.get("content", "") + "\n"
+            elif msg.get("role") == "user":
+                message_text += msg.get("content", "") + "\n"
+
+        result = await orchestrator.process(
+            message_text.strip(), system_context=system_context.strip()
+        )
+
+        return {
+            "id": "chatcmpl-eris",
+            "object": "chat.completion",
+            "created": 1677652288,
+            "model": req.model,
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": result.response_text,
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            }
         }
 
     @app.get("/vitals")
@@ -329,6 +370,6 @@ ws.onmessage = (e) => {
 if __name__ == "__main__":
     if HAS_FASTAPI:
         import uvicorn
-        uvicorn.run("eris.server.app:app", host="0.0.0.0", port=8000, reload=True)
+        uvicorn.run("eris.server.app:app", host="0.0.0.0", port=8001, reload=True)
     else:
         print("FastAPI not installed. Run: pip install fastapi uvicorn")
