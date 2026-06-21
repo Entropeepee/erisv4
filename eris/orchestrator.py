@@ -156,18 +156,49 @@ class ErisOrchestrator:
 
         # SGT gate for dissonance detection
         self._dissonance_gate = SGTGate(threshold_sigma=2.0, ema_alpha=0.1)
-        # Dual-path LLM Router Configuration
-        from eris.interface.mediator import OllamaBackend, AnthropicBackend, OpenAIBackend, GeminiBackend
-        # Fast Path (3GB VRAM)
-        self.mediator.add_backend(OllamaBackend(model="gemma:2b"))
-        # Deep Path MoE (Mixture of Experts)
-        self.deep_mediator.add_backend(OllamaBackend(model="gpt-oss:20b"))
-        self.deep_mediator.add_backend(AnthropicBackend(api_key=os.environ.get("ANTHROPIC_API_KEY", "")))
-        self.deep_mediator.add_backend(OpenAIBackend(api_key=os.environ.get("OPENAI_API_KEY", "")))
-        self.deep_mediator.add_backend(GeminiBackend(api_key=os.environ.get("GEMINI_API_KEY", "")))
 
-        # Turn counter
+        # ── LLM Router configuration (Remediation Tier 0) ─────────────
+        # Reasoning happens UPSTREAM in the field; the LLM only verbalizes the
+        # thought the GPW selected. So the DEFAULT path is one fast LOCAL call.
+        #
+        # The previous build fired a 4-backend "deep" ensemble whenever
+        # `coherence < 0.2`. But this engine's global coherence sits
+        # structurally near ~0.04, so that branch fired on EVERY turn — paying
+        # for dead/keyless cloud-backend timeouts plus a synthesis pass on CPU.
+        # That was the root cause of the slowness. Two fixes:
+        #   1. Register a cloud backend ONLY when its API key is actually set.
+        #      A keyless backend is useless and, if mis-added, can hang a turn.
+        #   2. Gate the deep path on an SGT z-score *outlier* of |dC/dX|
+        #      (scale-adaptive — works whether C is 0.04 or 0.8), and only when
+        #      at least one real cloud expert is wired. Never on every turn.
+        from eris.interface.mediator import (
+            OllamaBackend, AnthropicBackend, OpenAIBackend, GeminiBackend,
+        )
+        self._local_model = os.environ.get("ERIS_LOCAL_MODEL", "gpt-oss:20b")
+
+        # Fast path: one resident local model (Broca's area).
+        self.mediator.add_backend(OllamaBackend(model=self._local_model))
+
+        # Deep path: cloud experts ONLY if keyed, plus a local fallback so the
+        # ensemble is never empty. Dormant (keyless) cloud backends are skipped.
+        for _backend_cls, _env in ((AnthropicBackend, "ANTHROPIC_API_KEY"),
+                                   (OpenAIBackend, "OPENAI_API_KEY"),
+                                   (GeminiBackend, "GEMINI_API_KEY")):
+            _key = os.environ.get(_env, "")
+            if _key:
+                self.deep_mediator.add_backend(_backend_cls(api_key=_key))
+        self.deep_mediator.add_backend(OllamaBackend(model=self._local_model))
+
+        # Number of genuine (cloud) experts wired for deep synthesis.
+        self._cloud_experts = len(self.deep_mediator._backends) - 1
+
+        # Scale-adaptive gate for the deep path: opens only when |dC/dX| is a
+        # statistical outlier relative to this engine's own running history.
+        self._router_gate = SGTGate(threshold_sigma=2.0, ema_alpha=0.1)
+
+        # Turn counter + last-turn dissonance (surfaced separately in vitals).
         self.turn_count: int = 0
+        self._last_dissonance: float = 0.0
 
     def add_llm_backend(self, backend: LLMBackend) -> None:
         """Add an LLM backend (Ollama, Claude, OpenAI, etc.)."""
@@ -261,33 +292,41 @@ class ErisOrchestrator:
             user_message, winner, memory_text, input_bvec, result.regime
         )
 
-        # LLM ROUTER: MoE Synthesis & VRAM Optimization
-        if result.dCdX > 0.3 or result.coherence < 0.2:
-            print("[ROUTER] Complex thought detected (dCdX > 0.3). Activating MoE Synthesis.")
-            # Fire all experts in parallel
+        # LLM ROUTER (Remediation Tier 0.2): default to ONE fast local call.
+        # Escalate to the cloud MoE ensemble ONLY when |dC/dX| is a genuine SGT
+        # outlier for THIS engine AND at least one real cloud expert is wired.
+        deep_signal, dcdx_z = self._router_gate.update(abs(result.dCdX))
+        use_deep = deep_signal and self._cloud_experts >= 1
+
+        if use_deep:
+            print(f"[ROUTER] dC/dX outlier (z={dcdx_z:.2f}) + {self._cloud_experts} "
+                  f"cloud expert(s) available -> deep MoE synthesis.")
             expert_responses = await self.deep_mediator.ensemble(
                 prompt=prompt,
-                system=system_context or self._default_system_prompt()
+                system=system_context or self._default_system_prompt(),
             )
-            
             if len(expert_responses) > 1:
                 print(f"[MoE] Synthesizing {len(expert_responses)} expert responses...")
-                synthesis_prompt = "We have consulted multiple AI experts. Synthesize their insights into the ultimate response:\n\n"
+                synthesis_prompt = (
+                    "Multiple experts answered the same prompt. Synthesize their "
+                    "insights into one strongest response:\n\n"
+                )
                 for idx, r in enumerate(expert_responses):
                     synthesis_prompt += f"--- EXPERT {idx+1} ({r.provider}) ---\n{r.text}\n\n"
-                synthesis_prompt += "\nNow, provide the final synthesized response directly:"
-                
-                # Synthesize using the local deep model
+                synthesis_prompt += "\nNow provide the final synthesized response directly:"
                 llm_response = await self.deep_mediator.generate(
                     prompt=synthesis_prompt,
-                    system="You are Eris. Synthesize the expert opinions."
+                    system="You are Eris. Synthesize the expert opinions.",
                 )
             elif len(expert_responses) == 1:
                 llm_response = expert_responses[0]
             else:
-                llm_response = None
+                # Ensemble came back empty -> fall back to the fast local path.
+                llm_response = await self.mediator.generate(
+                    prompt=prompt,
+                    system=system_context or self._default_system_prompt(),
+                )
         else:
-            print("[ROUTER] Conversational thought. Routing to FAST path.")
             llm_response = await self.mediator.generate(
                 prompt=prompt,
                 system=system_context or self._default_system_prompt(),
