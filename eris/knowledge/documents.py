@@ -118,11 +118,15 @@ def iter_chatgpt_export(data: Any) -> Iterable[Tuple[str, str]]:
             yield (str(title), text)
 
 
-def extract_documents(path: str) -> List[Tuple[str, str]]:
+def extract_documents(path: str, display_name: Optional[str] = None) -> List[Tuple[str, str]]:
     """Return a list of (title, text) blocks for a file. Most files yield one
-    block; a ChatGPT export yields one per conversation."""
+    block; a ChatGPT export yields one per conversation.
+
+    display_name overrides the basename used for titles — essential for browser
+    uploads, where `path` is a random temp file but the real name (e.g.
+    'sgtpatent.docx') is what the user will ask for."""
     ext = os.path.splitext(path)[1].lower()
-    base = os.path.basename(path)
+    base = display_name or os.path.basename(path)
     if ext in (".txt", ".md"):
         return [(base, _read_txt(path))]
     if ext == ".pdf":
@@ -223,7 +227,7 @@ class DocumentLibrary:
                 and prev.get("ingest_version") == INGEST_VERSION):
             return {"file": base, "skipped": True, "chunks": prev.get("chunks", 0)}
 
-        blocks = extract_documents(path)
+        blocks = extract_documents(path, display_name=display_name)
         total = 0
         self.progress.update(file=base, blocks_total=len(blocks),
                              blocks_done=0, updated=time.time())

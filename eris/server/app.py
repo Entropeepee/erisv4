@@ -231,6 +231,28 @@ def create_app(
     async def api_library_progress():
         return library.progress
 
+    @app.get("/api/memory/search")
+    async def api_memory_search(q: str = "", k: int = 8):
+        """Diagnostic: see exactly what Eris retrieves for a query — confirms a
+        document is actually stored and surfaced. Visit /api/memory/search?q=..."""
+        from eris.knowledge.embeddings import get_embedding
+        emb = get_embedding(q) if q else None
+        mem = orchestrator.memory
+        named = mem.documents_matching(q, max_chunks=k, query_embedding=emb) if q else []
+        results = mem.retrieve(query_embedding=emb, query_text=q, top_k=k) if q else []
+
+        def fmt(r):
+            return {"source": r.source,
+                    "title": (r.metadata or {}).get("title"),
+                    "chars": len(r.text or ""),
+                    "snippet": (r.text or "")[:300]}
+        return {
+            "query": q,
+            "memory_sizes": {"stm": mem.stm.size, "mtm": mem.mtm.size, "ltm": mem.ltm.size},
+            "named_documents": [fmt(r) for r in named],
+            "retrieved": [fmt(r) for r in results],
+        }
+
     @app.post("/api/library/scan")
     async def api_library_scan(force: bool = False):
         """Read & ingest every supported file in the ErisLibrary folder.
