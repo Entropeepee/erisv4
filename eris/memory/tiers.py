@@ -350,12 +350,18 @@ class MemorySystem:
                 score *= (0.5 + 0.5 * bvec_cosine(query_bvec, rec.bvec))
             candidates.append((rec, score))
 
-        # MTM: fresh records weighted by BFECDS alignment
+        # MTM: fresh records weighted by BFECDS alignment AND semantic
+        # similarity (so studied/read material in medium-term is retrievable by
+        # meaning, not just field signature, before it consolidates to LTM).
         for rec in self.mtm.get_fresh(min_freshness=0.05):
             freshness = rec.freshness(self.mtm.half_life_hours)
             score = freshness
             if query_bvec:
                 score *= (0.3 + 0.7 * max(0, bvec_cosine(query_bvec, rec.bvec)))
+            if (query_embedding is not None and rec.embedding is not None
+                    and rec.embedding.shape == query_embedding.shape):
+                sim = float(np.dot(query_embedding, rec.embedding))  # L2-normalized → cosine
+                score *= (0.5 + 0.5 * max(0.0, sim))
             candidates.append((rec, score))
 
         # LTM: semantic + BFECDS search

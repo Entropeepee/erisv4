@@ -76,6 +76,14 @@ class StudyEngine:
                              "chunks": 0, "error": str(e)})
             time.sleep(0.5)
 
+        # Let freshly-read material flow up the tiers: novel/important passages
+        # promote MTM→LTM now; the rest stay in medium-term and fade via the
+        # Ebbinghaus curve unless later conversation reinforces them.
+        try:
+            self.memory.consolidate()
+        except Exception:
+            pass
+
         total_chunks = sum(r.get("chunks", 0) for r in read)
         summary = self._summarize(topics, read, total_chunks)
         report = {
