@@ -184,8 +184,8 @@ def create_app(
         return d or JSONResponse({"error": "not found"}, status_code=404)
 
     @app.get("/api/dreams")
-    async def api_dreams():
-        return {"dreams": orchestrator.get_dreams(limit=60)}
+    async def api_dreams(limit: int = 8, before: Optional[float] = None):
+        return {"dreams": orchestrator.get_dreams(limit=limit, before=before)}
 
     @app.get("/api/dreams/{did}")
     async def api_dream(did: str):
@@ -198,6 +198,15 @@ def create_app(
             return JSONResponse({"error": "question required"}, status_code=400)
         entry = await orchestrator.ponder(req.question.strip())
         return entry
+
+    @app.post("/api/study-topic")
+    async def api_study_topic(req: PonderRequest):
+        """Steer Eris's self-directed crawl onto a specific topic (guided)."""
+        topic = req.question.strip()
+        if not topic:
+            return JSONResponse({"error": "topic required"}, status_code=400)
+        orchestrator.dreaming_loop.topic_queue.append(topic)
+        return {"queued": topic, "queue_len": len(orchestrator.dreaming_loop.topic_queue)}
 
     @app.get("/api/study/topics")
     async def api_get_topics():
@@ -372,17 +381,24 @@ def create_app(
         }
 
     async def _periodic_dream_loop():
-        # First reflection ~90s after boot so the cockpit's Dreams panel
-        # populates soon after start, then settle into the 15-minute cadence.
+        # Constant background learning, day and night: 2-6 cycles/hour. Each
+        # cycle resolves tensions if any, else broad-crawls a knowledge topic.
+        # ERIS_CRAWL_PERIOD_S sets the base interval (default 900s = 4/hr);
+        # jitter avoids lockstep.
+        import random
         first = True
         while True:
-            await asyncio.sleep(90 if first else 60 * 15)
-            first = False
+            if first:
+                await asyncio.sleep(90)  # populate the Dreams panel soon after boot
+                first = False
+            else:
+                base = int(os.environ.get("ERIS_CRAWL_PERIOD_S", "900"))
+                await asyncio.sleep(max(60, base + random.randint(-180, 180)))
             try:
                 report = await orchestrator.run_dream_cycle()
                 msg = f"[Dream Loop] Processed {report['tensions_processed']} tensions. Resolved: {report['tensions_resolved']}"
                 if report.get("explored_topic"):
-                    msg += f" | No tensions -> read about: {report['explored_topic'][:80]}"
+                    msg += f" | learned about: {report['explored_topic'][:80]}"
                 print(msg)
             except Exception as e:
                 print(f"[Dream Loop Error] {e}")
@@ -409,6 +425,13 @@ def create_app(
 
     @app.on_event("startup")
     async def startup_event():
+        try:
+            from eris.knowledge import ask_expert
+            connected = ask_expert.is_available()
+        except Exception:
+            connected = False
+        print(f"[Eris] Claude research path: "
+              f"{'CONNECTED' if connected else 'dormant (no ANTHROPIC_API_KEY)'}")
         asyncio.create_task(_periodic_dream_loop())
         asyncio.create_task(_nightly_learning_loop())
 
