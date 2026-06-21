@@ -587,7 +587,7 @@ def create_app(
         static_dir = os.path.join(os.path.dirname(__file__), "static")
         index_path = os.path.join(static_dir, "index.html")
         if os.path.exists(index_path):
-            with open(index_path, "r") as f:
+            with open(index_path, "r", encoding="utf-8") as f:
                 return HTMLResponse(content=f.read())
         return HTMLResponse(content=_MINIMAL_UI)
 
@@ -597,7 +597,7 @@ def create_app(
         Renders the live PDE field straight off the /ws/field stream."""
         path = os.path.join(os.path.dirname(__file__), "static", "visualizer.html")
         if os.path.exists(path):
-            with open(path, "r") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 return HTMLResponse(content=f.read())
         return HTMLResponse(content="<h1>visualizer.html missing</h1>", status_code=404)
 
