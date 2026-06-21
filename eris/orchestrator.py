@@ -64,7 +64,7 @@ from eris.memory.interference import find_conflicts
 # Layer 3: Tribe
 from eris.tribe.specialists import (
     TRIBE, get_active_specialists, CrossAttentionHub,
-    SpecialistFinding, should_trigger_research,
+    SpecialistFinding, should_trigger_research, make_field_finding,
 )
 
 # Layer 5: Executive
@@ -242,22 +242,11 @@ class ErisOrchestrator:
         findings: List[SpecialistFinding] = []
 
         for specialist in active_specialists:
-            # Each specialist generates a finding based on its domain
-            # In production: these call the LLM with specialist-specific prompts
-            # For now: generate a finding with the specialist's sensitivity profile
-            finding = SpecialistFinding(
-                specialist_id=specialist.id,
-                content=f"[{specialist.name}] Analysis of: {user_message[:100]}",
-                bvec=BVec(
-                    B=input_bvec.B * specialist.sensitivity_bvec.B,
-                    F=input_bvec.F * specialist.sensitivity_bvec.F,
-                    E=input_bvec.E * specialist.sensitivity_bvec.E,
-                    C=input_bvec.C * specialist.sensitivity_bvec.C,
-                    D=input_bvec.D * specialist.sensitivity_bvec.D,
-                    S=input_bvec.S * specialist.sensitivity_bvec.S,
-                ),
-                confidence=bvec_distance(input_bvec, specialist.sensitivity_bvec),
-            )
+            # Tier 3-A: the finding IS the specialist's field signature (its
+            # domain-projected bid), not the user's words echoed back. Free at
+            # runtime, fast on CPU, and gives the MoEGate real field projections
+            # to interfere over instead of placeholder text.
+            finding = make_field_finding(specialist, input_bvec)
             findings.append(finding)
             self.hub.post(finding)
 
