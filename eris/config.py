@@ -18,11 +18,13 @@ import numpy as np
 import os
 
 # ─── GPU Setup ───────────────────────────────────────────────────────────
-VRAM_CAP_GB: float = 9.5  # Reduced from 13.5 to leave 6.5GB headroom for Unreal Engine 5 & NVIDIA ACE models
+VRAM_CAP_GB: float = float(os.environ.get("ERIS_VRAM_CAP_GB", "2.0"))  # Eris's own CuPy pool; keep small — a ~13GB local LLM shares the 16GB card. Override with ERIS_VRAM_CAP_GB.
 
+# GPU is ON by default. Set ERIS_GPU=0 to force CPU (use this if CuPy ever
+# JIT-hangs on your driver — it reverts cleanly to NumPy).
 try:
-    # FORCING CPU FALLBACK TO AVOID CUPY JIT HANG
-    raise ImportError("Forcing CPU fallback")
+    if os.environ.get("ERIS_GPU", "1").strip().lower() in ("0", "off", "false", "no"):
+        raise ImportError("GPU disabled via ERIS_GPU=0")
     import cupy as cp
     from cupy import fft as cupyfft
 
@@ -47,12 +49,17 @@ try:
             mempool.free_all_blocks()
         return vram_used_gb() + needed_gb <= VRAM_CAP_GB
 
+    # Warm the JIT once (tiny kernel) so the FIRST real turn doesn't stall
+    # while CuPy compiles. If this ever hangs, relaunch with ERIS_GPU=0.
+    _ = (cp.zeros((8, 8), dtype=cp.float32) + 1.0).sum()
+    cp.cuda.Stream.null.synchronize()
+
     _device_name = cp.cuda.runtime.getDeviceProperties(0)["name"].decode()
     print(f"[Eris GPU] {_device_name} — "
           f"Total: {cp.cuda.runtime.memGetInfo()[1] / (1024**3):.1f} GB, "
           f"Cap: {VRAM_CAP_GB} GB")
 
-except ImportError:
+except Exception as _gpu_err:  # ImportError, CUDA/driver errors, JIT issues…
     GPU_AVAILABLE = False
     xp = np  # Fallback: everything runs on CPU with NumPy
 
@@ -65,7 +72,8 @@ except ImportError:
     def vram_check(needed_gb: float = 0.0) -> bool:
         return True
 
-    print("[Eris CPU] CuPy not found — running on CPU (install cupy-cuda12x for GPU)")
+    print(f"[Eris CPU] GPU off ({_gpu_err}); running on CPU — "
+          f"install cupy-cuda13x and leave ERIS_GPU unset to use the RTX 5080")
 
 
 def to_numpy(arr) -> np.ndarray:

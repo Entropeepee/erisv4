@@ -56,8 +56,12 @@ def _model():
     try:
         from sentence_transformers import SentenceTransformer
         name = os.environ.get("ERIS_EMBED_MODEL", "BAAI/bge-m3")
-        _MODEL = SentenceTransformer(name)
-        print(f"[embeddings] loaded semantic model: {name}")
+        # Default to CPU: with a ~13GB local LLM resident on a 16GB card there
+        # is little VRAM left, and bge-m3 on GPU is ~2GB. Set ERIS_EMBED_DEVICE=
+        # cuda to move embeddings onto the GPU if you have the headroom.
+        dev = os.environ.get("ERIS_EMBED_DEVICE", "cpu").strip().lower()
+        _MODEL = SentenceTransformer(name, device=(None if dev in ("auto", "") else dev))
+        print(f"[embeddings] loaded semantic model: {name} (device={dev})")
     except Exception as e:
         print(f"[embeddings] semantic model unavailable ({e}); using deterministic fallback")
         _MODEL = None

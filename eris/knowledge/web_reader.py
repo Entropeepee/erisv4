@@ -116,7 +116,12 @@ def ingest_text(text: str, *, title: str,
                 theta_snapshot=desc.theta_snapshot,
                 metadata={"title": title, "sha256": (desc.sha256 or "")[:12]},
             )
-            memory.ltm.store(record)
+            # Enter at MEDIUM-term, not straight to long-term: freshly read
+            # material is immediately searchable/discussable, fades via the
+            # Ebbinghaus curve if never used, and is promoted to LTM by
+            # consolidate() when it proves novel or gets reinforced in
+            # conversation. (Override target via record.tier if needed.)
+            memory.mtm.store(record)
     return len(chunks)
 
 
