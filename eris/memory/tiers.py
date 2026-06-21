@@ -390,6 +390,19 @@ class MemorySystem:
         self.stm.store(record)
         return record
 
+    def store_text(self, text: str, embedding: Optional[np.ndarray] = None,
+                   source: str = "knowledge", bvec: Optional[BVec] = None,
+                   **meta) -> MemoryRecord:
+        """Store a standalone text fact directly into LONG-term memory (permanent
+        collective knowledge). Used by federation to write a node's novel insight
+        into the shared pool."""
+        if embedding is not None and not isinstance(embedding, np.ndarray):
+            embedding = np.asarray(embedding, dtype=np.float32)
+        record = MemoryRecord(text=text, bvec=bvec or BVec(), embedding=embedding,
+                              source=source, metadata=meta or {})
+        self.ltm.store(record)
+        return record
+
     def retrieve(self, query_bvec: Optional[BVec] = None,
                  query_embedding: Optional[np.ndarray] = None,
                  top_k: int = 5,
@@ -545,6 +558,20 @@ class MemorySystem:
         if query_embedding is not None:
             hits.sort(key=lambda r: cosine(query_embedding, r.embedding), reverse=True)
         return hits[:max_chunks]
+
+    def max_similarity(self, embedding) -> float:
+        """Highest cosine similarity of `embedding` to anything stored, across
+        all tiers. Used by federation to gate an insight as novel vs the pool."""
+        if embedding is None:
+            return 0.0
+        best = 0.0
+        for rec in (list(self.stm.get_all()) + list(self.mtm._records)
+                    + list(self.ltm._records)):
+            if rec.embedding is not None:
+                s = cosine(embedding, rec.embedding)
+                if s > best:
+                    best = s
+        return best
 
     def consolidate(self) -> Dict[str, int]:
         """SGT-gated consolidation: promote worthy memories up tiers.

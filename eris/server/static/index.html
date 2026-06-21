@@ -127,6 +127,7 @@ aside.right{background:var(--panel);overflow-y:auto;padding:12px;display:flex;fl
       <input type="file" id="fileinput" accept=".txt,.md,.pdf,.docx,.json" style="display:none" onchange="uploadFile(this)">
     </div>
     <div class="voicebar">
+      <span>to</span><select id="chat-node" title="Which node you're talking to"></select>
       <label><input type="checkbox" id="speak" checked> Speak</label>
       <span>Voice</span><select id="voice"></select>
       <button class="btn" id="testvoice" onclick="testVoice()" title="Hear the selected voice">Test voice</button>
@@ -144,7 +145,8 @@ aside.right{background:var(--panel);overflow-y:auto;padding:12px;display:flex;fl
       <div class="tab" data-v="coher">Coherence</div><div class="tab" data-v="regime">Plastic</div>
     </div>
     <div class="hdr"><h4 style="margin:0">Living Field</h4><span class="spacer"></span>
-      <button class="btn" title="Pop out larger" onclick="window.open('/visualizer','eris_vis','width=820,height=900')">pop out</button></div>
+      <select id="field-agent" title="Whose mind to show" onchange="switchFieldAgent()"></select>
+      <button class="btn" title="Pop out larger" onclick="popoutField()">pop out</button></div>
     <canvas id="fieldcv" width="220" height="220"></canvas>
   </div>
 
@@ -216,6 +218,12 @@ aside.right{background:var(--panel);overflow-y:auto;padding:12px;display:flex;fl
     <textarea id="sb-code" placeholder="Python — numpy / scipy / eris available. print() your results." style="width:100%;height:78px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:7px;font-family:var(--mono);font-size:11px;resize:vertical"></textarea>
     <div style="margin-top:6px"><button class="btn accent" onclick="runSandbox()">Run</button></div>
     <pre id="sb-out" style="white-space:pre-wrap;font-family:var(--mono);font-size:11px;max-height:160px;overflow:auto;margin:6px 0 0;color:var(--dim)"></pre>
+  </div>
+
+  <div class="panel">
+    <div class="hdr"><h4 style="margin:0">Collective (nodes)</h4><span class="spacer"></span>
+      <button class="btn" onclick="loadAgents()" title="Refresh">refresh</button></div>
+    <div id="agents"></div>
   </div>
 </aside>
 

@@ -78,6 +78,13 @@ class AuthorRequest(BaseModel if HAS_FASTAPI else object):
     audit: bool = True
 
 
+class ConverseRequest(BaseModel if HAS_FASTAPI else object):
+    speakers: list = []       # node names, e.g. ["willow", "npc_c"]
+    context: str = ""
+    turns: int = 6
+    backend: str = ""
+
+
 class IngestRequest(BaseModel if HAS_FASTAPI else object):
     text: str = ""
     title: str = ""
@@ -131,6 +138,20 @@ def create_app(
     from eris.knowledge.documents import library_dir as _lib_dir
     author = DocumentAuthor(orchestrator.mediator,
                             out_dir=os.path.join(_lib_dir(), "generated"))
+
+    # WILLOW Part I — the multi-node collective: the pool is orchestrator.memory;
+    # 'eris' is the OverSoul, 'willow' a companion node. Unreal addresses nodes
+    # by `model` name. Single-Eris behaviour is unchanged (eris is the default).
+    from eris.agents.registry import build_default_registry
+    from eris.agents.backends import build_backends
+    from eris.agents.budget import ConversationBudget, choose_dialogue_plan
+    from eris.agents.dialogue import generate_dialogue
+    from eris.agents.federation import federate
+    agent_backends = build_backends()
+    registry = build_default_registry(orchestrator, data_dir=data_dir,
+                                      field_size=field_size)
+    convo_budget = ConversationBudget(
+        per_hour=int(os.environ.get("ERIS_CONVO_PER_HOUR", "60")))
 
     # WebSocket connections for real-time metrics
     ws_connections: list = []
@@ -319,7 +340,9 @@ def create_app(
 
     @app.post("/v1/chat/completions")
     async def chat_completions(req: OpenAIChatRequest):
-        """OpenAI-compatible chat completions endpoint for NVIDIA ACE."""
+        """OpenAI-compatible endpoint. Routes by `model` to a node (WILLOW I.5):
+        model:"willow" -> the Willow node, model:"eris" (default) -> the OverSoul.
+        Used by NVIDIA ACE and the Unreal NPC plugins."""
         message_text = ""
         system_context = ""
         for msg in req.messages:
@@ -328,9 +351,13 @@ def create_app(
             elif msg.get("role") == "user":
                 message_text += msg.get("content", "") + "\n"
 
-        result = await orchestrator.process(
-            message_text.strip(), system_context=system_context.strip()
-        )
+        agent = registry.get(req.model)
+        if agent is not None and agent.name != "eris":
+            reply = await agent.respond(message_text.strip(), agent_backends)
+        else:
+            result = await orchestrator.process(
+                message_text.strip(), system_context=system_context.strip())
+            reply = result.response_text
 
         return {
             "id": "chatcmpl-eris",
@@ -339,18 +366,82 @@ def create_app(
             "model": req.model,
             "choices": [{
                 "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": result.response_text,
-                },
+                "message": {"role": "assistant", "content": reply},
                 "finish_reason": "stop"
             }],
-            "usage": {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0
-            }
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         }
+
+    @app.get("/agents")
+    async def api_agents():
+        """List nodes (debug / Unreal config)."""
+        return {"agents": [
+            {"name": a.name, "backend": a.backend_id, "has_field": a.has_field,
+             "insights": (len(a.insight_log.recent(999)) if a.insight_log else 0)}
+            for a in registry.agents.values()]}
+
+    @app.post("/converse")
+    async def api_converse(req: ConverseRequest):
+        """Puppeteered one-call NPC↔NPC dialogue (WILLOW I.8 Mode B), with the
+        degradation ladder. Lines are written into each speaker's private memory."""
+        speakers = [s for s in (registry.get(n) for n in req.speakers) if s is not None]
+        if len(speakers) < 2:
+            return JSONResponse({"error": "need >=2 known speakers"}, status_code=400)
+        plan = choose_dialogue_plan(speakers, agent_backends, convo_budget)
+        if plan["mode"] == "skip":
+            return {"mode": "skip", "script": []}
+        backend = (agent_backends.get(plan.get("backend", req.backend or speakers[0].backend_id))
+                   or agent_backends.get("ollama"))
+        script = await generate_dialogue(backend, speakers, req.context, req.turns)
+        convo_budget.charge()
+        for line in script:
+            for s in speakers:
+                framing = "said" if line["speaker"].lower() == s.name.lower() else "heard"
+                mem = s.memory
+                if hasattr(mem, "store_experience"):
+                    try:
+                        mem.store_experience(f'{line["speaker"]}: {line["text"]}', kind=framing)
+                    except Exception:
+                        pass
+        return {"mode": plan["mode"], "script": script}
+
+    @app.get("/agents/{name}/insights")
+    async def api_agent_insights(name: str):
+        a = registry.get(name)
+        if a is None or a.insight_log is None:
+            return {"agent": name, "insights": []}
+        return {"agent": a.name, "insights": [
+            {"summary": i.summary, "regime": i.regime, "timestamp": i.timestamp,
+             "federated": i.federated} for i in a.insight_log.recent(50)]}
+
+    @app.post("/agents/{name}/reflect")
+    async def api_agent_reflect(name: str):
+        """Distill ONE insight from the node's recent private experience."""
+        a = registry.get(name)
+        if a is None or a.insight_log is None:
+            return JSONResponse({"error": "no such node / no insight log"}, status_code=404)
+        ins = await a.distill(agent_backends)
+        return {"insight": (ins.summary if ins else None)}
+
+    @app.post("/agents/{name}/federate")
+    async def api_agent_federate(name: str):
+        """Push the node's NOVEL insights into the collective pool."""
+        a = registry.get(name)
+        if a is None or a.insight_log is None:
+            return JSONResponse({"error": "no such node / no insight log"}, status_code=404)
+        pushed = federate(a.insight_log, a.name, orchestrator.memory)
+        return {"federated": pushed}
+
+    @app.get("/health")
+    async def health():
+        """Lets the Llama-Unreal / NPC plugins connect cleanly."""
+        return {"status": "ok"}
+
+    @app.get("/props")
+    async def props():
+        """Minimal llama.cpp-style props stub for NPC plugins."""
+        return {"default_generation_settings": {"model": "eris"},
+                "model": "eris", "chat_template": ""}
 
     @app.get("/vitals")
     async def vitals():
@@ -462,6 +553,10 @@ def create_app(
                 first = False
             else:
                 base = int(os.environ.get("ERIS_CRAWL_PERIOD_S", "900"))
+                # GAMING_MODE throttles background thinking so it doesn't fight the
+                # renderer (Unreal) for the GPU (WILLOW I.9 / II.11).
+                if os.environ.get("ERIS_GAMING_MODE", "0") not in ("0", "", "off", "false"):
+                    base *= int(os.environ.get("ERIS_GAMING_THROTTLE", "4"))
                 await asyncio.sleep(max(60, base + random.randint(-180, 180)))
             try:
                 report = await orchestrator.run_dream_cycle()
@@ -471,6 +566,19 @@ def create_app(
                 print(msg)
             except Exception as e:
                 print(f"[Dream Loop Error] {e}")
+            # Federation pass: each real node distills a fresh insight from its own
+            # experience and pushes the NOVEL ones into the collective pool, so a
+            # different node can later act on what this one learned (WILLOW I.7).
+            try:
+                for node in registry.agents.values():
+                    if node.insight_log is None:
+                        continue
+                    await node.distill(agent_backends)
+                    n = federate(node.insight_log, node.name, orchestrator.memory)
+                    if n:
+                        print(f"[Federation] {node.name} -> pool: {n} novel insight(s)")
+            except Exception as e:
+                print(f"[Federation Error] {e}")
 
     async def _nightly_learning_loop():
         """Tier 7: once per day (default 03:00 local), study the topic list and
@@ -550,27 +658,28 @@ def create_app(
                 ws_connections.remove(websocket)
 
     @app.websocket("/ws/field")
-    async def websocket_field_endpoint(websocket: WebSocket):
-        """WebSocket for real-time field state streaming."""
+    async def websocket_field_endpoint(websocket: WebSocket, agent: str = "eris"):
+        """Send-only field stream for a node (WILLOW I.10): /ws/field?agent=willow
+        streams that node's mind. Defaults to eris (the existing cockpit viz)."""
         await websocket.accept()
         from eris.config import to_numpy
+        node = registry.get(agent)
+        field = node.field if node is not None else orchestrator.field
         try:
             while True:
-                # Only send if field exists
-                if orchestrator.field is not None:
-                    # Extract live arrays
-                    phi = to_numpy(orchestrator.field.phi).tolist()
-                    theta = to_numpy(orchestrator.field.theta).tolist()
-
+                f = (node.field if node is not None else orchestrator.field)
+                if f is not None:
+                    phi = to_numpy(f.phi).tolist()
+                    theta = to_numpy(f.theta).tolist()
                     await websocket.send_json({
-                        "size": orchestrator.field.size,
-                        "step_count": orchestrator.field.step_count,
+                        "agent": (node.name if node is not None else "eris"),
+                        "size": f.size,
+                        "step_count": f.step_count,
                         "phi": phi,
                         "theta": theta,
-
-                        "coherence": orchestrator.field.coherence,
-                        "dCdX": orchestrator.field.dCdX,
-                        "regime_str": orchestrator.field.detect_regime(),
+                        "coherence": f.coherence,
+                        "dCdX": f.dCdX,
+                        "regime_str": f.detect_regime(),
                     })
                 # 10 fps is enough for the visualizer without overloading
                 await asyncio.sleep(0.1)
