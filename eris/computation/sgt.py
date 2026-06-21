@@ -30,7 +30,7 @@ Usage:
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 
 from eris.config import xp, to_numpy, CONFIG
 import numpy as np
@@ -178,6 +178,14 @@ class SGTGate:
     # Warmup: don't gate until we've seen enough data to have stable stats
     warmup_observations: int = 10
 
+    # Tier 1 (optional, default OFF): a SHARED NoiseFloorEstimator. When left
+    # None — every existing call site — `update()` is byte-identical to before.
+    # When injected, the estimator's global agitation multiplier scales this
+    # gate's effective threshold so all gates stay conservative in lockstep when
+    # the whole field is turbulent. Duck-typed (anything exposing
+    # `global_multiplier()`) to avoid importing noise_floor here.
+    estimator: Optional[Any] = None
+
     def update(self, value: float) -> Tuple[bool, float]:
         """Observe a new value, update stats, return gate decision.
 
@@ -198,6 +206,13 @@ class SGTGate:
             value, self.running_mean, self.running_var, self.ema_alpha
         )
 
+        # Effective threshold. With no shared estimator (the default) this is
+        # exactly `threshold_sigma`, so behavior is unchanged. With one injected,
+        # a turbulent field raises it (g >= 1) -> the gate fires less readily.
+        eff_threshold = self.threshold_sigma
+        if self.estimator is not None:
+            eff_threshold = self.threshold_sigma * self.estimator.global_multiplier()
+
         # During warmup, never trigger
         if self.n_observations < self.warmup_observations:
             std = max(self.running_var ** 0.5, 1e-10)
@@ -206,7 +221,7 @@ class SGTGate:
 
         # Normal gating
         return gate_decision(
-            value, self.running_mean, self.running_var, self.threshold_sigma
+            value, self.running_mean, self.running_var, eff_threshold
         )
 
     def reset(self) -> None:

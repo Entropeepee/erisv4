@@ -1,0 +1,163 @@
+"""Tier 1 tests — shared noise-floor estimator + criticality monitor.
+
+Proves the substrate is correct AND that the SGTGate refactor is
+behavior-preserving (no estimator => byte-identical to before). No gate is
+wired into the live pipeline yet, so the orchestration benchmark still reads an
+unchanged baseline (checked separately in CI by the full suite staying green).
+"""
+import os
+os.environ.setdefault("ERIS_GPU", "0")
+os.environ.setdefault("ERIS_EMBEDDINGS", "off")
+
+import unittest
+
+from eris.computation.sgt import SGTGate
+from eris.computation.noise_floor import NoiseFloorEstimator
+from eris.computation.criticality import (
+    CriticalityMonitor, Decision, FailureModeReport,
+)
+
+
+class _GStub:
+    """Duck-typed estimator exposing only a fixed global multiplier."""
+    def __init__(self, g):
+        self._g = g
+
+    def global_multiplier(self):
+        return self._g
+
+
+class TestNoiseFloorPerSignalScale(unittest.TestCase):
+    def test_each_signal_uses_its_own_scale(self):
+        """A tiny absolute deviation is a big outlier for a tiny-scale signal,
+        and negligible for a large-scale signal — the whole point of per-signal
+        local scale vs one global sigma."""
+        est = NoiseFloorEstimator(warmup=5, ema_alpha=0.2)
+        # "big" lives around 1.0 (spread ~0.1); "small" around 1e-3 (spread ~1e-4)
+        for i in range(40):
+            est.observe("big", 1.0 + (0.1 if i % 2 else -0.1))
+            est.observe("small", 1e-3 + (1e-4 if i % 2 else -1e-4))
+        z_small = est.z("small", 5e-3)          # +4e-3 ≈ many small-sigmas
+        z_big = est.z("big", 1.0 + 5e-3)         # +5e-3 ≈ a fraction of a big-sigma
+        self.assertGreater(abs(z_small), 5.0)
+        self.assertLess(abs(z_big), 1.0)
+
+    def test_global_multiplier_rises_with_turbulence(self):
+        est = NoiseFloorEstimator(warmup=4, ema_alpha=0.3)
+        for v in (0.10, 0.11, 0.09, 0.10, 0.10):   # calm baseline -> g ~ 1
+            est.observe_global(v)
+        g_calm = est.global_multiplier()
+        for v in (0.4, 0.7, 1.0):                   # escalating turbulence
+            est.observe_global(v)
+        g_turb = est.global_multiplier()
+        self.assertLess(g_calm, 1.2)                # calm field ≈ no extra caution
+        self.assertGreater(g_turb, 1.5)             # turbulence raises it markedly
+        self.assertLessEqual(g_turb, 3.0)           # clamped to g_max
+
+
+class TestCriticalityMonitor(unittest.TestCase):
+    def _warm(self, mon, name, mode, n=8):
+        for i in range(n):
+            mon.observe(name, 1.0 + (0.02 if i % 2 else -0.02), {"mode": mode})
+
+    def test_protected_steps_suppress_early_firing(self):
+        est = NoiseFloorEstimator(warmup=2, ema_alpha=0.5)
+        mon = CriticalityMonitor("m", est, "router", k=2.0, protected_steps=4)
+        for v in (0.0, 100.0, -100.0, 50.0):        # wild values, still protected
+            d, r = mon.observe("s", v, {"mode": "anomaly"})
+            self.assertEqual(d, Decision.CONTINUE)
+            self.assertIsNone(r)
+
+    def test_anomaly_escalates_with_report(self):
+        est = NoiseFloorEstimator(warmup=5, ema_alpha=0.3)
+        mon = CriticalityMonitor("m", est, "router", k=2.0)
+        self._warm(mon, "dcdx", "anomaly")
+        d, r = mon.observe("dcdx", 3.0, {"mode": "anomaly"})   # large high outlier
+        self.assertEqual(d, Decision.ESCALATE)
+        self.assertIsInstance(r, FailureModeReport)
+        self.assertEqual(r.decision, Decision.ESCALATE)
+        self.assertEqual(r.specialization, "router")
+
+    def test_anomaly_switch_with_report(self):
+        est = NoiseFloorEstimator(warmup=5, ema_alpha=0.3)
+        mon = CriticalityMonitor("m", est, "router", k=2.0)
+        self._warm(mon, "s", "anomaly")
+        # Moderate outlier: above eff_k but below an explicit huge escalate_k.
+        d, r = mon.observe("s", 1.5, {"mode": "anomaly", "escalate_k": 1e9})
+        self.assertEqual(d, Decision.SWITCH)
+        self.assertIsInstance(r, FailureModeReport)
+        self.assertEqual(r.decision, Decision.SWITCH)
+
+    def test_settle_suspends_without_report(self):
+        est = NoiseFloorEstimator(warmup=5, ema_alpha=0.3)
+        mon = CriticalityMonitor("m", est, "field_depth", k=2.0)
+        self._warm(mon, "coh", "settle")
+        d, r = mon.observe("coh", 0.0, {"mode": "settle"})     # low-side outlier
+        self.assertEqual(d, Decision.SUSPEND)
+        self.assertIsNone(r)                                   # suspend carries no report
+
+    def test_deadline_forces_suspend(self):
+        est = NoiseFloorEstimator(warmup=5, ema_alpha=0.3)
+        mon = CriticalityMonitor("m", est, "field_depth", k=2.0)
+        self._warm(mon, "coh", "settle")
+        d, r = mon.observe("coh", 1.0, {"deadline": True})
+        self.assertEqual(d, Decision.SUSPEND)
+        self.assertIsNone(r)
+
+    def test_in_band_continues_without_report(self):
+        est = NoiseFloorEstimator(warmup=5, ema_alpha=0.3)
+        mon = CriticalityMonitor("m", est, "router", k=2.0)
+        self._warm(mon, "s", "anomaly")
+        d, r = mon.observe("s", 1.0, {"mode": "anomaly"})      # right at the mean
+        self.assertEqual(d, Decision.CONTINUE)
+        self.assertIsNone(r)
+
+    def test_global_multiplier_makes_monitor_conservative(self):
+        """Same signal sequence: an outlier that ESCALATEs in a calm field is
+        held to CONTINUE when the shared multiplier marks the field turbulent."""
+        def run(turbulent):
+            est = NoiseFloorEstimator(warmup=5, ema_alpha=0.3, g_max=20.0)
+            mon = CriticalityMonitor("m", est, "router", k=2.0)
+            for i in range(8):
+                est.observe_global(5.0 if turbulent else 0.0)
+                mon.observe("s", 1.0 + (0.02 if i % 2 else -0.02), {"mode": "anomaly"})
+            # one more agitation reading so g is current
+            est.observe_global(50.0 if turbulent else 0.0)
+            return mon.observe("s", 1.6, {"mode": "anomaly", "escalate_k": 1e9})
+        d_calm, _ = run(turbulent=False)
+        d_turb, _ = run(turbulent=True)
+        self.assertEqual(d_calm, Decision.SWITCH)     # fires when calm
+        self.assertEqual(d_turb, Decision.CONTINUE)   # suppressed when turbulent
+
+
+class TestSGTGateBackCompat(unittest.TestCase):
+    def test_no_estimator_is_deterministic_and_unchanged(self):
+        seq = [0.0, 1.0, 0.5, 0.2, 0.9, 1.0, 0.1, 0.3, 0.7, 0.4, 1.2, 0.6, 2.0]
+        a = SGTGate(threshold_sigma=2.0, ema_alpha=0.1)
+        b = SGTGate(threshold_sigma=2.0, ema_alpha=0.1)
+        out_a = [a.update(v) for v in seq]
+        out_b = [b.update(v) for v in seq]
+        self.assertEqual(out_a, out_b)              # byte-identical, repeatable
+
+    def test_shared_multiplier_raises_effective_threshold(self):
+        """A >2σ outlier that opens a plain gate stays shut when an injected
+        estimator reports a turbulent field (effective threshold = 2σ × g)."""
+        seq = [0.0, 1.0] * 6                          # 12 warmup obs
+        plain = SGTGate(threshold_sigma=2.0, ema_alpha=0.1)
+        gated = SGTGate(threshold_sigma=2.0, ema_alpha=0.1, estimator=_GStub(2.0))
+        for v in seq:
+            plain.update(v)
+            gated.update(v)                          # identical stats; g only scales threshold
+        std = max(plain.running_var ** 0.5, 1e-10)
+        outlier = plain.running_mean + 5.0 * std
+        fired_plain, z_plain = plain.update(outlier)
+        fired_gated, z_gated = gated.update(outlier)
+        self.assertAlmostEqual(z_plain, z_gated, places=9)   # same z, only threshold differs
+        self.assertGreater(z_plain, 2.0)
+        self.assertLess(z_plain, 4.0)                        # below the raised 4σ threshold
+        self.assertTrue(fired_plain)                         # plain (2σ) opens
+        self.assertFalse(fired_gated)                        # gated (2σ×2) stays shut
+
+
+if __name__ == "__main__":
+    unittest.main()

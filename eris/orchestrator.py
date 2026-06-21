@@ -141,6 +141,7 @@ class ErisOrchestrator:
         """
         os.makedirs(data_dir, exist_ok=True)
         self.field_size = field_size
+        self.field_seed = field_seed
         self.use_frt_seeding = use_frt_seeding
 
         # Layer 1: Persistent field state
@@ -410,7 +411,11 @@ class ErisOrchestrator:
         # to get a response bvec (~2× per-turn field cost). Counted here; the
         # Tier 3 warm-start gate is what later shrinks it.
         self.counters.field_rebuilds += 1
-        response_field = FractalField(size=self.field_size)
+        # Seed the response field from the SAME field_seed as the main field, so
+        # the benchmark's M-seed repeats actually vary the response-field noise
+        # (an honest fidelity A/B for the Tier 3 warm-start). At the default
+        # seed=42 this is byte-identical to the old fixed-seed construction.
+        response_field = FractalField(size=self.field_size, seed=self.field_seed)
         response_field.seed_from_text(result.response_text, use_frt=self.use_frt_seeding)
         response_field.run(CONFIG.pde_steps_per_input // 2)
         self.counters.resp_field_steps += CONFIG.pde_steps_per_input // 2
