@@ -2,10 +2,16 @@
 cd /d "%~dp0"
 title Eris Echo
 echo ============================================
-echo   Eris Echo - starting cognitive backend
+echo   Eris Echo - starting language model + cognitive backend
 echo   (metacognition loop + dreams + nightly study
 echo    all start automatically with the server)
 echo ============================================
+
+echo Starting Eris's language model (Ollama)...
+echo (If its window says "address already in use", that is fine -
+echo  it just means Ollama was already running.)
+start "Eris LLM (Ollama)" cmd /k "ollama serve"
+timeout /t 4 /nobreak >nul
 
 start "Eris Backend" cmd /k "python -m eris.server.app"
 

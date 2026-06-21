@@ -18,10 +18,42 @@ window.addEventListener('load', () => {
   });
 });
 
+/* ---------------- text formatting ---------------- */
+// Escape HTML, then render a safe subset of Markdown so bold/italic/code
+// show up properly in the chat bubble (instead of raw ** and *).
+function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function mdToHtml(t){
+  let s=esc(t);
+  s=s.replace(/```([\s\S]*?)```/g,(m,c)=>`<pre>${c.replace(/\n$/,'')}</pre>`);
+  s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
+  s=s.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+  s=s.replace(/__([^_]+)__/g,'<strong>$1</strong>');
+  s=s.replace(/(^|[^*])\*([^*\n]+)\*/g,'$1<em>$2</em>');
+  s=s.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');
+  s=s.replace(/\n/g,'<br>');
+  return s;
+}
+// Strip Markdown so the TTS speaks words, not "asterisk asterisk".
+function cleanForTTS(t){
+  let s=t||'';
+  s=s.replace(/```[\s\S]*?```/g,' ');
+  s=s.replace(/`([^`]+)`/g,'$1');
+  s=s.replace(/\*\*([^*]+)\*\*/g,'$1');
+  s=s.replace(/\*([^*]+)\*/g,'$1');
+  s=s.replace(/__([^_]+)__/g,'$1');
+  s=s.replace(/_([^_]+)_/g,'$1');
+  s=s.replace(/^#{1,6}\s*/gm,'');
+  s=s.replace(/\[([^\]]+)\]\([^)]*\)/g,'$1');
+  s=s.replace(/[*_~`#>]/g,'');
+  return s.replace(/\s+/g,' ').trim();
+}
+
 /* ---------------- chat ---------------- */
 function addMsg(role, text, meta){
   const d=document.createElement('div'); d.className='msg '+role;
-  d.textContent=text;
+  const body=document.createElement('div'); body.className='body';
+  if(role==='eris'){ body.innerHTML=mdToHtml(text); } else { body.textContent=text; }
+  d.appendChild(body);
   if(meta){ const m=document.createElement('div'); m.className='mm'; m.textContent=meta; d.appendChild(m);}
   $('#chat').appendChild(d); $('#chat').scrollTop=$('#chat').scrollHeight; return d;
 }
@@ -34,7 +66,7 @@ async function send(){
       body:JSON.stringify({message:t, conversation_id:convId||''})});
     const d=await r.json();
     convId=d.conversation_id||convId;
-    thinking.firstChild.textContent=d.response||'(no response)';
+    thinking.firstChild.innerHTML=mdToHtml(d.response||'(no response)');
     const mm=document.createElement('div'); mm.className='mm';
     mm.textContent=`${d.archetype||''} · ${d.regime||''} · dC/dX=${(d.dCdX||0).toFixed(3)} · ${(d.latency_ms||0).toFixed(0)}ms`;
     thinking.appendChild(mm);
@@ -216,8 +248,10 @@ async function loadVoices(){
     const em=voices.find(v=>/emily/i.test(v.name)); if(em) sel.value=em.id;
   }catch(e){}
 }
+function testVoice(){ speak("Hi, this is Eris. This is how my voice sounds right now."); }
 async function speak(text){
   try{
+    text=cleanForTTS(text); if(!text) return;
     if(curAudio){ curAudio.pause(); curAudio=null; }
     const r=await fetch('/api/tts/generate',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({text, voice_id:$('#voice').value})});
