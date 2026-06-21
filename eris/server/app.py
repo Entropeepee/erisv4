@@ -294,8 +294,12 @@ def create_app(
         }
 
     async def _periodic_dream_loop():
+        # First reflection ~90s after boot so the cockpit's Dreams panel
+        # populates soon after start, then settle into the 15-minute cadence.
+        first = True
         while True:
-            await asyncio.sleep(60 * 15)  # Every 15 minutes
+            await asyncio.sleep(90 if first else 60 * 15)
+            first = False
             try:
                 report = await orchestrator.run_dream_cycle()
                 print(f"[Dream Loop] Processed {report['tensions_processed']} tensions. Resolved: {report['tensions_resolved']}")
