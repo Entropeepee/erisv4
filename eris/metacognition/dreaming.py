@@ -32,6 +32,8 @@ From the handoff conversation:
 """
 
 from __future__ import annotations
+import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 import time
@@ -44,6 +46,9 @@ from eris.memory.autobiography import Autobiography, AutobiographyEntry
 from eris.memory.tiers import MemorySystem, MemoryRecord
 from eris.tribe.specialists import should_trigger_research
 from eris.knowledge import research as research_cascade
+from eris.metacognition.dream_journal import DreamJournal
+
+logger = logging.getLogger("eris.dreaming")
 
 
 @dataclass
@@ -82,11 +87,14 @@ class DreamingLoop:
                  memory: MemorySystem,
                  field_size: int = 32,
                  torsion_threshold: float = 0.2,
-                 sgt_threshold: float = 2.0):
+                 sgt_threshold: float = 2.0,
+                 journal: Optional[DreamJournal] = None):
         self.autobiography = autobiography
         self.memory = memory
         self.field_size = field_size
         self.torsion_threshold = torsion_threshold
+        # Tier 7: readable record of what she worked through (cockpit dream panel)
+        self.journal = journal or DreamJournal()
 
         # SGT gate for tension significance
         self._tension_gate = SGTGate(threshold_sigma=sgt_threshold, ema_alpha=0.1)
@@ -198,6 +206,22 @@ class DreamingLoop:
                     question = self._formulate_question(entry, resolved_bvec)
                     result.generated_question = question
 
+        # Tier 7: write a readable journal entry for the cockpit dream panel.
+        try:
+            verb = "resolved" if result.resolved else "left open"
+            summary = (f"Reflected on '{entry.input_text[:70]}' — {verb} "
+                       f"(regime: {result.resolution_regime}).")
+            detail = summary
+            if result.generated_question:
+                detail += f"\n\nOpen question for you: {result.generated_question}"
+            self.journal.record(
+                kind="auto", topic=entry.input_text[:160], summary=summary,
+                regime=result.resolution_regime, resolved=result.resolved,
+                question=result.generated_question, detail=detail,
+            )
+        except Exception:
+            pass
+
         return result
 
     def _formulate_question(self, entry: AutobiographyEntry,
@@ -243,6 +267,42 @@ class DreamingLoop:
         except Exception as e:
             logger.warning(f"[Dream Research] failed (non-fatal): {e}")
             return None
+
+    def ponder(self, question: str) -> Dict[str, Any]:
+        """Direct Eris into a focused metacognition loop on a question (Tier 7).
+
+        Seeds a field from the question, lets it evolve, runs the research
+        cascade, and writes a rich journal entry you can read in the cockpit.
+        """
+        field = FractalField(size=self.field_size)
+        field.seed_from_text(question)
+        field.run(60)
+        bvec = field.compute_bvec()
+        regime = field.detect_regime()
+
+        bundle = self._run_research(question)
+        findings, sources = "", []
+        if bundle is not None:
+            sources = list(bundle.sources)
+            if bundle.full_texts:
+                for i, txt in enumerate(bundle.full_texts):
+                    src = sources[i] if i < len(sources) else "expert"
+                    self.memory.ltm.store(MemoryRecord(
+                        text=f"[Ponder: {question[:60]}] {txt[:2000]}",
+                        bvec=bvec, source=f"ponder:{src}"))
+                findings = "\n\n".join(t[:600] for t in bundle.full_texts[:3])
+
+        summary = (f"Pondered '{question[:70]}'. Field settled into {regime} "
+                   f"({bvec.archetype()}).")
+        detail = summary
+        if findings:
+            detail += "\n\nWhat I found:\n" + findings
+        else:
+            detail += ("\n\n(No external sources reached; reflection is based on "
+                       "the field's own resolution and existing memory.)")
+        return self.journal.record(
+            kind="ponder", topic=question[:160], summary=summary,
+            regime=regime, resolved=bool(findings), detail=detail, sources=sources)
 
     def get_and_clear_questions(self) -> List[str]:
         """Return pending questions AND clear the queue (Remediation Tier 2.3).

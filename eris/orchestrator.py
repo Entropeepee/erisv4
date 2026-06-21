@@ -60,6 +60,7 @@ from eris.field.compiler import compile_contradiction, inject_seeds
 from eris.memory.tiers import MemorySystem, MemoryRecord
 from eris.memory.autobiography import Autobiography
 from eris.knowledge.embeddings import get_embedding
+from eris.metacognition.dream_journal import DreamJournal
 from eris.memory.interference import find_conflicts
 
 # Layer 3: Tribe
@@ -149,10 +150,14 @@ class ErisOrchestrator:
         self.deep_mediator = LLMMediator()
 
         # Layer 4: Metacognition
+        # Tier 7: dream journal (readable record for the cockpit dream panel)
+        self.dream_journal = DreamJournal(
+            path=os.path.join(data_dir, "dream_journal.jsonl"))
         self.dreaming_loop = DreamingLoop(
             autobiography=self.autobiography,
             memory=self.memory,
             field_size=field_size,
+            journal=self.dream_journal,
         )
 
         # SGT gate for dissonance detection
@@ -499,6 +504,17 @@ class ErisOrchestrator:
         served exactly once.
         """
         return self.dreaming_loop.get_and_clear_questions()
+
+    async def ponder(self, question: str) -> Dict[str, Any]:
+        """Direct Eris into a focused dream/metacognition loop on a question
+        (Tier 7). Offloaded so it never blocks the event loop."""
+        return await asyncio.to_thread(self.dreaming_loop.ponder, question)
+
+    def get_dreams(self, limit: int = 50) -> List[Dict[str, Any]]:
+        return self.dream_journal.list(limit=limit)
+
+    def get_dream(self, entry_id: str) -> Optional[Dict[str, Any]]:
+        return self.dream_journal.get(entry_id)
 
     def get_vitals(self) -> Dict[str, Any]:
         """System health metrics for the /vitals endpoint."""
