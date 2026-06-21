@@ -358,7 +358,10 @@ def create_app(
             first = False
             try:
                 report = await orchestrator.run_dream_cycle()
-                print(f"[Dream Loop] Processed {report['tensions_processed']} tensions. Resolved: {report['tensions_resolved']}")
+                msg = f"[Dream Loop] Processed {report['tensions_processed']} tensions. Resolved: {report['tensions_resolved']}"
+                if report.get("explored_topic"):
+                    msg += f" | No tensions -> read about: {report['explored_topic'][:80]}"
+                print(msg)
             except Exception as e:
                 print(f"[Dream Loop Error] {e}")
 

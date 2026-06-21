@@ -34,6 +34,7 @@ From the handoff conversation:
 from __future__ import annotations
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 import time
@@ -72,6 +73,7 @@ class DreamCycleReport:
     research_triggered: int = 0
     questions_generated: List[str] = field(default_factory=list)
     duration_seconds: float = 0.0
+    explored_topic: Optional[str] = None   # set when idle-reading kicks in
 
 
 class DreamingLoop:
@@ -136,8 +138,81 @@ class DreamingLoop:
                 report.questions_generated.append(result.generated_question)
                 self.pending_questions.append(result.generated_question)
 
+        # No tensions to dream about? Stay curious: read about something from
+        # our recent conversation instead of idling (self-directed learning).
+        if (report.tensions_processed == 0
+                and os.environ.get("ERIS_IDLE_READING", "1") != "0"):
+            try:
+                expl = self.idle_explore()
+                if expl:
+                    report.explored_topic = expl.get("topic")
+            except Exception as e:
+                logger.warning(f"[Idle explore] failed (non-fatal): {e}")
+
         report.duration_seconds = time.time() - t0
         return report
+
+    def _recent_topic(self) -> Optional[str]:
+        """Pick a subject from recent conversation to read about."""
+        try:
+            recents = self.memory.stm.get_recent(8)
+        except Exception:
+            recents = []
+        convo = [r for r in recents if getattr(r, "source", "") == "conversation"]
+        pool = convo or list(reversed(self.memory.stm.get_all()))
+        for r in pool:
+            t = (r.text or "").strip()
+            # conversation turns are stored as "Q: <user>\nA: <eris>"
+            if t.lower().startswith("q:"):
+                q = t[2:].split("\nA:")[0].strip()
+                if len(q) > 8:
+                    return q
+            elif len(t) > 8:
+                return t
+        return None
+
+    def idle_explore(self) -> Optional[Dict[str, Any]]:
+        """When there are no tensions, read about a recent-conversation topic
+        on the web and ingest the findings into memory (medium-term), so the
+        next time we talk about it she already knows more."""
+        seed = self._recent_topic()
+        if not seed:
+            return None
+        bundle = self._run_research(seed)
+        if not bundle or not getattr(bundle, "full_texts", None):
+            return None
+        # Field signature for the topic, so the findings are retrievable.
+        field = FractalField(size=self.field_size)
+        field.seed_from_text(seed)
+        field.run(30)
+        topic_bvec = field.compute_bvec()
+        from eris.knowledge.embeddings import get_embedding
+        stored = 0
+        for i, txt in enumerate(bundle.full_texts):
+            src = bundle.sources[i] if i < len(bundle.sources) else "web"
+            self.memory.mtm.store(MemoryRecord(
+                text=f"[Self-study: {seed[:80]}] {txt}",
+                bvec=topic_bvec,
+                embedding=get_embedding(txt),
+                source=f"exploration:{src}",
+            ))
+            stored += 1
+        try:
+            self.memory.consolidate()
+        except Exception:
+            pass
+        try:
+            self.journal.record(
+                kind="exploration", topic=seed[:160],
+                summary=(f"No tensions to resolve, so I read up on "
+                         f"'{seed[:70]}' from our recent conversation."),
+                detail=("Followed up on our recent conversation by reading:\n\n"
+                        + "\n\n".join(bundle.full_texts)),
+                resolved=True, sources=list(bundle.sources),
+            )
+        except Exception:
+            pass
+        return {"topic": seed, "stored": stored, "sources": list(bundle.sources)}
 
     def _process_tension(self, entry: AutobiographyEntry) -> Optional[DreamResult]:
         """Process one high-torsion entry.
@@ -181,7 +256,7 @@ class DreamingLoop:
                     result.resolved = True
                     # Store resolved pattern in LTM
                     self.memory.ltm.store(MemoryRecord(
-                        text=f"[Dream resolution] {entry.input_text[:100]}",
+                        text=f"[Dream resolution] {entry.input_text}",
                         bvec=resolved_bvec,
                         source="dream",
                     ))
@@ -196,7 +271,7 @@ class DreamingLoop:
                         for i, txt in enumerate(bundle.full_texts):
                             src = bundle.sources[i] if i < len(bundle.sources) else "expert"
                             self.memory.ltm.store(MemoryRecord(
-                                text=f"[Research: {entry.input_text[:60]}] {txt[:2000]}",
+                                text=f"[Research: {entry.input_text[:80]}] {txt}",
                                 bvec=resolved_bvec,
                                 source=f"research:{src}",
                             ))
@@ -288,9 +363,9 @@ class DreamingLoop:
                 for i, txt in enumerate(bundle.full_texts):
                     src = sources[i] if i < len(sources) else "expert"
                     self.memory.ltm.store(MemoryRecord(
-                        text=f"[Ponder: {question[:60]}] {txt[:2000]}",
+                        text=f"[Ponder: {question[:80]}] {txt}",
                         bvec=bvec, source=f"ponder:{src}"))
-                findings = "\n\n".join(t[:600] for t in bundle.full_texts[:3])
+                findings = "\n\n".join(bundle.full_texts)
 
         summary = (f"Pondered '{question[:70]}'. Field settled into {regime} "
                    f"({bvec.archetype()}).")

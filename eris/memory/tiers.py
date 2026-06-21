@@ -392,12 +392,27 @@ class MemorySystem:
 
     def retrieve(self, query_bvec: Optional[BVec] = None,
                  query_embedding: Optional[np.ndarray] = None,
-                 top_k: int = 5) -> List[MemoryRecord]:
+                 top_k: int = 5,
+                 query_text: Optional[str] = None) -> List[MemoryRecord]:
         """Retrieve from all three tiers, weighted by freshness × similarity.
 
         Combines BFECDS alignment and semantic similarity for ranking.
+        If query_text is given, records whose title/source share a word with the
+        query are boosted — so naming a document ("my patent") surfaces it.
         """
         candidates: List[Tuple[MemoryRecord, float]] = []
+
+        qtokens = set()
+        if query_text:
+            import re as _re
+            qtokens = {w for w in _re.findall(r"[a-z0-9]{4,}", query_text.lower())}
+
+        def _title_boost(rec: MemoryRecord) -> float:
+            if not qtokens:
+                return 1.0
+            hay = (str((rec.metadata or {}).get("title", "")) + " "
+                   + str(rec.source)).lower()
+            return 2.0 if any(t in hay for t in qtokens) else 1.0
 
         # STM: always include recent turns (high recency weight)
         for rec in self.stm.get_all():
@@ -433,6 +448,10 @@ class MemorySystem:
                 score = freshness * 0.8  # Slight discount vs BFECDS
                 candidates.append((rec, score))
 
+        # Boost memories whose title/source matches the query wording.
+        if qtokens:
+            candidates = [(rec, score * _title_boost(rec)) for rec, score in candidates]
+
         # Deduplicate (same text = same memory)
         seen_texts = set()
         unique: List[Tuple[MemoryRecord, float]] = []
@@ -453,7 +472,8 @@ class MemorySystem:
 
     def retrieve_resonant(self, query_bvec: BVec,
                           query_embedding: Optional[np.ndarray] = None,
-                          top_k: int = 5, tension_k: int = 2):
+                          top_k: int = 5, tension_k: int = 2,
+                          query_text: Optional[str] = None):
         """Resonant retrieval — cosine AND sine (Remediation Tier 6).
 
         Eris's conservation law is cos^2(theta) + sin^2(theta) = 1:
@@ -475,7 +495,8 @@ class MemorySystem:
             connections instead of parroting the nearest neighbor.
         """
         aligned = self.retrieve(query_bvec=query_bvec,
-                                query_embedding=query_embedding, top_k=top_k)
+                                query_embedding=query_embedding, top_k=top_k,
+                                query_text=query_text)
         seen_text = {r.text for r in aligned}
 
         pool = (self.stm.get_all()
