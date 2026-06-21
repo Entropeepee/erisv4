@@ -19,6 +19,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from eris.interface.mediator import run_blocking
+from eris.knowledge.documents import enough_disk, MIN_DISK_GB
 
 
 def _slug(s: str) -> str:
@@ -136,6 +137,8 @@ class DocumentAuthor:
     def compose(self, brief: str, *, formats=("md",), do_audit: bool = True,
                 plan: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         formats = [f.lower() for f in formats] or ["md"]
+        if not enough_disk(self.out_dir):
+            return {"error": f"low disk (<{MIN_DISK_GB}GB free) — not writing", "files": []}
         self._set(running=True, phase="planning", step=0, total=0, title="")
         plan = plan or self.plan(brief)
         title = plan["title"]
