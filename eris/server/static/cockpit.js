@@ -287,21 +287,52 @@ async function uploadFile(input){
   const f=input&&input.files&&input.files[0]; if(!f) return;
   toast(`reading ${f.name}...`);
   const fd=new FormData(); fd.append('file', f);
+  startProg();
   try{
     const d=await (await fetch('/api/library/upload',{method:'POST',body:fd})).json();
     toast(d.error ? ('Error: '+d.error) : `Ingested ${d.chunks||0} passages from ${f.name}`);
     loadLibrary();
   }catch(e){ toast('upload failed: '+e); }
+  finally{ stopProg(); }
   input.value='';
 }
 async function scanLibrary(force){
   toast(force ? 're-reading your entire ErisLibrary folder...' : 'reading your ErisLibrary folder...');
+  startProg();
   try{
     const d=await (await fetch('/api/library/scan'+(force?'?force=true':''),{method:'POST'})).json();
-    if(d.error){ toast(`${d.error}: ${d.dir}`); return; }
-    toast(`Library: ${d.ingested} new, ${d.skipped} unchanged, ${d.total_chunks} passages`);
+    if(d.error){ toast(`${d.error}: ${d.dir}`); }
+    else{ toast(`Library: ${d.ingested} new, ${d.skipped} unchanged, ${d.total_chunks} passages`); }
     loadLibrary();
   }catch(e){ toast('scan failed: '+e); }
+  finally{ stopProg(); }
+}
+
+/* live ingestion progress bar (polls /api/library/progress) */
+let _progTimer=null;
+function startProg(){
+  const p=$('#libprog'); if(p) p.style.display='block';
+  setProg(0,'starting...'); pollProgress();
+  if(_progTimer) clearInterval(_progTimer);
+  _progTimer=setInterval(pollProgress, 800);
+}
+function stopProg(){
+  if(_progTimer){ clearInterval(_progTimer); _progTimer=null; }
+  pollProgress(); setTimeout(()=>{ const p=$('#libprog'); if(p) p.style.display='none'; }, 1800);
+}
+function setProg(frac, txt){
+  const f=$('#libprog-fill'); if(f) f.style.width=Math.max(0,Math.min(100,frac*100)).toFixed(0)+'%';
+  const t=$('#libprog-txt'); if(t) t.textContent=txt||'';
+}
+async function pollProgress(){
+  try{
+    const p=await (await fetch('/api/library/progress')).json();
+    const ft=p.files_total||0, fd=p.files_done||0, bt=p.blocks_total||0, bd=p.blocks_done||0;
+    const frac= ft ? (fd + (bt ? bd/bt : 0)) / ft : (p.running?0:1);
+    setProg(frac, p.running
+      ? `reading ${p.file||''} (file ${Math.min(fd+1,ft)}/${ft}), ${p.chunks||0} passages`
+      : `done: ${p.chunks||0} passages`);
+  }catch(e){}
 }
 async function loadLibrary(){
   try{
