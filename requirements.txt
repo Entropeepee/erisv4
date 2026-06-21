@@ -21,9 +21,11 @@ psutil>=5.9          # cockpit system vitals (CPU/RAM)
 # onnxruntime-gpu>=1.17
 # sentence-transformers>=2.3
 
-# VECTOR INDEX (upgrade from brute-force)
-# Uncomment when ready:
-# faiss-gpu-cuvs>=1.14
+# VECTOR INDEX — scales semantic search for the document library / ChatGPT
+# history. CPU build installs cleanly via pip and is fast for <1M vectors;
+# LongTermMemory uses it automatically when present, else brute-force.
+faiss-cpu>=1.8
+# Optional GPU upgrade (needs CUDA/conda): faiss-gpu-cuvs>=1.14
 
 # DOCUMENT LIBRARY (browser upload + ErisLibrary folder ingestion)
 # .txt/.md/.json read with the standard library; PDF/DOCX need these:

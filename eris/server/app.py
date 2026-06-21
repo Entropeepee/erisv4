@@ -228,9 +228,10 @@ def create_app(
         return {"dir": library_dir(), "documents": library.list_documents()}
 
     @app.post("/api/library/scan")
-    async def api_library_scan():
-        """Read & ingest every supported file in the ErisLibrary folder."""
-        return await asyncio.to_thread(library.ingest_dir)
+    async def api_library_scan(force: bool = False):
+        """Read & ingest every supported file in the ErisLibrary folder.
+        force=true re-ingests everything (use after a physics change)."""
+        return await asyncio.to_thread(lambda: library.ingest_dir(force=force))
 
     # File upload needs python-multipart; register the route only if it's
     # installed so the server still starts (and folder-scan still works)
