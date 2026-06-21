@@ -101,8 +101,11 @@ class DreamingLoop:
         t0 = time.time()
         report = DreamCycleReport()
 
-        # 1. SCAN for high-torsion entries
-        candidates = self.autobiography.get_high_torsion(self.torsion_threshold)
+        # 1. SCAN for high-torsion entries (including prior-session tensions
+        #    loaded from disk — Tier 2.1, so restarts don't forget).
+        candidates = self.autobiography.get_high_torsion(
+            self.torsion_threshold, include_persisted=True
+        )
         report.tensions_scanned = len(candidates)
 
         for entry in candidates[:max_tensions]:
@@ -202,3 +205,13 @@ class DreamingLoop:
         }
         return domain_questions.get(entry.dominant_domain,
                                      f"Can you help me understand: {entry.input_text[:80]}?")
+
+    def get_and_clear_questions(self) -> List[str]:
+        """Return pending questions AND clear the queue (Remediation Tier 2.3).
+
+        Each question is served exactly once so the UI stops re-displaying
+        questions that were already surfaced.
+        """
+        questions = list(self.pending_questions)
+        self.pending_questions.clear()
+        return questions

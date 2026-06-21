@@ -468,8 +468,12 @@ class ErisOrchestrator:
         )
 
     async def run_dream_cycle(self) -> Dict[str, Any]:
-        """Manually trigger a dreaming cycle."""
-        report = self.dreaming_loop.run_cycle()
+        """Manually trigger a dreaming cycle.
+
+        Offloaded to a worker thread so the (synchronous, field-heavy) cycle
+        never blocks the server's event loop.
+        """
+        report = await asyncio.to_thread(self.dreaming_loop.run_cycle)
         return {
             "tensions_scanned": report.tensions_scanned,
             "tensions_processed": report.tensions_processed,
@@ -480,8 +484,17 @@ class ErisOrchestrator:
         }
 
     def get_pending_questions(self) -> List[str]:
-        """Get questions the dreaming loop generated for the user."""
-        return self.dreaming_loop.pending_questions
+        """Peek at pending questions (does NOT clear the queue)."""
+        return list(self.dreaming_loop.pending_questions)
+
+    def drain_pending_questions(self) -> List[str]:
+        """Return pending questions AND clear the queue (Remediation Tier 2.3).
+
+        Previously the queue was returned but never cleared, so the UI
+        re-displayed the same questions on every poll. Each question is now
+        served exactly once.
+        """
+        return self.dreaming_loop.get_and_clear_questions()
 
     def get_vitals(self) -> Dict[str, Any]:
         """System health metrics for the /vitals endpoint."""

@@ -145,6 +145,20 @@ class ShortTermMemory:
     def get_recent(self, n: int = 5) -> List[MemoryRecord]:
         return list(self._buffer)[-n:]
 
+    def novelty(self, bvec: BVec) -> float:
+        """BFECDS novelty of `bvec` vs the rest of STM (Remediation Tier 2.4).
+
+        Returns ``1 - max cosine similarity`` to existing records. This is a
+        DIRECTION-aware distance: two different memories that happen to share the
+        same total activation no longer collide (the old `sum(as_array())`
+        scalar treated them as identical). 1.0 = wholly novel, 0.0 = duplicate.
+        """
+        others = list(self._buffer)
+        if not others:
+            return 1.0
+        sims = [bvec_cosine(bvec, r.bvec) for r in others]
+        return float(1.0 - max(sims)) if sims else 1.0
+
     @property
     def size(self) -> int:
         return len(self._buffer)
@@ -387,9 +401,20 @@ class MemorySystem:
         promoted_to_ltm = 0
 
         # STM → MTM
+        mtm_attractors = self.mtm.get_fresh(min_freshness=0.01)
         for rec in self.stm.get_all():
-            # Novelty = how different is this from the running average?
-            novelty = sum(rec.bvec.as_array())  # Simple signal strength
+            # Novelty = BFECDS distance from the nearest existing MTM attractor
+            # (Tier 2.4 — direction-aware, not a scalar activation sum). A turn
+            # that points somewhere genuinely new promotes; a near-duplicate of
+            # something already stored does not.
+            if mtm_attractors:
+                nearest_sim = max(
+                    (bvec_cosine(rec.bvec, m.bvec) for m in mtm_attractors),
+                    default=0.0,
+                )
+                novelty = 1.0 - nearest_sim
+            else:
+                novelty = 1.0  # MTM empty — everything is novel
             should_promote, _ = self._stm_to_mtm_gate.update(novelty)
             if should_promote:
                 self.mtm.store(rec)
@@ -412,4 +437,13 @@ class MemorySystem:
                 self.ltm.store(rec)
                 promoted_to_ltm += 1
 
-        return {"stm_to_mtm": promoted_to_mtm, "mtm_to_ltm": promoted_to_ltm}
+        # Prune dead MTM memories (Tier 2.2). `prune()` existed but was never
+        # invoked, so freshness<0.01 records accumulated unbounded. Run it as
+        # part of every consolidation pass.
+        pruned = self.mtm.prune()
+
+        return {
+            "stm_to_mtm": promoted_to_mtm,
+            "mtm_to_ltm": promoted_to_ltm,
+            "mtm_pruned": pruned,
+        }
