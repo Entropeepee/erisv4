@@ -209,6 +209,23 @@ def bvec_cosine(a: BVec, b: BVec) -> float:
     return float(np.dot(va, vb) / (norm_a * norm_b))
 
 
+def cosine(a, b) -> float:
+    """Cosine similarity between two raw vectors (e.g. semantic embeddings).
+    Shared helper so the same safe, normalized formula isn't re-inlined across
+    memory retrieval, the quality gate, and the dream loop."""
+    if a is None or b is None:
+        return 0.0
+    va = np.asarray(a, dtype=np.float32).ravel()
+    vb = np.asarray(b, dtype=np.float32).ravel()
+    if va.shape != vb.shape or va.size == 0:
+        return 0.0
+    na = float(np.linalg.norm(va))
+    nb = float(np.linalg.norm(vb))
+    if na < 1e-10 or nb < 1e-10:
+        return 0.0
+    return float(np.dot(va, vb) / (na * nb))
+
+
 # ─── Field → BFECDS Computation ──────────────────────────────────────────
 
 # Scaling constants for mapping raw field statistics to [0, 1].

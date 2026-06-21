@@ -53,6 +53,19 @@ import time
 _DEFAULT_MAX_TOKENS = int(os.environ.get("ERIS_MAX_TOKENS", "8192"))
 
 
+def run_blocking(coro, timeout: float = 300):
+    """Run an async coroutine to completion from a synchronous context — whether
+    or not an event loop is already running (server work is offloaded to worker
+    threads). Shared so the same bridge isn't re-implemented per caller."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        return pool.submit(asyncio.run, coro).result(timeout=timeout)
+
+
 @dataclass
 class LLMResponse:
     """Response from a language model backend."""

@@ -41,7 +41,7 @@ import os
 import math
 import numpy as np
 
-from eris.computation.activations import BVec, bvec_cosine, bvec_distance
+from eris.computation.activations import BVec, bvec_cosine, bvec_distance, cosine
 from eris.memory.interference import _csba_coupling_geometry
 from eris.computation.sgt import SGTGate
 from eris.config import CONFIG
@@ -429,9 +429,8 @@ class MemorySystem:
             score = freshness
             if query_bvec:
                 score *= (0.3 + 0.7 * max(0, bvec_cosine(query_bvec, rec.bvec)))
-            if (query_embedding is not None and rec.embedding is not None
-                    and rec.embedding.shape == query_embedding.shape):
-                sim = float(np.dot(query_embedding, rec.embedding))  # L2-normalized → cosine
+            if query_embedding is not None and rec.embedding is not None:
+                sim = cosine(query_embedding, rec.embedding)
                 score *= (0.5 + 0.5 * max(0.0, sim))
             candidates.append((rec, score))
 
@@ -544,18 +543,7 @@ class MemorySystem:
         if not hits:
             return []
         if query_embedding is not None:
-            q = np.asarray(query_embedding, dtype=np.float32).ravel()
-            qn = float(np.linalg.norm(q))
-
-            def _sim(r: MemoryRecord) -> float:
-                if r.embedding is None:
-                    return 0.0
-                e = np.asarray(r.embedding, dtype=np.float32).ravel()
-                en = float(np.linalg.norm(e))
-                if en < 1e-9 or qn < 1e-9 or e.shape != q.shape:
-                    return 0.0
-                return float(np.dot(q, e) / (qn * en))
-            hits.sort(key=_sim, reverse=True)
+            hits.sort(key=lambda r: cosine(query_embedding, r.embedding), reverse=True)
         return hits[:max_chunks]
 
     def consolidate(self) -> Dict[str, int]:

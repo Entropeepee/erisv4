@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><title>Eris — Living Field</title>
+<style>
+  :root{--bg:#05060a;--panel:#0d1320;--line:#1d2740;--ink:#dbe6f5;--dim:#7e8aa3;--accent:#7cd4fc;--mono:ui-monospace,Menlo,monospace}
+  *{box-sizing:border-box} html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:system-ui,sans-serif}
+  #wrap{display:flex;flex-direction:column;height:100%}
+  .bar{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .tab{padding:4px 11px;border:1px solid var(--line);border-radius:7px;font-size:12px;cursor:pointer;color:var(--dim)}
+  .tab.on{border-color:var(--accent);color:var(--ink)}
+  .stat{font-family:var(--mono);font-size:12px;color:var(--dim)} .stat b{color:var(--ink)}
+  .spacer{flex:1}
+  #stage{flex:1;display:flex;align-items:center;justify-content:center;min-height:0}
+  canvas{image-rendering:pixelated;max-width:96vmin;max-height:96vmin;width:96vmin;height:96vmin;background:#05060a;border:1px solid var(--line);border-radius:8px}
+  #conn{font-family:var(--mono);font-size:12px}
+</style></head>
+<body>
+<div id="wrap">
+  <div class="bar">
+    <strong style="color:var(--accent)">Eris — Living Field</strong>
+    <span class="tab on" data-v="field">Field</span>
+    <span class="tab" data-v="phase">Phase</span>
+    <span class="tab" data-v="coher">Coherence</span>
+    <span class="tab" data-v="regime">Plastic</span>
+    <span class="spacer"></span>
+    <span class="stat">regime <b id="s-regime">—</b></span>
+    <span class="stat">C <b id="s-coh">—</b></span>
+    <span class="stat">dC/dX <b id="s-dcdx">—</b></span>
+    <span class="stat">step <b id="s-step">—</b></span>
+    <span id="conn" style="color:#f87171">connecting…</span>
+  </div>
+  <div id="stage"><canvas id="cv" width="256" height="256"></canvas></div>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+let view='field';
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  view=t.dataset.v; document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===t));
+});
+function hsl(h,s,l){return `hsl(${h},${s}%,${l}%)`;}
+function draw(f){
+  const cv=$('#cv'), ctx=cv.getContext('2d'); const N=f.size||64;
+  if(cv.width!==N){ cv.width=N; cv.height=N; }
+  const phi=(f.phi||[]).flat(), th=(f.theta||[]).flat(); if(!phi.length) return;
+  ctx.fillStyle='#05060a'; ctx.fillRect(0,0,N,N);
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+    const i=y*N+x, fv=phi[i], t=th[i]; let col;
+    if(view==='field'){ if(fv<0.02){continue;} col=hsl((t*57.3)%360,92,Math.min(72,14+fv*68)); }
+    else if(view==='phase'){ col=hsl((t*57.3)%360,85,52); }
+    else if(view==='coher'){ const xp=x<N-1?x+1:x,yp=y<N-1?y+1:y;
+      const dth=Math.abs(t-th[y*N+xp])+Math.abs(t-th[yp*N+x]); const c=Math.max(0,1-dth/3.14);
+      col=hsl(170-110*c,70,18+44*c); }
+    else { col=fv>0.5?'#fb7185':'#3b82f6'; }
+    ctx.fillStyle=col; ctx.fillRect(x,y,1,1);
+  }
+  $('#s-regime').textContent=f.regime_str||'—';
+  $('#s-coh').textContent=(f.coherence??0).toFixed?.(3)??f.coherence;
+  $('#s-dcdx').textContent=(f.dCdX??0).toFixed?.(4)??f.dCdX;
+  $('#s-step').textContent=f.step_count??'—';
+}
+function connect(){
+  const ws=new WebSocket(`ws://${location.host}/ws/field`);
+  ws.onopen=()=>{ $('#conn').textContent='● live'; $('#conn').style.color='#4ade80'; };
+  ws.onmessage=e=>{ try{ draw(JSON.parse(e.data)); }catch(_){} };
+  ws.onclose=()=>{ $('#conn').textContent='reconnecting…'; $('#conn').style.color='#f87171'; setTimeout(connect,2000); };
+}
+connect();
+</script>
+</body></html>
