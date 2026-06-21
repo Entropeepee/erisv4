@@ -57,6 +57,7 @@ class RetrievalSwarm:
     def search(self, query_bvec: Optional[BVec] = None,
                query_text: str = "",
                query_embedding: Optional[np.ndarray] = None,
+               query_phi=None, query_theta=None,
                top_k: int = 10) -> List[SwarmResult]:
         """Run all retrievers in parallel and fuse results via RRF."""
 
@@ -80,6 +81,15 @@ class RetrievalSwarm:
 
         if query_embedding is not None:
             ranked_lists["semantic"] = self._semantic_retrieve(candidates, query_embedding)
+
+        # Field-resonance retriever (Tier 4.6): rank by the DCR integral
+        # R_ij = integral phi_i*phi_j*cos(theta_i-theta_j) — "understanding by
+        # resonance". High-signal, so it is listed twice in the RRF fusion to
+        # weight constructive field interference above the lexical retrievers.
+        if query_phi is not None and query_theta is not None:
+            field_ranked = self._field_resonance_retrieve(candidates, query_phi, query_theta)
+            ranked_lists["field_resonance"] = field_ranked
+            ranked_lists["field_resonance_2"] = field_ranked
 
         # RRF fusion
         return self._fuse_rrf(ranked_lists, top_k)
@@ -140,6 +150,21 @@ class RetrievalSwarm:
                     continue
             scored.append((r, 0.0))
 
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [r for r, _ in scored]
+
+    def _field_resonance_retrieve(self, candidates: List[MemoryRecord],
+                                  query_phi, query_theta) -> List[MemoryRecord]:
+        """Rank by field resonance (DCR integral) against stored field snapshots."""
+        from eris.retrieval.field_interference import field_resonance
+        scored = []
+        for r in candidates:
+            phi_s = getattr(r, "phi_snapshot", None)
+            theta_s = getattr(r, "theta_snapshot", None)
+            if phi_s is None or theta_s is None:
+                scored.append((r, -1e9))
+                continue
+            scored.append((r, field_resonance(query_phi, query_theta, phi_s, theta_s)))
         scored.sort(key=lambda x: x[1], reverse=True)
         return [r for r, _ in scored]
 

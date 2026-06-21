@@ -59,6 +59,7 @@ from eris.field.compiler import compile_contradiction, inject_seeds
 # Layer 2: Memory
 from eris.memory.tiers import MemorySystem, MemoryRecord
 from eris.memory.autobiography import Autobiography
+from eris.knowledge.embeddings import get_embedding
 from eris.memory.interference import find_conflicts
 
 # Layer 3: Tribe
@@ -226,8 +227,11 @@ class ErisOrchestrator:
         result.regime = self.field.detect_regime()
 
         # ── Layer 2: Retrieve memory context ──────────────────────────
+        # Tier 4.4: real (semantic-or-deterministic) embedding so the LTM
+        # embedding retriever is actually exercised, not just BFECDS alignment.
+        q_embedding = get_embedding(user_message)
         memory_context = self.memory.retrieve(
-            query_bvec=input_bvec, top_k=5
+            query_bvec=input_bvec, query_embedding=q_embedding, top_k=5
         )
         memory_text = "\n".join(
             f"[{r.source}] {r.text[:200]}" for r in memory_context
@@ -378,6 +382,7 @@ class ErisOrchestrator:
         self.memory.store_turn(
             text=f"Q: {user_message[:200]}\nA: {result.response_text[:200]}",
             bvec=response_bvec,
+            embedding=get_embedding(f"{user_message}\n{result.response_text[:500]}"),
             phi_snapshot=phi_snap,
             theta_snapshot=theta_snap,
             source="conversation",

@@ -43,6 +43,7 @@ from eris.field.compiler import compile_contradiction, inject_seeds
 from eris.memory.autobiography import Autobiography, AutobiographyEntry
 from eris.memory.tiers import MemorySystem, MemoryRecord
 from eris.tribe.specialists import should_trigger_research
+from eris.knowledge import research as research_cascade
 
 
 @dataclass
@@ -177,9 +178,20 @@ class DreamingLoop:
                         source="dream",
                     ))
 
-                # 6. RESEARCH: if high criticality + emergence, trigger research
+                # 6. RESEARCH (Tier 4.3): if high criticality + emergence, run
+                #    the cascade (web search -> expert if keyed) and ingest the
+                #    findings into LTM as grounding for future turns.
                 if should_trigger_research(resolved_bvec):
                     result.triggered_research = True
+                    bundle = self._run_research(entry.input_text)
+                    if bundle is not None:
+                        for i, txt in enumerate(bundle.full_texts):
+                            src = bundle.sources[i] if i < len(bundle.sources) else "expert"
+                            self.memory.ltm.store(MemoryRecord(
+                                text=f"[Research: {entry.input_text[:60]}] {txt[:2000]}",
+                                bvec=resolved_bvec,
+                                source=f"research:{src}",
+                            ))
 
                 # 7. QUESTION: if tension persists, generate a question
                 if not result.resolved:
@@ -205,6 +217,32 @@ class DreamingLoop:
         }
         return domain_questions.get(entry.dominant_domain,
                                      f"Can you help me understand: {entry.input_text[:80]}?")
+
+    def _run_research(self, input_text: str):
+        """Run the research cascade for an unresolved tension (Tier 4.3).
+
+        Bridges to the async cascade safely whether or not an event loop is
+        already running, and never raises (returns None on any failure).
+        """
+        query = input_text[:120]
+        for prefix in ("tell me about", "what is", "explain", "how does",
+                       "why is", "can you", "i think", "i wonder"):
+            if query.lower().startswith(prefix):
+                query = query[len(prefix):].strip()
+                break
+        try:
+            try:
+                asyncio.get_running_loop()
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    return pool.submit(
+                        asyncio.run, research_cascade.gather(query)
+                    ).result(timeout=40)
+            except RuntimeError:
+                return asyncio.run(research_cascade.gather(query))
+        except Exception as e:
+            logger.warning(f"[Dream Research] failed (non-fatal): {e}")
+            return None
 
     def get_and_clear_questions(self) -> List[str]:
         """Return pending questions AND clear the queue (Remediation Tier 2.3).
