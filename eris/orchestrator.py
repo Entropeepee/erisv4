@@ -620,8 +620,9 @@ class ErisOrchestrator:
         (Tier 7). Offloaded so it never blocks the event loop."""
         return await asyncio.to_thread(self.dreaming_loop.ponder, question)
 
-    def get_dreams(self, limit: int = 50) -> List[Dict[str, Any]]:
-        return self.dream_journal.list(limit=limit)
+    def get_dreams(self, limit: int = 50,
+                   before: Optional[float] = None) -> List[Dict[str, Any]]:
+        return self.dream_journal.list(limit=limit, before=before)
 
     def get_dream(self, entry_id: str) -> Optional[Dict[str, Any]]:
         return self.dream_journal.get(entry_id)

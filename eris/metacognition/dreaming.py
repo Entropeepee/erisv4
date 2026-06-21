@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 import time
@@ -104,6 +105,11 @@ class DreamingLoop:
         # Questions generated for the user
         self.pending_questions: List[str] = []
 
+        # Self-directed learning: a guided queue (user-steered topics win) and a
+        # rotation memory so broad crawling doesn't re-pick the same seed.
+        self.topic_queue: List[str] = []
+        self._recent_seeds: List[str] = []
+
     def run_cycle(self, max_tensions: int = 10) -> DreamCycleReport:
         """Run one dreaming cycle.
 
@@ -138,10 +144,10 @@ class DreamingLoop:
                 report.questions_generated.append(result.generated_question)
                 self.pending_questions.append(result.generated_question)
 
-        # No tensions to dream about? Stay curious: read about something from
-        # our recent conversation instead of idling (self-directed learning).
-        if (report.tensions_processed == 0
-                and os.environ.get("ERIS_IDLE_READING", "1") != "0"):
+        # Keep learning even when there are no tensions: broad-crawl a topic
+        # drawn from what she already knows (NEVER the last chat sentence).
+        if (os.environ.get("ERIS_IDLE_READING", "1") != "0"
+                and (self.topic_queue or report.tensions_processed == 0)):
             try:
                 expl = self.idle_explore()
                 if expl:
@@ -152,67 +158,131 @@ class DreamingLoop:
         report.duration_seconds = time.time() - t0
         return report
 
-    def _recent_topic(self) -> Optional[str]:
-        """Pick a subject from recent conversation to read about."""
-        try:
-            recents = self.memory.stm.get_recent(8)
-        except Exception:
-            recents = []
-        convo = [r for r in recents if getattr(r, "source", "") == "conversation"]
-        pool = convo or list(reversed(self.memory.stm.get_all()))
-        for r in pool:
-            t = (r.text or "").strip()
-            # conversation turns are stored as "Q: <user>\nA: <eris>"
-            if t.lower().startswith("q:"):
-                q = t[2:].split("\nA:")[0].strip()
-                if len(q) > 8:
-                    return q
-            elif len(t) > 8:
+    # ── self-directed topic selection ────────────────────────────────────
+    _CHAT_NOISE = re.compile(
+        r"\b(i think|i fixed|you should|read my|let me|can you|thanks|okay|"
+        r"got it|please|sorry|lol|hey|hi|upload|patent\b)\b", re.I)
+
+    def _looks_like_chat(self, text: str) -> bool:
+        t = (text or "").strip()
+        return (len(t.split()) > 8) or bool(self._CHAT_NOISE.search(t)) \
+            or t.endswith((".", "!", "?"))
+
+    def _pick_crawl_topic(self):
+        """Return (topic, guided) or (None, None). Never returns chat residue."""
+        if self.topic_queue:                       # user-directed topics win
+            return self.topic_queue.pop(0), True
+        seed = self._pick_knowledge_seed()
+        if seed and not self._looks_like_chat(seed):
+            return seed, False
+        return None, None
+
+    def _pick_knowledge_seed(self) -> Optional[str]:
+        """A broad-crawl seed from Eris's existing knowledge: multi-word
+        Capitalized concept terms + document titles drawn from memory, preferring
+        thin coverage, rotating so she doesn't re-pick the same term."""
+        import collections
+        import random
+        terms: "collections.Counter[str]" = collections.Counter()
+        pool = list(self.memory.ltm._records[-200:]) + list(self.memory.mtm._records[-200:])
+        for rec in pool:
+            txt = getattr(rec, "text", "") or ""
+            title = str((getattr(rec, "metadata", None) or {}).get("title", ""))
+            for m in re.findall(r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,3})\b",
+                                txt + " " + title):
+                if len(m) > 4 and not self._looks_like_chat(m):
+                    terms[m] += 1
+        if not terms:
+            return random.choice([
+                "Kuramoto model", "coupled oscillators", "quantum measurement",
+                "control theory", "Fisher information", "self-organized criticality",
+                "coherence (physics)", "phase synchronization",
+            ])
+        ranked = sorted(terms, key=lambda t: (terms[t], random.random()))
+        for t in ranked:
+            if t not in self._recent_seeds:
+                self._recent_seeds = (self._recent_seeds + [t])[-20:]
                 return t
-        return None
+        return ranked[0]
 
     def idle_explore(self) -> Optional[Dict[str, Any]]:
-        """When there are no tensions, read about a recent-conversation topic
-        on the web and ingest the findings into memory (medium-term), so the
-        next time we talk about it she already knows more."""
-        seed = self._recent_topic()
-        if not seed:
-            return None
-        bundle = self._run_research(seed)
-        if not bundle or not getattr(bundle, "full_texts", None):
-            return None
-        # Field signature for the topic, so the findings are retrievable.
-        field = FractalField(size=self.field_size)
-        field.seed_from_text(seed)
-        field.run(30)
-        topic_bvec = field.compute_bvec()
+        """Broad self-directed learning: crawl a knowledge-seed topic, keep only
+        passages that pass the quality gate, and record what was found + kept."""
         from eris.knowledge.embeddings import get_embedding
-        stored = 0
-        for i, txt in enumerate(bundle.full_texts):
-            src = bundle.sources[i] if i < len(bundle.sources) else "web"
-            self.memory.mtm.store(MemoryRecord(
-                text=f"[Self-study: {seed[:80]}] {txt}",
-                bvec=topic_bvec,
-                embedding=get_embedding(txt),
-                source=f"exploration:{src}",
-            ))
-            stored += 1
+        from eris.knowledge.quality import is_useful
+        from eris.knowledge import ask_expert
+
+        topic, guided = self._pick_crawl_topic()
+        if not topic:
+            return None  # nothing worth crawling — do nothing, log nothing
+
+        bundle = self._run_research(topic)
+        sources: List[Dict[str, str]] = []
+        stored: List[Dict[str, Any]] = []
+        topic_emb = get_embedding(topic)
+
+        # field signature for the topic so the kept passages are retrievable
+        field = FractalField(size=self.field_size)
+        field.seed_from_text(topic); field.run(30)
+        topic_bvec = field.compute_bvec()
+
+        if bundle is not None:
+            for i, txt in enumerate(getattr(bundle, "full_texts", []) or []):
+                url = bundle.sources[i] if i < len(bundle.sources) else "web"
+                sources.append({"title": url, "url": url})
+                passage_emb = get_embedding(txt)
+                if not is_useful(txt, topic_emb, passage_emb):
+                    continue
+                rec = MemoryRecord(
+                    text=f"[Self-study: {topic}] {txt}",
+                    bvec=topic_bvec, embedding=passage_emb,
+                    source=f"exploration:{url}",
+                    metadata={"title": topic})
+                self.memory.mtm.store(rec)
+                stored.append({"memory_id": "", "snippet": txt[:400],
+                               "source_url": url, "chars": len(txt)})
+
+        # Optional Claude consult — only when ANTHROPIC_API_KEY is set.
+        used_claude = False
+        if ask_expert.is_available():
+            try:
+                existing = stored[0]["snippet"] if stored else ""
+                ans = ask_expert.ask(topic, context=existing)
+            except Exception:
+                ans = None
+            if ans and getattr(ans, "answer", ""):
+                used_claude = True
+                sources.append({"title": f"Claude ({ans.model})", "url": "anthropic:claude"})
+                if is_useful(ans.answer, topic_emb, get_embedding(ans.answer)):
+                    self.memory.mtm.store(MemoryRecord(
+                        text=f"[Expert on {topic}] {ans.answer}",
+                        bvec=topic_bvec, embedding=get_embedding(ans.answer),
+                        source="expert:claude", metadata={"title": topic}))
+                    stored.append({"memory_id": "", "snippet": ans.answer[:400],
+                                   "source_url": "anthropic:claude", "chars": len(ans.answer)})
+
         try:
             self.memory.consolidate()
         except Exception:
             pass
+
+        kept = " ".join(s["snippet"].split(".")[0] + "." for s in stored[:2]) if stored else ""
+        summary = (f"Read up on '{topic}' "
+                   f"({'you asked' if guided else 'self-directed'}): kept "
+                   f"{len(stored)} of {len(sources)} sources. {kept}").strip()
+        detail = (f"Topic: {topic}\n\nWhat I kept:\n\n"
+                  + ("\n\n---\n\n".join(s["snippet"] for s in stored)
+                     if stored else "(nothing passed the quality filter)"))
         try:
             self.journal.record(
-                kind="exploration", topic=seed[:160],
-                summary=(f"No tensions to resolve, so I read up on "
-                         f"'{seed[:70]}' from our recent conversation."),
-                detail=("Followed up on our recent conversation by reading:\n\n"
-                        + "\n\n".join(bundle.full_texts)),
-                resolved=True, sources=list(bundle.sources),
-            )
+                kind="explore", topic=topic, summary=summary, detail=detail,
+                sources=sources, stored=stored, guided=guided,
+                used_claude=used_claude, archetype=topic_bvec.archetype(),
+                resolved=True)
         except Exception:
             pass
-        return {"topic": seed, "stored": stored, "sources": list(bundle.sources)}
+        return {"topic": topic, "stored": len(stored), "guided": guided,
+                "used_claude": used_claude}
 
     def _process_tension(self, entry: AutobiographyEntry) -> Optional[DreamResult]:
         """Process one high-torsion entry.

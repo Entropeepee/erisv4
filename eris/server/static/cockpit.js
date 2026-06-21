@@ -20,6 +20,11 @@ window.addEventListener('load', () => {
     if(curAudio) curAudio.volume=v;
     document.querySelectorAll('audio.player').forEach(a=>a.volume=v);
   });
+  // infinite scroll back through dream history
+  const dEl=$('#dreams');
+  if(dEl) dEl.addEventListener('scroll', ()=>{
+    if(dEl.scrollTop+dEl.clientHeight >= dEl.scrollHeight-24) loadOlderDreams();
+  });
   document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
     fieldView=t.dataset.v; document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===t));
   });
@@ -189,21 +194,66 @@ async function pollLLM(){
 }
 
 /* ---------------- dreams ---------------- */
+let _dreamsOldest=null;
 async function loadDreams(){
   try{
-    const d=await (await fetch('/api/dreams')).json(); const el=$('#dreams'); el.innerHTML='';
-    if(!(d.dreams||[]).length){ el.innerHTML='<div class="muted">No dreams yet. She reflects on cognitive dissonance during idle/nightly cycles, or on your direction.</div>'; return; }
-    d.dreams.forEach(x=>{
-      const it=document.createElement('div'); it.className='item'; it.onclick=()=>openDream(x.id);
-      it.innerHTML=`<div class="s"></div>${x.question?'<div class="q">(needs your input)</div>':''}<div class="when">${x.kind} &middot; ${fmtDate(x.timestamp)}</div>`;
-      it.querySelector('.s').textContent=x.summary||'(reflection)';
-      el.appendChild(it);
-    });
+    const d=await (await fetch('/api/dreams?limit=8')).json(); const el=$('#dreams'); el.innerHTML='';
+    const rows=d.dreams||[];
+    if(!rows.length){ el.innerHTML='<div class="muted">No reflections yet. She resolves tensions and crawls a topic on a background loop (a few times an hour), or on your direction.</div>'; return; }
+    _dreamsOldest = rows[rows.length-1].timestamp;
+    rows.forEach(x=>el.appendChild(dreamRow(x)));
+  }catch(e){}
+}
+function dreamRow(x){
+  const it=document.createElement('div'); it.className='item'; it.onclick=()=>openDream(x.id);
+  const claude=x.used_claude?' <span class="tag">Claude</span>':'';
+  const label=x.guided?'guided':(x.kind||'reflection');
+  const counts=(x.source_count!=null)?` &middot; ${x.stored_count||0} kept / ${x.source_count||0} sources`:'';
+  it.innerHTML=`<div class="s"></div>${x.question?'<div class="q">(needs your input)</div>':''}<div class="when">${label}${claude} &middot; ${fmtDate(x.timestamp)}${counts}</div>`;
+  it.querySelector('.s').textContent=x.summary||x.topic||'(reflection)';
+  return it;
+}
+async function loadOlderDreams(){
+  if(_dreamsOldest==null) return;
+  const before=_dreamsOldest; _dreamsOldest=null;   // guard against repeat-fire
+  try{
+    const d=await (await fetch('/api/dreams?limit=8&before='+before)).json();
+    const rows=d.dreams||[]; const el=$('#dreams');
+    rows.forEach(x=>el.appendChild(dreamRow(x)));
+    if(rows.length) _dreamsOldest=rows[rows.length-1].timestamp;
   }catch(e){}
 }
 async function openDream(id){
   const d=await (await fetch('/api/dreams/'+id)).json();
-  showModal(d.topic||'Reflection', d.timestamp, d.detail||d.summary||'', d.sources);
+  if(d.error) return;
+  $('#m-title').textContent=`${d.kind||'reflection'}: ${d.topic||''}`+(d.used_claude?'  (consulted Claude)':'');
+  $('#m-when').textContent=fmtDate(d.timestamp)+(d.guided?' · you asked':' · self-directed');
+  $('#m-body').textContent=d.summary||d.detail||'';
+  const s=$('#m-src'); s.innerHTML='';
+  const srcs=d.sources||[];
+  if(srcs.length){
+    const h=document.createElement('div'); h.className='muted'; h.textContent='Sources'; s.appendChild(h);
+    srcs.forEach(src=>{
+      const o=(typeof src==='string')?{title:src,url:src}:src;
+      if(o.url && o.url.indexOf('anthropic:')===0){ const c=document.createElement('div'); c.textContent='Claude ('+(o.title||'')+')'; s.appendChild(c); }
+      else { const a=document.createElement('a'); a.href=o.url||'#'; a.target='_blank'; a.textContent=o.title||o.url; s.appendChild(a); }
+    });
+  }
+  const kept=d.stored||[];
+  const btn=document.createElement('button'); btn.className='btn'; btn.style.marginTop='8px';
+  btn.textContent=`Show what she kept (${kept.length})`;
+  const box=document.createElement('div'); box.style.display='none'; box.style.marginTop='6px';
+  if(!kept.length){ box.innerHTML='<em class="muted">Nothing passed the quality filter this cycle.</em>'; }
+  else kept.forEach(it=>{
+    const bq=document.createElement('blockquote'); bq.className='kept'; bq.textContent=it.snippet||'';
+    const m=document.createElement('div'); m.className='muted'; m.style.fontSize='10px';
+    if(it.source_url && it.source_url.indexOf('anthropic:')!==0){ const a=document.createElement('a'); a.href=it.source_url; a.target='_blank'; a.textContent='source'; m.appendChild(a); }
+    else { m.textContent='Claude'; }
+    bq.appendChild(m); box.appendChild(bq);
+  });
+  btn.onclick=()=>{ box.style.display = (box.style.display==='none')?'block':'none'; };
+  s.appendChild(btn); s.appendChild(box);
+  $('#modal').classList.add('on');
 }
 async function dreamPrompt(){
   const q=prompt('Give Eris something to dream on / ponder:'); if(!q)return;
