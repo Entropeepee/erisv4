@@ -25,6 +25,12 @@ psutil>=5.9          # cockpit system vitals (CPU/RAM)
 # Uncomment when ready:
 # faiss-gpu-cuvs>=1.14
 
+# DOCUMENT LIBRARY (browser upload + ErisLibrary folder ingestion)
+# .txt/.md/.json read with the standard library; PDF/DOCX need these:
+PyMuPDF>=1.24        # PDF text extraction (import fitz)
+python-docx>=1.1     # .docx text extraction
+python-multipart>=0.0.9  # browser file uploads (FastAPI UploadFile)
+
 # TESTING
 pytest>=8.0
 

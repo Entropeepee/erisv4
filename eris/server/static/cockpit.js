@@ -3,15 +3,22 @@ const $ = s => document.querySelector(s);
 let convId = null;
 let fieldView = 'field';
 let voices = [];
-let audioCtx=null, analyser=null, curAudio=null, emotion='neutral';
+let audioCtx=null, analyser=null, curAudio=null, curGain=null, emotion='neutral';
 
 /* ---------------- boot ---------------- */
 window.addEventListener('load', () => {
-  loadVoices(); loadConvs(); loadDreams(); loadStudy();
+  loadVoices(); loadConvs(); loadDreams(); loadStudy(); loadLibrary();
   connectVitals(); connectField(); pollSystem(); pollLLM();
   initLive2D();
   $('#in').addEventListener('keydown', e => {
     if (e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); }
+  });
+  // live volume: drives auto-speak (gain node) and any per-reply players
+  $('#vol').addEventListener('input', e => {
+    const v=parseFloat(e.target.value||'1');
+    if(curGain) curGain.gain.value=v;
+    if(curAudio) curAudio.volume=v;
+    document.querySelectorAll('audio.player').forEach(a=>a.volume=v);
   });
   document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
     fieldView=t.dataset.v; document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===t));
@@ -55,6 +62,11 @@ function addMsg(role, text, meta){
   if(role==='eris'){ body.innerHTML=mdToHtml(text); } else { body.textContent=text; }
   d.appendChild(body);
   if(meta){ const m=document.createElement('div'); m.className='mm'; m.textContent=meta; d.appendChild(m);}
+  if(role==='eris'){
+    const bar=document.createElement('div'); bar.className='msgbar';
+    const b=document.createElement('button'); b.className='lbtn'; b.textContent='🔊 Listen';
+    b.onclick=()=>playReply(d,b); bar.appendChild(b); d.appendChild(bar);
+  }
   $('#chat').appendChild(d); $('#chat').scrollTop=$('#chat').scrollHeight; return d;
 }
 async function send(){
@@ -249,6 +261,65 @@ async function loadVoices(){
   }catch(e){}
 }
 function testVoice(){ speak("Hi, this is Eris. This is how my voice sounds right now."); }
+
+/* per-reply playback: native <audio controls> = play/pause/seek/volume/speed */
+async function playReply(d, btn){
+  const body=d.querySelector('.body'); if(!body) return;
+  const bar=d.querySelector('.msgbar');
+  let au=bar.querySelector('audio.player');
+  if(au){ au.paused ? au.play() : au.pause(); return; }   // already loaded → toggle
+  const text=cleanForTTS(body.innerText||body.textContent||''); if(!text) return;
+  const old=btn.textContent; btn.textContent='… generating'; btn.disabled=true;
+  try{
+    const r=await fetch('/api/tts/generate',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text, voice_id:$('#voice').value})});
+    if(!r.ok){ btn.textContent=old; btn.disabled=false; return; }
+    const url=URL.createObjectURL(await r.blob());
+    au=document.createElement('audio'); au.className='player'; au.controls=true; au.src=url;
+    au.autoplay=true; au.volume=parseFloat($('#vol').value||'1');
+    bar.innerHTML=''; bar.appendChild(au);
+  }catch(e){ btn.textContent=old; btn.disabled=false; }
+}
+
+/* ---------------- document library ---------------- */
+function pickFile(){ $('#fileinput').click(); }
+async function uploadFile(input){
+  const f=input&&input.files&&input.files[0]; if(!f) return;
+  toast(`📄 reading ${f.name}…`);
+  const fd=new FormData(); fd.append('file', f);
+  try{
+    const d=await (await fetch('/api/library/upload',{method:'POST',body:fd})).json();
+    toast(d.error ? ('⚠ '+d.error) : `✓ ingested ${d.chunks||0} passages from ${f.name}`);
+    loadLibrary();
+  }catch(e){ toast('⚠ upload failed: '+e); }
+  input.value='';
+}
+async function scanLibrary(){
+  toast('📂 reading your ErisLibrary folder…');
+  try{
+    const d=await (await fetch('/api/library/scan',{method:'POST'})).json();
+    if(d.error){ toast(`⚠ ${d.error}: ${d.dir}`); return; }
+    toast(`✓ library: ${d.ingested} new, ${d.skipped} unchanged, ${d.total_chunks} passages`);
+    loadLibrary();
+  }catch(e){ toast('⚠ scan failed: '+e); }
+}
+async function loadLibrary(){
+  try{
+    const d=await (await fetch('/api/library')).json();
+    const el=$('#library'); if(!el) return; el.innerHTML='';
+    const dir=$('#libdir'); if(dir) dir.textContent=d.dir||'';
+    (d.documents||[]).forEach(x=>{
+      const it=document.createElement('div'); it.className='item';
+      it.innerHTML=`<div class="s"></div><div class="meta">${(x.chunks||0)} passages · ${fmtDate(x.ingested_at)}</div>`;
+      it.querySelector('.s').textContent=x.title||x.file||'document';
+      el.appendChild(it);
+    });
+  }catch(e){}
+}
+function toast(msg){
+  let t=$('#toast'); if(!t){ t=document.createElement('div'); t.id='toast'; document.body.appendChild(t); }
+  t.textContent=msg; t.classList.add('on'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('on'),4500);
+}
 async function speak(text){
   try{
     text=cleanForTTS(text); if(!text) return;
@@ -260,7 +331,9 @@ async function speak(text){
     const a=new Audio(url); a.volume=parseFloat($('#vol').value); curAudio=a;
     if(!audioCtx){ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }
     const src=audioCtx.createMediaElementSource(a); analyser=audioCtx.createAnalyser();
-    analyser.fftSize=256; src.connect(analyser); analyser.connect(audioCtx.destination);
+    analyser.fftSize=256;
+    curGain=audioCtx.createGain(); curGain.gain.value=parseFloat($('#vol').value||'1');
+    src.connect(analyser); analyser.connect(curGain); curGain.connect(audioCtx.destination);
     a.onended=()=>{ mouth(0); }; a.play(); lipLoop();
   }catch(e){ console.log('tts',e); }
 }

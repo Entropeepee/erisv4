@@ -43,7 +43,8 @@ from eris.interface.tts import TTSEngine
 from eris.server.system_stats import get_system_stats
 from eris.memory.conversations import ConversationStore
 from eris.knowledge.study import StudyEngine
-from fastapi import Response
+from eris.knowledge.documents import DocumentLibrary, library_dir
+from fastapi import Response, UploadFile, File
 
 
 class ChatRequest(BaseModel if HAS_FASTAPI else object):
@@ -119,6 +120,7 @@ def create_app(
         data_dir=os.path.join(data_dir, "conversations"))
     study = StudyEngine(extractor, orchestrator.memory, data_dir=data_dir,
                         journal=orchestrator.dream_journal, mediator=orchestrator.mediator)
+    library = DocumentLibrary(extractor, orchestrator.memory, data_dir=data_dir)
 
     # WebSocket connections for real-time metrics
     ws_connections: list = []
@@ -219,6 +221,55 @@ def create_app(
         topics = list(req.topics) or None
         report = await asyncio.to_thread(study.study, topics)
         return report
+
+    # ── Tier 7.4 document library ────────────────────────────────────────
+    @app.get("/api/library")
+    async def api_library():
+        return {"dir": library_dir(), "documents": library.list_documents()}
+
+    @app.post("/api/library/scan")
+    async def api_library_scan():
+        """Read & ingest every supported file in the ErisLibrary folder."""
+        return await asyncio.to_thread(library.ingest_dir)
+
+    # File upload needs python-multipart; register the route only if it's
+    # installed so the server still starts (and folder-scan still works)
+    # without it. The /api/library/upload route reports how to enable it.
+    def _multipart_available() -> bool:
+        for _m in ("multipart", "python_multipart"):
+            try:
+                __import__(_m)
+                return True
+            except Exception:
+                continue
+        return False
+
+    if _multipart_available():
+        @app.post("/api/library/upload")
+        async def api_library_upload(file: UploadFile = File(...)):
+            """Ingest a file chosen in the browser (txt/md/pdf/docx/json)."""
+            import tempfile
+            suffix = os.path.splitext(file.filename or "upload")[1] or ".txt"
+            data = await file.read()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(data)
+                tmp_path = tmp.name
+            try:
+                # Preserve the original name for memory (temp file is random).
+                res = await asyncio.to_thread(
+                    lambda: library.ingest_file(tmp_path, display_name=file.filename))
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+            return res
+    else:
+        @app.post("/api/library/upload")
+        async def api_library_upload_disabled():
+            return JSONResponse(
+                {"error": "file upload needs python-multipart — run: pip install python-multipart"},
+                status_code=501)
 
     @app.post("/v1/chat/completions")
     async def chat_completions(req: OpenAIChatRequest):
