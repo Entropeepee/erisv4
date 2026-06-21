@@ -255,6 +255,21 @@ class ErisOrchestrator:
                 + "\n\n".join(f"[{r.source}] {r.text}" for r in tension)
             )
 
+        # Named-document direct retrieval: if the user names a file/document,
+        # pull ITS chunks straight in so they can't be crowded out by chatter
+        # that merely mentions it. This is what makes "tell me about my patent
+        # sgtpatent" actually read the sgtpatent document.
+        named_docs = self.memory.documents_matching(
+            user_message, max_chunks=6, query_embedding=q_embedding)
+        if named_docs:
+            doc_block = "\n\n".join(f"[{r.source}] {r.text}" for r in named_docs)
+            memory_text = (
+                "[A document you have ALREADY READ that the user is asking about "
+                "— answer from this text; do NOT say you can't access it]\n"
+                + doc_block
+                + (("\n\n" + memory_text) if memory_text else "")
+            )
+
         # ── Layer 5: Set active goal ──────────────────────────────────
         self.goal_network.set_goal(user_message, input_bvec)
         self.moe_gate.set_goal(input_bvec, user_message)
@@ -506,7 +521,13 @@ class ErisOrchestrator:
             "events -- treat that as a signal that YOUR training is probably stale, "
             "not that the user is wrong. Defer to the user or to any GROUNDING "
             "provided rather than correcting them from memory, and state plainly when "
-            "you have nothing to check against."
+            "you have nothing to check against.\n\n"
+            "DOCUMENTS: You CAN read files the user uploads. Their text is given to "
+            "you in your memory context under sources like 'reading:<filename>'. "
+            "Never tell the user you 'don't have access to uploaded files' or that "
+            "you 'haven't read' a document when its text is present in your memory — "
+            "read it and answer from it, quoting specifics. Only ask for the text if "
+            "it is genuinely absent from your memory context."
         )
 
     # Cheap pre-filter: phrases that signal Eris is denying / correcting the

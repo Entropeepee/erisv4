@@ -34,6 +34,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from eris.knowledge.extractor import KnowledgeExtractor
+from eris.computation.activations import BVec
 
 _UA = {"User-Agent": "ErisEcho/4 (autonomous research)"}
 
@@ -106,15 +107,21 @@ def ingest_text(text: str, *, title: str,
         desc = descs[0] if descs else None
 
         # (a) TEXT/EMBEDDING TRACK + FIELD-PRIMARY MEMORY RECORD
-        if memory is not None and desc is not None and desc.bvec is not None:
+        # ALWAYS store the chunk so a document is never silently dropped — even
+        # if the PDE extractor didn't return a descriptor/BFECDS for it (that
+        # bug let the library report "N passages" while storing zero). The field
+        # snapshot is attached when available; retrieval still works via the
+        # embedding and the filename either way.
+        if memory is not None:
+            bvec = desc.bvec if (desc is not None and desc.bvec is not None) else BVec()
             record = MemoryRecord(
                 text=ch,
-                bvec=desc.bvec,
+                bvec=bvec,
                 embedding=(embed_fn(ch) if embed_fn else None),
                 source=f"reading:{title}",
-                phi_snapshot=desc.phi_snapshot,
-                theta_snapshot=desc.theta_snapshot,
-                metadata={"title": title, "sha256": (desc.sha256 or "")[:12]},
+                phi_snapshot=(desc.phi_snapshot if desc is not None else None),
+                theta_snapshot=(desc.theta_snapshot if desc is not None else None),
+                metadata={"title": title, "sha256": ((desc.sha256 if desc else "") or "")[:12]},
             )
             # Enter at MEDIUM-term, not straight to long-term: freshly read
             # material is immediately searchable/discussable, fades via the

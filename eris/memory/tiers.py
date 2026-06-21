@@ -519,6 +519,45 @@ class MemorySystem:
                 tension.append(r); seen_text.add(r.text)
         return aligned, tension
 
+    def documents_matching(self, query_text: str, max_chunks: int = 8,
+                           query_embedding: Optional[np.ndarray] = None) -> List[MemoryRecord]:
+        """Directly fetch chunks of DOCUMENTS the user named in `query_text`
+        (by filename/title), ranked by embedding similarity when available.
+
+        Bypasses the general top-k so a named document is never crowded out by
+        conversation that merely *mentions* it (e.g. 'tell me about my patent'
+        otherwise ranks the chat turns containing 'patent' above the patent)."""
+        import re as _re
+        toks = {w for w in _re.findall(r"[a-z0-9]{4,}", (query_text or "").lower())}
+        if not toks:
+            return []
+        pool = (list(self.stm.get_all()) + list(self.mtm._records)
+                + list(self.ltm._records))
+        hits = []
+        for rec in pool:
+            title = str((rec.metadata or {}).get("title", "")).lower()
+            src = str(rec.source).lower()
+            is_doc = bool((rec.metadata or {}).get("title")) or src.startswith(
+                ("reading:", "exploration:", "research:", "ponder:"))
+            if is_doc and any(t in title or t in src for t in toks):
+                hits.append(rec)
+        if not hits:
+            return []
+        if query_embedding is not None:
+            q = np.asarray(query_embedding, dtype=np.float32).ravel()
+            qn = float(np.linalg.norm(q))
+
+            def _sim(r: MemoryRecord) -> float:
+                if r.embedding is None:
+                    return 0.0
+                e = np.asarray(r.embedding, dtype=np.float32).ravel()
+                en = float(np.linalg.norm(e))
+                if en < 1e-9 or qn < 1e-9 or e.shape != q.shape:
+                    return 0.0
+                return float(np.dot(q, e) / (qn * en))
+            hits.sort(key=_sim, reverse=True)
+        return hits[:max_chunks]
+
     def consolidate(self) -> Dict[str, int]:
         """SGT-gated consolidation: promote worthy memories up tiers.
 
