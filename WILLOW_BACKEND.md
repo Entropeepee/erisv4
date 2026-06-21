@@ -53,8 +53,28 @@ references it.
 | `POST /agents/{name}/federate` | Push that node's novel insights to the pool now. |
 | `GET /health`, `GET /props` | Let the NPC plugins connect cleanly. |
 
-## Adding nodes
-In `eris/agents/registry.py` (or at runtime):
+## Adding nodes — the easy way (data, not code)
+Copy the sample and edit it; no Python needed:
+```
+cp eris/agents/nodes.sample.json eris_data/agents/nodes.json
+```
+Each entry: `{"name","persona","backend":"ollama|gemini|openai|claude","has_field":bool}`.
+- `has_field: true` + `backend:"ollama"` → a **real local node** (own field +
+  insight log; your IP, stays on the machine).
+- `has_field: false` + a cloud backend → a **flavor NPC** (cloud persona + small
+  private memory). Cloud backends only register if the key is set.
+The two sample nodes (`npc_sage` local, `npc_merchant` cloud) load automatically
+once you copy the file and restart.
+
+## The cockpit
+The web cockpit now has a **Collective (nodes)** panel (list each node, its
+backend/insight count, and `reflect`/`federate` buttons), a **"to:" selector** by
+the message box (talk to any node — routes through `/v1/chat/completions`), and a
+**field-agent dropdown** on the Living Field panel + pop-out (watch any node's
+mind). So you can exercise the whole collective before Unreal.
+
+## Adding nodes in code (or at runtime)
+In `eris/agents/registry.py`:
 ```python
 from eris.agents.agent import Agent
 from eris.agents.memory_view import LayeredMemory

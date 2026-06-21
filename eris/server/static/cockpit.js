@@ -7,7 +7,7 @@ let audioCtx=null, analyser=null, curAudio=null, curGain=null, emotion='neutral'
 
 /* ---------------- boot ---------------- */
 window.addEventListener('load', () => {
-  loadVoices(); loadConvs(); loadDreams(); loadStudy(); loadLibrary(); loadSandboxInfo();
+  loadVoices(); loadConvs(); loadDreams(); loadStudy(); loadLibrary(); loadSandboxInfo(); loadAgents();
   connectVitals(); connectField(); pollSystem(); pollLLM();
   initLive2D();
   $('#in').addEventListener('keydown', e => {
@@ -77,11 +77,25 @@ function addMsg(role, text, meta){
   }
   $('#chat').appendChild(d); $('#chat').scrollTop=$('#chat').scrollHeight; return d;
 }
+function chatNode(){ const s=$('#chat-node'); return (s&&s.value)||'eris'; }
 async function send(){
   const t=$('#in').value.trim(); if(!t) return;
   $('#in').value=''; addMsg('user',t);
   const thinking=addMsg('eris','…');
+  const node=chatNode();
   try{
+    if(node && node!=='eris'){
+      // talk to a specific node via the OpenAI-shaped, model-routed endpoint
+      const r=await fetch('/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({model:node, messages:[{role:'user',content:t}]})});
+      const d=await r.json();
+      const reply=(((d.choices||[])[0]||{}).message||{}).content||'(no response)';
+      thinking.firstChild.innerHTML=mdToHtml(reply);
+      const mm=document.createElement('div'); mm.className='mm'; mm.textContent='node: '+node;
+      thinking.appendChild(mm);
+      if($('#speak').checked) speak(reply);
+      return;
+    }
     const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:t, conversation_id:convId||''})});
     const d=await r.json();
@@ -139,11 +153,16 @@ function updVitals(v){
 }
 
 /* ---------------- field canvas (WS) ---------------- */
+let _fieldWS=null, _fieldAgent='eris';
 function connectField(){
-  const ws=new WebSocket(`ws://${location.host}/ws/field`);
+  try{ if(_fieldWS) _fieldWS.close(); }catch(_){}
+  const ws=new WebSocket(`ws://${location.host}/ws/field?agent=${encodeURIComponent(_fieldAgent)}`);
+  _fieldWS=ws;
   ws.onmessage=e=>{ try{ drawField(JSON.parse(e.data)); }catch(_){} };
-  ws.onclose=()=>setTimeout(connectField,2500);
+  ws.onclose=()=>{ if(_fieldWS===ws) setTimeout(connectField,2500); };
 }
+function switchFieldAgent(){ _fieldAgent=($('#field-agent').value)||'eris'; connectField(); }
+function popoutField(){ window.open('/visualizer?agent='+encodeURIComponent(_fieldAgent),'eris_vis','width=820,height=900'); }
 function hsl(h,s,l){return `hsl(${h},${s}%,${l}%)`;}
 function drawField(f){
   const cv=$('#fieldcv'), ctx=cv.getContext('2d'); const N=f.size||64;
@@ -465,6 +484,42 @@ async function authorPoll(){
 /* ---------------- sandbox ---------------- */
 async function loadSandboxInfo(){
   try{ const d=await (await fetch('/api/sandbox/info')).json(); const el=$('#sb-mode'); if(el) el.textContent=d.mode; }catch(e){}
+}
+
+/* ---------------- collective (nodes) ---------------- */
+function _fillNodeSelect(sel, list, keep, ensureEris){
+  const el=$(sel); if(!el) return; const cur=el.value||keep;
+  el.innerHTML='';
+  if(ensureEris && !list.some(a=>a.name==='eris')){ const o=document.createElement('option'); o.value='eris'; o.textContent='eris'; el.appendChild(o); }
+  list.forEach(a=>{ const o=document.createElement('option'); o.value=a.name; o.textContent=a.name; el.appendChild(o); });
+  if([...el.options].some(o=>o.value===cur)) el.value=cur;
+}
+async function loadAgents(){
+  try{
+    const d=await (await fetch('/agents')).json(); const list=d.agents||[];
+    _fillNodeSelect('#chat-node', list, chatNode(), true);
+    _fillNodeSelect('#field-agent', list.filter(a=>a.has_field), _fieldAgent, false);
+    const el=$('#agents'); if(!el) return; el.innerHTML='';
+    list.forEach(a=>{
+      const it=document.createElement('div'); it.className='item';
+      const tools=a.has_field
+        ? `<button class="lbtn" onclick="agentAct('${a.name}','reflect',event)">reflect</button> <button class="lbtn" onclick="agentAct('${a.name}','federate',event)">federate</button>`
+        : '';
+      it.innerHTML=`<div class="s"></div><div class="meta">${a.backend}${a.has_field?' &middot; field':''} &middot; ${a.insights||0} insights ${tools}</div>`;
+      it.querySelector('.s').textContent=a.name;
+      it.onclick=()=>{ const s=$('#chat-node'); if(s){ s.value=a.name; } toast('talking to '+a.name); };
+      el.appendChild(it);
+    });
+  }catch(e){}
+}
+async function agentAct(name, action, ev){
+  if(ev) ev.stopPropagation();
+  try{
+    const d=await (await fetch(`/agents/${name}/${action}`,{method:'POST'})).json();
+    if(action==='reflect') toast(d.insight?`${name}: "${d.insight}"`:`${name}: nothing new to distill`);
+    else toast(`${name}: federated ${d.federated||0} novel insight(s)`);
+    loadAgents();
+  }catch(e){ toast(action+' failed: '+e); }
 }
 async function runSandbox(){
   const code=$('#sb-code').value; if(!code.trim())return;

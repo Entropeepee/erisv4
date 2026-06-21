@@ -59,7 +59,8 @@ function draw(f){
   $('#s-step').textContent=f.step_count??'—';
 }
 function connect(){
-  const ws=new WebSocket(`ws://${location.host}/ws/field`);
+  const agent=new URLSearchParams(location.search).get('agent')||'eris';
+  const ws=new WebSocket(`ws://${location.host}/ws/field?agent=${encodeURIComponent(agent)}`);
   ws.onopen=()=>{ $('#conn').textContent='● live'; $('#conn').style.color='#4ade80'; };
   ws.onmessage=e=>{ try{ draw(JSON.parse(e.data)); }catch(_){} };
   ws.onclose=()=>{ $('#conn').textContent='reconnecting…'; $('#conn').style.color='#f87171'; setTimeout(connect,2000); };

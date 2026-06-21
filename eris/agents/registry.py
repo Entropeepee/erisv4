@@ -11,6 +11,7 @@ you care about, cloud backends for peripheral flavor characters.
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Dict, List
 
@@ -62,4 +63,38 @@ def build_default_registry(orchestrator, *, data_dir: str = "eris_data",
                   memory=LayeredMemory(pool, willow_private),
                   field=FractalField(size=field_size),
                   insight_log=InsightLog(os.path.join(willow_dir, "insights.json"))))
+
+    # Extra NPC nodes are DATA, not code: drop a nodes.json into
+    # <data_dir>/agents/ (copy eris/agents/nodes.sample.json). Each entry:
+    #   {"name","persona","backend":"ollama|gemini|openai|claude","has_field":bool}
+    for cfg in _load_node_configs(data_dir):
+        name = (cfg.get("name") or "").strip()
+        if not name or reg.get(name):
+            continue
+        reg.add(make_node(name, cfg.get("persona", ""),
+                          backend_id=cfg.get("backend", "ollama"),
+                          has_field=bool(cfg.get("has_field", False)),
+                          pool=pool, data_dir=data_dir, field_size=field_size))
     return reg
+
+
+def make_node(name, persona, *, backend_id="ollama", has_field=False,
+              pool, data_dir="eris_data", field_size=64) -> Agent:
+    """Build one Echo node (local 'real' node if has_field, else cloud flavor NPC)."""
+    node_dir = os.path.join(data_dir, "agents", name)
+    private = MemorySystem(data_dir=os.path.join(node_dir, "memory"))
+    field = FractalField(size=field_size) if has_field else None
+    ilog = InsightLog(os.path.join(node_dir, "insights.json")) if has_field else None
+    return Agent(name, persona=persona, backend_id=backend_id,
+                 memory=LayeredMemory(pool, private), field=field, insight_log=ilog)
+
+
+def _load_node_configs(data_dir: str) -> List[Dict]:
+    path = os.path.join(data_dir, "agents", "nodes.json")
+    if os.path.exists(path):
+        try:
+            data = json.load(open(path, encoding="utf-8"))
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+    return []
