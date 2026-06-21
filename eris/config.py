@@ -124,6 +124,32 @@ class ErisConfig:
     # VRAM budget
     vram_cap_gb: float = VRAM_CAP_GB
 
+    # ── Orchestration (CIP cross-stage gates) — DEFAULT OFF ──────────
+    # See ERIS_ORCHESTRATION_REMEDIATION.md. Every gate defaults to the current
+    # behavior; with `orchestration_enabled=False` the pipeline is byte-for-byte
+    # the old path. Gates land tier-by-tier — until a tier ships, its flag is
+    # inert (nothing reads it), so these are safe to carry from Tier 0 onward.
+    orchestration_enabled: bool = False   # master kill switch
+    gate_field_depth: bool = False        # Tier 2 — field-evolution depth gate
+    gate_response_field: bool = False     # Tier 3 — response-field warm-start
+    gate_router: bool = False             # Tier 4 — formalized local↔cloud router
+    gate_failure_reports: bool = False    # Tier 5 — reports → dream queue
+    use_beta_star: bool = False           # Tier 6 — β-star bridge in shrinkage
+    orch_k: float = 2.5                   # shared gate threshold (σ)
+    orch_min_field_steps: int = 8         # protected floor for the field gate
+    orch_answer_tol: float = 0.05         # bvec-distance fidelity tolerance
+
 
 # Singleton config — import and modify before system init
 CONFIG = ErisConfig()
+
+# ERIS_ORCHESTRATION = "off" (default) | "on". "on" flips the master switch and
+# the gates proven through Tier 4 (field-depth, response-field, router) so a
+# misbehaving gate can be killed in production with zero code surgery. Until
+# those tiers land the flags are inert, so this is safe to set at any time.
+_orch_env = os.environ.get("ERIS_ORCHESTRATION", "off").strip().lower()
+if _orch_env in ("on", "1", "true", "yes"):
+    CONFIG.orchestration_enabled = True
+    CONFIG.gate_field_depth = True
+    CONFIG.gate_response_field = True
+    CONFIG.gate_router = True
