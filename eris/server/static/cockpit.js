@@ -7,7 +7,7 @@ let audioCtx=null, analyser=null, curAudio=null, curGain=null, emotion='neutral'
 
 /* ---------------- boot ---------------- */
 window.addEventListener('load', () => {
-  loadVoices(); loadConvs(); loadDreams(); loadStudy(); loadLibrary();
+  loadVoices(); loadConvs(); loadDreams(); loadStudy(); loadLibrary(); loadSandboxInfo();
   connectVitals(); connectField(); pollSystem(); pollLLM();
   initLive2D();
   $('#in').addEventListener('keydown', e => {
@@ -424,6 +424,59 @@ async function loadLibrary(){
 function toast(msg){
   let t=$('#toast'); if(!t){ t=document.createElement('div'); t.id='toast'; document.body.appendChild(t); }
   t.textContent=msg; t.classList.add('on'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('on'),4500);
+}
+
+/* ---------------- document author ---------------- */
+function _authFormats(){ return Array.from(document.querySelectorAll('.auth-fmt:checked')).map(c=>c.value); }
+async function authorPlan(){
+  const brief=$('#auth-brief').value.trim(); if(!brief){ toast('describe the document first'); return; }
+  $('#auth-prog').textContent='planning...'; $('#auth-out').innerHTML='';
+  try{
+    const d=await (await fetch('/api/author/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({brief})})).json();
+    if(d.error){ $('#auth-prog').textContent=d.error; return; }
+    $('#auth-prog').textContent='Plan — '+(d.title||'');
+    $('#auth-out').innerHTML='<div class="muted" style="font-size:11px;margin-top:4px">'+
+      (d.sections||[]).map((s,i)=>`${i+1}. ${esc(s.heading)}`).join('<br>')+'</div>';
+  }catch(e){ $('#auth-prog').textContent='plan failed: '+e; }
+}
+let _authTimer=null;
+async function authorWrite(){
+  const brief=$('#auth-brief').value.trim(); if(!brief){ toast('describe the document first'); return; }
+  const formats=_authFormats(); const audit=$('#auth-audit').checked;
+  $('#auth-out').innerHTML=''; $('#auth-prog').textContent='starting...';
+  if(_authTimer) clearInterval(_authTimer); _authTimer=setInterval(authorPoll,1200);
+  try{
+    const d=await (await fetch('/api/author/write',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({brief,formats,audit})})).json();
+    if(d.error){ $('#auth-prog').textContent=d.error; }
+    else{
+      $('#auth-prog').textContent='Done — '+(d.title||'');
+      const links=(d.files||[]).map(f=> f.download?`<a href="${f.download}" target="_blank">${esc(f.name)}</a>`:`<span class="muted">${esc(f.name)} (${esc(f.error||'failed')})</span>`).join(' &middot; ');
+      $('#auth-out').innerHTML='<div style="font-size:12px;margin-top:4px">'+links+'</div>';
+    }
+  }catch(e){ $('#auth-prog').textContent='write failed: '+e; }
+  finally{ if(_authTimer){ clearInterval(_authTimer); _authTimer=null; } }
+}
+async function authorPoll(){
+  try{ const p=await (await fetch('/api/author/progress')).json();
+    if(p.running) $('#auth-prog').textContent=`${p.phase}: ${p.title||''} (${p.step}/${p.total})`;
+  }catch(e){}
+}
+
+/* ---------------- sandbox ---------------- */
+async function loadSandboxInfo(){
+  try{ const d=await (await fetch('/api/sandbox/info')).json(); const el=$('#sb-mode'); if(el) el.textContent=d.mode; }catch(e){}
+}
+async function runSandbox(){
+  const code=$('#sb-code').value; if(!code.trim())return;
+  $('#sb-out').textContent='running...';
+  try{
+    const d=await (await fetch('/api/sandbox/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,timeout:30})})).json();
+    let o=`[${d.status}] ${d.duration_ms?Math.round(d.duration_ms)+'ms':''}\n`;
+    if(d.blocked_reason) o+='BLOCKED: '+d.blocked_reason+'\n';
+    if(d.stdout) o+=d.stdout;
+    if(d.stderr) o+=(d.stdout?'\n':'')+d.stderr;
+    $('#sb-out').textContent=o.trim()||'(no output)';
+  }catch(e){ $('#sb-out').textContent='run failed: '+e; }
 }
 async function speak(text){
   try{

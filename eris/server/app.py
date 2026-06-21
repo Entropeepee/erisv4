@@ -72,6 +72,12 @@ class SandboxRequest(BaseModel if HAS_FASTAPI else object):
     timeout: int = 60
 
 
+class AuthorRequest(BaseModel if HAS_FASTAPI else object):
+    brief: str = ""
+    formats: list = []        # any of: md, txt, docx, pdf
+    audit: bool = True
+
+
 class IngestRequest(BaseModel if HAS_FASTAPI else object):
     text: str = ""
     title: str = ""
@@ -121,6 +127,10 @@ def create_app(
     study = StudyEngine(extractor, orchestrator.memory, data_dir=data_dir,
                         journal=orchestrator.dream_journal, mediator=orchestrator.mediator)
     library = DocumentLibrary(extractor, orchestrator.memory, data_dir=data_dir)
+    from eris.knowledge.author import DocumentAuthor
+    from eris.knowledge.documents import library_dir as _lib_dir
+    author = DocumentAuthor(orchestrator.mediator,
+                            out_dir=os.path.join(_lib_dir(), "generated"))
 
     # WebSocket connections for real-time metrics
     ws_connections: list = []
@@ -358,10 +368,10 @@ def create_app(
         """Pending questions from the metacognition loop."""
         return {"questions": orchestrator.drain_pending_questions()}
 
-    @app.post("/sandbox")
-    async def sandbox_exec(req: SandboxRequest):
-        """Execute code in the sandbox."""
-        result = sandbox.execute(req.code, timeout=req.timeout)
+    async def _run_sandbox(req: SandboxRequest):
+        # Off the event loop — the subprocess/Docker run is blocking.
+        result = await asyncio.to_thread(
+            lambda: sandbox.execute(req.code, timeout=req.timeout))
         return {
             "status": result.status.value,
             "stdout": result.stdout,
@@ -370,6 +380,65 @@ def create_app(
             "duration_ms": result.duration_ms,
             "blocked_reason": result.blocked_reason,
         }
+
+    @app.post("/sandbox")
+    async def sandbox_exec(req: SandboxRequest):
+        """Execute code in the sandbox."""
+        return await _run_sandbox(req)
+
+    @app.post("/api/sandbox/run")
+    async def api_sandbox_run(req: SandboxRequest):
+        """Run code in Eris's isolated sandbox (simulations / code tests)."""
+        return await _run_sandbox(req)
+
+    @app.get("/api/sandbox/info")
+    async def api_sandbox_info():
+        return {"mode": sandbox.mode.value, "timeout": sandbox.timeout,
+                "stats": sandbox.stats}
+
+    # ── Tier 7.11 document authoring ─────────────────────────────────────
+    @app.post("/api/author/plan")
+    async def api_author_plan(req: AuthorRequest):
+        if not req.brief.strip():
+            return JSONResponse({"error": "brief required"}, status_code=400)
+        if not orchestrator.mediator:
+            return JSONResponse({"error": "no language model available"}, status_code=503)
+        return await asyncio.to_thread(lambda: author.plan(req.brief.strip()))
+
+    @app.post("/api/author/write")
+    async def api_author_write(req: AuthorRequest):
+        if not req.brief.strip():
+            return JSONResponse({"error": "brief required"}, status_code=400)
+        if not orchestrator.mediator:
+            return JSONResponse({"error": "no language model available"}, status_code=503)
+        formats = [f for f in (req.formats or ["md"])
+                   if f in ("md", "txt", "docx", "pdf")] or ["md"]
+        result = await asyncio.to_thread(
+            lambda: author.compose(req.brief.strip(), formats=formats,
+                                   do_audit=bool(req.audit)))
+        # Surface only download-safe metadata (not absolute paths).
+        for f in result.get("files", []):
+            if "path" in f:
+                f["download"] = f"/api/author/file?name={f['name']}"
+        return result
+
+    @app.get("/api/author/progress")
+    async def api_author_progress():
+        return author.progress
+
+    @app.get("/api/author/docs")
+    async def api_author_docs():
+        return {"dir": author.out_dir, "documents": author.list_documents()}
+
+    @app.get("/api/author/file")
+    async def api_author_file(name: str = ""):
+        # Serve a generated file by name only (no path traversal).
+        safe = os.path.basename(name or "")
+        path = os.path.join(author.out_dir, safe)
+        if not safe or not os.path.isfile(path):
+            return JSONResponse({"error": "not found"}, status_code=404)
+        from fastapi.responses import FileResponse
+        return FileResponse(path, filename=safe)
 
     @app.post("/ingest")
     async def ingest(req: IngestRequest):

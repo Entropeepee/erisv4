@@ -66,10 +66,16 @@ class SandboxExecutor:
     """
 
     def __init__(self,
-                 mode: ExecutionMode = ExecutionMode.SUBPROCESS,
+                 mode: Optional[ExecutionMode] = None,
                  timeout: int = 60,
                  workspace_dir: Optional[str] = None,
                  python_path: str = "python"):
+        # Default subprocess (no Docker dependency, and it has Eris's own libs so
+        # she can run simulations of her own architecture). Set
+        # ERIS_SANDBOX_MODE=docker for full container isolation of untrusted code.
+        if mode is None:
+            env_mode = os.environ.get("ERIS_SANDBOX_MODE", "subprocess").lower()
+            mode = ExecutionMode.DOCKER if env_mode == "docker" else ExecutionMode.SUBPROCESS
         self.mode = mode
         self.timeout = timeout
         self.workspace_dir = workspace_dir or tempfile.mkdtemp(prefix="eris_sandbox_")

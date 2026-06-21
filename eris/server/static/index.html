@@ -193,6 +193,30 @@ aside.right{background:var(--panel);overflow-y:auto;padding:12px;display:flex;fl
     </div>
     <div id="library"></div>
   </div>
+
+  <div class="panel">
+    <div class="hdr"><h4 style="margin:0">Write a document</h4></div>
+    <textarea id="auth-brief" placeholder="Describe what you want Eris to write — topic, audience, sections, length. She plans, writes each section, self-edits, then offers it." style="width:100%;height:58px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:7px;font-size:12px;resize:vertical"></textarea>
+    <div class="voicebar" style="margin-top:6px">
+      <label><input type="checkbox" class="auth-fmt" value="md" checked> md</label>
+      <label><input type="checkbox" class="auth-fmt" value="docx" checked> docx</label>
+      <label><input type="checkbox" class="auth-fmt" value="pdf"> pdf</label>
+      <label><input type="checkbox" class="auth-fmt" value="txt"> txt</label>
+      <label title="She reviews/edits the draft before offering it"><input type="checkbox" id="auth-audit" checked> self-edit</label>
+    </div>
+    <div style="margin-top:6px"><button class="btn" onclick="authorPlan()">Plan</button>
+      <button class="btn accent" onclick="authorWrite()">Write</button></div>
+    <div id="auth-prog" class="muted" style="font-size:11px;margin-top:6px"></div>
+    <div id="auth-out" style="font-size:12px"></div>
+  </div>
+
+  <div class="panel">
+    <div class="hdr"><h4 style="margin:0">Sandbox (run code)</h4><span class="spacer"></span>
+      <span class="muted" id="sb-mode" style="font-size:10px"></span></div>
+    <textarea id="sb-code" placeholder="Python — numpy / scipy / eris available. print() your results." style="width:100%;height:78px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:7px;font-family:var(--mono);font-size:11px;resize:vertical"></textarea>
+    <div style="margin-top:6px"><button class="btn accent" onclick="runSandbox()">Run</button></div>
+    <pre id="sb-out" style="white-space:pre-wrap;font-family:var(--mono);font-size:11px;max-height:160px;overflow:auto;margin:6px 0 0;color:var(--dim)"></pre>
+  </div>
 </aside>
 
 <div class="modal" id="modal" onclick="if(event.target===this)closeModal()">
