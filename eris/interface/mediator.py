@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 import asyncio
 import json
+import os
 import time
 
 
@@ -86,10 +87,16 @@ class OllamaBackend(LLMBackend):
     """Local Ollama models. No API key needed."""
 
     def __init__(self, model: str = "llama3.2",
-                 base_url: str = "http://localhost:11434"):
+                 base_url: str = "http://localhost:11434",
+                 timeout: float = 300.0):
         self.name = "ollama"
         self.model = model
         self.base_url = base_url
+        # Cold-loading a large local model (e.g. gpt-oss:20b ~13GB) on the
+        # first turn can take well over a minute; 60s was too short and caused
+        # the turn to fall back to the raw specialist bid. Allow a generous
+        # ceiling (override with ERIS_OLLAMA_TIMEOUT).
+        self.timeout = float(os.environ.get("ERIS_OLLAMA_TIMEOUT", timeout))
 
     async def generate(self, prompt: str, system: str = "",
                        max_tokens: int = 2000,
@@ -103,7 +110,7 @@ class OllamaBackend(LLMBackend):
             "stream": False,
             "options": {"num_predict": max_tokens, "temperature": temperature},
         }
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.post(f"{self.base_url}/api/generate", json=payload)
             resp.raise_for_status()
             data = resp.json()

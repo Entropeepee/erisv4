@@ -48,6 +48,11 @@ aside.hist{background:var(--panel);overflow-y:auto;display:flex;flex-direction:c
 .msg.user{align-self:flex-end;background:#1c2740;color:#cfe3ff}
 .msg.eris{align-self:flex-start;background:var(--panel2);border:1px solid var(--line)}
 .msg .mm{font-size:10px;color:var(--faint);font-family:var(--mono);margin-top:5px}
+.msg .body strong{color:#fff;font-weight:700}
+.msg .body em{font-style:italic}
+.msg .body code{font-family:var(--mono);font-size:12.5px;background:#0d1424;border:1px solid var(--line);border-radius:4px;padding:1px 4px}
+.msg .body pre{font-family:var(--mono);font-size:12.5px;background:#0d1424;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:6px 0;overflow-x:auto;white-space:pre}
+.msg .body a{color:var(--accent)}
 .composer{border-top:1px solid var(--line);padding:10px;background:var(--panel)}
 .composer .row{display:flex;gap:8px}
 textarea#in{flex:1;resize:none;height:42px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);
@@ -110,6 +115,7 @@ aside.right{background:var(--panel);overflow-y:auto;padding:12px;display:flex;fl
     <div class="voicebar">
       <label><input type="checkbox" id="speak" checked> Speak</label>
       <span>Voice</span><select id="voice"></select>
+      <button class="btn" id="testvoice" onclick="testVoice()" title="Hear the selected voice">🔊 Test</button>
       <span>Vol</span><input type="range" id="vol" min="0" max="1" step="0.05" value="1">
       <span id="llm" class="muted">llm: checking…</span>
     </div>
