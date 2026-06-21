@@ -53,6 +53,14 @@ aside.hist{background:var(--panel);overflow-y:auto;display:flex;flex-direction:c
 .msg .body code{font-family:var(--mono);font-size:12.5px;background:#0d1424;border:1px solid var(--line);border-radius:4px;padding:1px 4px}
 .msg .body pre{font-family:var(--mono);font-size:12.5px;background:#0d1424;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:6px 0;overflow-x:auto;white-space:pre}
 .msg .body a{color:var(--accent)}
+.msg .msgbar{margin-top:6px}
+.lbtn{background:transparent;color:var(--dim);border:1px solid var(--line);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer}
+.lbtn:hover{border-color:var(--accent);color:var(--ink)}
+audio.player{margin-top:6px;width:100%;height:32px}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(20px);background:var(--panel2);border:1px solid var(--line);
+  color:var(--ink);padding:9px 15px;border-radius:9px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:50;max-width:80vw}
+#toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+.item .meta{color:var(--faint);font-size:10px;font-family:var(--mono);margin-top:2px}
 .composer{border-top:1px solid var(--line);padding:10px;background:var(--panel)}
 .composer .row{display:flex;gap:8px}
 textarea#in{flex:1;resize:none;height:42px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);
@@ -109,8 +117,10 @@ aside.right{background:var(--panel);overflow-y:auto;padding:12px;display:flex;fl
   <div class="chat" id="chat"></div>
   <div class="composer">
     <div class="row">
+      <button class="btn" id="addfile" onclick="pickFile()" title="Add a document for Eris to read (txt, md, pdf, docx, json)">＋</button>
       <textarea id="in" placeholder="Talk to Eris…  (Enter to send, Shift+Enter for newline)"></textarea>
       <button class="btn accent" onclick="send()">Send</button>
+      <input type="file" id="fileinput" accept=".txt,.md,.pdf,.docx,.json" style="display:none" onchange="uploadFile(this)">
     </div>
     <div class="voicebar">
       <label><input type="checkbox" id="speak" checked> Speak</label>
@@ -164,6 +174,14 @@ aside.right{background:var(--panel);overflow-y:auto;padding:12px;display:flex;fl
       <button class="btn" onclick="editTopics()">topics</button>
       <button class="btn" onclick="studyNow()">study now</button></div>
     <div id="study"></div>
+  </div>
+
+  <div class="panel">
+    <div class="hdr"><h4 style="margin:0">Library</h4><span class="spacer"></span>
+      <button class="btn" onclick="pickFile()" title="Upload a file">＋ add</button>
+      <button class="btn" onclick="scanLibrary()" title="Read everything in your ErisLibrary folder">📂 read folder</button></div>
+    <div class="muted" id="libdir" style="font-size:10px;word-break:break-all;margin-bottom:6px"></div>
+    <div id="library"></div>
   </div>
 </aside>
 
