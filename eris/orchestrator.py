@@ -52,6 +52,7 @@ from eris.config import CONFIG, to_numpy
 # Layer 0: Computation
 from eris.computation.activations import BVec, bvec_distance
 from eris.computation.sgt import SGTGate
+from eris.computation.orch_counters import OrchestrationCounters
 
 # Layer 1: Field
 from eris.field.pde import FractalField
@@ -122,7 +123,8 @@ class ErisOrchestrator:
     def __init__(self,
                  field_size: int = 64,
                  data_dir: str = "eris_data",
-                 use_frt_seeding: bool = False):
+                 use_frt_seeding: bool = False,
+                 field_seed: int = 42):
         """
         Parameters
         ----------
@@ -133,13 +135,16 @@ class ErisOrchestrator:
         use_frt_seeding : bool
             If True, use FRT (instant, CPU) for text seeding instead of
             the character-statistics method. Set True for low-power hardware.
+        field_seed : int
+            RNG seed for the persistent field. Default 42 (unchanged). The
+            orchestration benchmark varies this to report mean ± std over seeds.
         """
         os.makedirs(data_dir, exist_ok=True)
         self.field_size = field_size
         self.use_frt_seeding = use_frt_seeding
 
         # Layer 1: Persistent field state
-        self.field = FractalField(size=field_size)
+        self.field = FractalField(size=field_size, seed=field_seed)
 
         # Layer 2: Memory
         self.memory = MemorySystem(data_dir=os.path.join(data_dir, "memory"))
@@ -217,6 +222,11 @@ class ErisOrchestrator:
         self.turn_count: int = 0
         self._last_dissonance: float = 0.0
 
+        # Tier 0: per-turn resource counters for the orchestration benchmark.
+        # Pure instrumentation — incremented at the expensive boundaries below,
+        # read by bench_orchestration.py. Does not affect any decision.
+        self.counters = OrchestrationCounters()
+
     def add_llm_backend(self, backend: LLMBackend) -> None:
         """Add an LLM backend (Ollama, Claude, OpenAI, etc.)."""
         self.mediator.add_backend(backend)
@@ -229,10 +239,12 @@ class ErisOrchestrator:
         """
         t0 = time.time()
         result = ProcessingResult()
+        self.counters.reset()  # Tier 0: counters reflect exactly this turn.
 
         # ── Layer 1: Seed and evolve the FRACTAL field ────────────────
         self.field.seed_from_text(user_message, use_frt=self.use_frt_seeding)
         self.field.run(CONFIG.pde_steps_per_input)
+        self.counters.pde_steps += CONFIG.pde_steps_per_input
 
         # ── Layer 0: Compute BFECDS + global observables ──────────────
         input_bvec = self.field.compute_bvec()
@@ -339,6 +351,10 @@ class ErisOrchestrator:
         use_deep = deep_signal and self._cloud_experts >= 1
 
         if use_deep:
+            # Tier 0: count the would-be cloud-expert calls. With the LLM stubbed
+            # the harness can't time real cloud latency, so the router's payoff
+            # (Tier 4) is read from THIS counter, not from wall-clock.
+            self.counters.cloud_calls += self._cloud_experts
             print(f"[ROUTER] dC/dX outlier (z={dcdx_z:.2f}) + {self._cloud_experts} "
                   f"cloud expert(s) available -> deep MoE synthesis.")
             expert_responses = await self.deep_mediator.ensemble(
@@ -390,9 +406,14 @@ class ErisOrchestrator:
             result.response_text = winner.content if winner else "I need an LLM backend to generate a full response. Add one with add_llm_backend()."
 
         # ── Layer 0: Compute response BFECDS ──────────────────────────
+        # Tier 0: a FULL second field is built cold and re-run every turn just
+        # to get a response bvec (~2× per-turn field cost). Counted here; the
+        # Tier 3 warm-start gate is what later shrinks it.
+        self.counters.field_rebuilds += 1
         response_field = FractalField(size=self.field_size)
         response_field.seed_from_text(result.response_text, use_frt=self.use_frt_seeding)
         response_field.run(CONFIG.pde_steps_per_input // 2)
+        self.counters.resp_field_steps += CONFIG.pde_steps_per_input // 2
         response_bvec = response_field.compute_bvec()
         result.response_bvec = response_bvec
         result.archetype = response_bvec.archetype()
@@ -415,6 +436,7 @@ class ErisOrchestrator:
             if compilation.n_seeds > 0:
                 inject_seeds(self.field, compilation)
                 self.field.run(20)  # Let field resolve
+                self.counters.pde_steps += 20  # Tier 0: extra field evolution.
                 result.contradiction_compiled = True
 
         # Check if research should trigger
