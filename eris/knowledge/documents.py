@@ -27,10 +27,27 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 SUPPORTED_EXT = (".txt", ".md", ".pdf", ".docx", ".json")
+
+# Don't write when the disk is nearly full — keeps a long crawl / big import from
+# filling the drive and destabilizing the machine (override ERIS_MIN_DISK_GB).
+MIN_DISK_GB = float(os.environ.get("ERIS_MIN_DISK_GB", "1.0"))
+
+
+def free_disk_gb(path: Optional[str] = None) -> float:
+    """Free space (GB) on the volume holding `path` (or cwd). inf if unknown."""
+    try:
+        return shutil.disk_usage(os.path.dirname(path) or "." if path else ".").free / (1024 ** 3)
+    except Exception:
+        return float("inf")
+
+
+def enough_disk(path: Optional[str] = None) -> bool:
+    return free_disk_gb(path) >= MIN_DISK_GB
 
 # Bump this (or set ERIS_INGEST_VERSION) when the field physics / how documents
 # are processed changes — e.g. adding tan() alongside sin/cos. The library will
@@ -219,6 +236,8 @@ class DocumentLibrary:
         from eris.knowledge import web_reader
 
         base = display_name or os.path.basename(path)
+        if not enough_disk(self.manifest.path):
+            return {"file": base, "error": f"low disk (<{MIN_DISK_GB}GB free) — skipped"}
         sha = _sha256(path)
         prev = self.manifest.entries.get(sha, {})
         # Skip only if we've seen this exact file AND it was ingested under the
