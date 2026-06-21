@@ -48,6 +48,10 @@ import json
 import os
 import time
 
+# Eris's reply length ceiling. 2000 was clipping longer thoughts; give her room
+# to actually finish. Override with ERIS_MAX_TOKENS.
+_DEFAULT_MAX_TOKENS = int(os.environ.get("ERIS_MAX_TOKENS", "8192"))
+
 
 @dataclass
 class LLMResponse:
@@ -72,7 +76,7 @@ class LLMBackend(ABC):
 
     @abstractmethod
     async def generate(self, prompt: str, system: str = "",
-                       max_tokens: int = 2000,
+                       max_tokens: int = _DEFAULT_MAX_TOKENS,
                        temperature: float = 0.7) -> LLMResponse:
         """Generate text from a prompt. Must be async."""
         ...
@@ -99,7 +103,7 @@ class OllamaBackend(LLMBackend):
         self.timeout = float(os.environ.get("ERIS_OLLAMA_TIMEOUT", timeout))
 
     async def generate(self, prompt: str, system: str = "",
-                       max_tokens: int = 2000,
+                       max_tokens: int = _DEFAULT_MAX_TOKENS,
                        temperature: float = 0.7) -> LLMResponse:
         import httpx
         t0 = time.time()
@@ -151,7 +155,7 @@ class OpenAIBackend(LLMBackend):
         self.base_url = base_url
 
     async def generate(self, prompt: str, system: str = "",
-                       max_tokens: int = 2000,
+                       max_tokens: int = _DEFAULT_MAX_TOKENS,
                        temperature: float = 0.7) -> LLMResponse:
         import httpx
         t0 = time.time()
@@ -197,7 +201,7 @@ class AnthropicBackend(LLMBackend):
         self.api_key = api_key
 
     async def generate(self, prompt: str, system: str = "",
-                       max_tokens: int = 2000,
+                       max_tokens: int = _DEFAULT_MAX_TOKENS,
                        temperature: float = 0.7) -> LLMResponse:
         import httpx
         t0 = time.time()
@@ -239,7 +243,7 @@ class GeminiBackend(LLMBackend):
         self.api_key = api_key
 
     async def generate(self, prompt: str, system: str = "",
-                       max_tokens: int = 2000,
+                       max_tokens: int = _DEFAULT_MAX_TOKENS,
                        temperature: float = 0.7) -> LLMResponse:
         import httpx
         t0 = time.time()
@@ -290,7 +294,7 @@ class CustomBackend(LLMBackend):
         self.response_path = response_path
 
     async def generate(self, prompt: str, system: str = "",
-                       max_tokens: int = 2000,
+                       max_tokens: int = _DEFAULT_MAX_TOKENS,
                        temperature: float = 0.7) -> LLMResponse:
         import httpx
         t0 = time.time()
@@ -349,7 +353,7 @@ class LLMMediator:
         return [b for b in self._backends if b.is_available()]
 
     async def generate(self, prompt: str, system: str = "",
-                       max_tokens: int = 2000,
+                       max_tokens: int = _DEFAULT_MAX_TOKENS,
                        temperature: float = 0.7) -> Optional[LLMResponse]:
         """Generate using the first available backend."""
         for backend in self._backends:
@@ -365,7 +369,7 @@ class LLMMediator:
         return None
 
     async def race(self, prompt: str, system: str = "",
-                   max_tokens: int = 2000,
+                   max_tokens: int = _DEFAULT_MAX_TOKENS,
                    temperature: float = 0.7) -> Optional[LLMResponse]:
         """Race all available backends. First valid response wins.
 
@@ -400,7 +404,7 @@ class LLMMediator:
         return None
 
     async def ensemble(self, prompt: str, system: str = "",
-                       max_tokens: int = 2000,
+                       max_tokens: int = _DEFAULT_MAX_TOKENS,
                        temperature: float = 0.7) -> List[LLMResponse]:
         """Fire all available backends in parallel for MoE synthesis."""
         available = self.available_backends

@@ -242,15 +242,17 @@ class ErisOrchestrator:
         # ideas instead of echoing the nearest neighbor.
         aligned, tension = self.memory.retrieve_resonant(
             query_bvec=input_bvec, query_embedding=q_embedding,
-            top_k=5, tension_k=2,
+            top_k=8, tension_k=3, query_text=user_message,
         )
-        memory_text = "\n".join(
-            f"[{r.source}] {r.text[:200]}" for r in aligned
+        # Give the LLM the FULL retrieved memory, not a sliver — truncating here
+        # is what made Eris say she hadn't read an uploaded document she had.
+        memory_text = "\n\n".join(
+            f"[{r.source}] {r.text}" for r in aligned
         ) if aligned else ""
         if tension:
             memory_text += (
                 "\n\n[Related but unresolved — look for the hidden connection]\n"
-                + "\n".join(f"[{r.source}] {r.text[:160]}" for r in tension)
+                + "\n\n".join(f"[{r.source}] {r.text}" for r in tension)
             )
 
         # ── Layer 5: Set active goal ──────────────────────────────────
@@ -404,10 +406,12 @@ class ErisOrchestrator:
         phi_snap = _phi_np.astype(np.float32)
         theta_snap = _theta_np.astype(np.float32)
 
+        # Store the FULL turn — her memory of a conversation shouldn't be
+        # clipped to 200 chars, or she can't recall what was actually said.
         self.memory.store_turn(
-            text=f"Q: {user_message[:200]}\nA: {result.response_text[:200]}",
+            text=f"Q: {user_message}\nA: {result.response_text}",
             bvec=response_bvec,
-            embedding=get_embedding(f"{user_message}\n{result.response_text[:500]}"),
+            embedding=get_embedding(f"{user_message}\n{result.response_text}"),
             phi_snapshot=phi_snap,
             theta_snapshot=theta_snap,
             source="conversation",
@@ -450,9 +454,17 @@ class ErisOrchestrator:
         if winner:
             parts.append(f"[Specialist {winner.specialist_id} analysis]\n{winner.content}")
 
-        # Memory context
+        # Memory context. These are real excerpts from YOUR memory — past
+        # conversation, plus documents and articles you have already read and
+        # ingested (sources like 'reading:<file>' or 'research:<url>' are
+        # documents the user gave you or pages you studied). Treat them as
+        # things you KNOW. If relevant content appears here, use it and quote it
+        # — do NOT claim you haven't seen or read a document when its text is
+        # present below.
         if memory_text:
-            parts.append(f"[Relevant memory]\n{memory_text}")
+            parts.append(
+                "[Your memory — conversations + documents/articles you have "
+                f"already read; use this, do not deny having read it]\n{memory_text}")
 
         # Field state in natural language
         archetype = input_bvec.archetype()
@@ -566,6 +578,7 @@ class ErisOrchestrator:
             "research_triggered": report.research_triggered,
             "questions": report.questions_generated,
             "duration_seconds": report.duration_seconds,
+            "explored_topic": report.explored_topic,
         }
 
     def get_pending_questions(self) -> List[str]:

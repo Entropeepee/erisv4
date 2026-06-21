@@ -65,7 +65,10 @@ function addMsg(role, text, meta){
   if(role==='eris'){
     const bar=document.createElement('div'); bar.className='msgbar';
     const b=document.createElement('button'); b.className='lbtn'; b.textContent='Listen';
-    b.onclick=()=>playReply(d,b); bar.appendChild(b); d.appendChild(bar);
+    b.onclick=()=>playReply(d,b);
+    const c=document.createElement('button'); c.className='lbtn'; c.textContent='Copy';
+    c.onclick=()=>copyReply(d,c);
+    bar.appendChild(b); bar.appendChild(c); d.appendChild(bar);
   }
   $('#chat').appendChild(d); $('#chat').scrollTop=$('#chat').scrollHeight; return d;
 }
@@ -261,6 +264,19 @@ async function loadVoices(){
   }catch(e){}
 }
 function testVoice(){ speak("Hi, this is Eris. This is how my voice sounds right now."); }
+
+/* copy a reply's text to the clipboard */
+async function copyReply(d, btn){
+  const body=d.querySelector('.body'); if(!body) return;
+  const text=body.innerText||body.textContent||'';
+  try{
+    await navigator.clipboard.writeText(text);
+  }catch(e){
+    const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta);
+    ta.select(); try{ document.execCommand('copy'); }catch(_){ } ta.remove();
+  }
+  const old=btn.textContent; btn.textContent='Copied'; setTimeout(()=>btn.textContent=old, 1200);
+}
 
 /* per-reply playback: native <audio controls> = play/pause/seek/volume/speed */
 async function playReply(d, btn){
