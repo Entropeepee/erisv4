@@ -1,3 +1,0 @@
-PyMuPDF
-python-docx
-sentence-transformers

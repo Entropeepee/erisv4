@@ -1,0 +1,22 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install runtime + test deps
+        run: pip install numpy fastapi uvicorn httpx pytest psutil python-multipart
+      - name: Run the suite (fast, deterministic — no GPU / model downloads)
+        env:
+          ERIS_EMBEDDINGS: "off"   # deterministic embedding, no model download
+          ERIS_GPU: "0"            # CPU only on CI runners
+          ERIS_IDLE_READING: "0"   # no network crawl during tests
+        run: python -m pytest -q tests/

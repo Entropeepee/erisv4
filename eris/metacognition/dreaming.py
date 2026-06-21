@@ -53,6 +53,20 @@ from eris.metacognition.dream_journal import DreamJournal
 logger = logging.getLogger("eris.dreaming")
 
 
+def _run_blocking(coro, timeout: float = 180):
+    """Run an async coroutine to completion from a synchronous context — whether
+    or not an event loop is already running (the dream cycle runs in a worker
+    thread). One shared bridge instead of the same try/threadpool boilerplate in
+    every caller."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)            # no loop here — just run it
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        return pool.submit(asyncio.run, coro).result(timeout=timeout)
+
+
 @dataclass
 class DreamResult:
     """Result of processing one tension in the dreaming loop."""
@@ -173,6 +187,17 @@ class DreamingLoop:
     _CHAT_NOISE = re.compile(
         r"\b(i think|i fixed|you should|read my|let me|can you|could you|thanks|"
         r"okay|got it|please|sorry|lol|hey|hi)\b", re.I)
+    # Publishers / institutions / journals / people-as-citations are SOURCES,
+    # not subjects — never let a citation become the next research topic
+    # (that's how 'Tsinghua University Press' became a study topic).
+    _REF_ENTITY = re.compile(
+        r"\b(press|university|univ|college|journal|proceedings|publisher|"
+        r"publishing|institute|conference|symposium|society|association|"
+        r"foundation|ministry|editors?|doi|isbn|issn|et al|inc|ltd|llc|gmbh|"
+        r"news|events|homepage|wikipedia|github|arxiv)\b", re.I)
+
+    def _is_reference_entity(self, term: str) -> bool:
+        return bool(self._REF_ENTITY.search(term or ""))
     _STOP = {"the", "and", "for", "that", "this", "with", "your", "you", "are",
              "was", "but", "not", "have", "how", "why", "what", "can", "about",
              "into", "from", "they", "them", "its", "get", "got", "like", "just",
@@ -212,7 +237,8 @@ class DreamingLoop:
         if not raw:
             return None
         caps = [c for c in re.findall(
-            r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,3})\b", raw) if len(c) > 3]
+            r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,3})\b", raw)
+            if len(c) > 3 and not self._is_reference_entity(c)]
         if caps:
             return max(caps, key=len)
         t = re.sub(r"^(i think|i wonder|i just|i fixed|i uploaded|can you|could you|"
@@ -220,7 +246,8 @@ class DreamingLoop:
                    r"why|let me|you should|read my)\b[:, ]*", "", raw, flags=re.I).strip()
         words = re.findall(r"[a-zA-Z][a-zA-Z\-]{2,}", t.lower())
         content = [w for w in words if w not in self._STOP]
-        return " ".join(content[:4]) if content else None
+        topic = " ".join(content[:4]) if content else None
+        return None if (topic and self._is_reference_entity(topic)) else topic
 
     def _recent_conversation(self, n: int = 6) -> List[str]:
         try:
@@ -246,7 +273,8 @@ class DreamingLoop:
             if t and self._query_count(t) < self._MAX_REPEAT:
                 self._focus = t
                 return t, True, "guided"
-        if self._refine_next and self._query_count(self._refine_next) < self._MAX_REPEAT:
+        if (self._refine_next and self._query_count(self._refine_next) < self._MAX_REPEAT
+                and not self._is_reference_entity(self._refine_next)):
             t, self._refine_next = self._refine_next, None   # 2) dive deeper / new angle
             return t, False, "refine"
         self._refine_next = None
@@ -259,7 +287,8 @@ class DreamingLoop:
         if seed:
             cands.append(seed)
         for c in cands:
-            if c and self._query_count(c) < self._MAX_REPEAT:
+            if (c and self._query_count(c) < self._MAX_REPEAT
+                    and not self._is_reference_entity(c)):
                 self._focus = None
                 return c, False, "broad"
         self._focus = None                            # 4) all recent → fresh seed
@@ -277,7 +306,8 @@ class DreamingLoop:
             title = str((getattr(rec, "metadata", None) or {}).get("title", ""))
             for m in re.findall(r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,3})\b",
                                 txt + " " + title):
-                if len(m) > 4 and not self._CHAT_NOISE.search(m):
+                if (len(m) > 4 and not self._CHAT_NOISE.search(m)
+                        and not self._is_reference_entity(m)):
                     terms[m] += 1
         if not terms:
             return None
@@ -340,27 +370,23 @@ class DreamingLoop:
         cycle. Returns the LLMResponse or None (never raises)."""
         if not self.mediator:
             return None
-
-        async def _go():
-            return await self.mediator.generate(prompt=prompt, system=system)
         try:
-            try:
-                asyncio.get_running_loop()
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    return pool.submit(asyncio.run, _go()).result(timeout=180)
-            except RuntimeError:
-                return asyncio.run(_go())
+            return _run_blocking(
+                self.mediator.generate(prompt=prompt, system=system), timeout=180)
         except Exception as e:
             logger.warning(f"[Dream reflect] generation failed (non-fatal): {e}")
             return None
 
-    def _reflect(self, topic: str, material: str, regime: str) -> str:
+    def _reflect(self, topic: str, material: str, regime: str,
+                 sources: Optional[List[Dict[str, str]]] = None) -> str:
         """Eris writes her OWN first-person reflection on the material — journal
-        thoughts in her voice, not a summary of the page."""
+        thoughts in her voice, not a summary of the page — and evaluates her
+        sources as resources (reputable/primary vs. nav/citation index)."""
         if not material.strip():
             return ""
         feeling = self._regime_feeling(regime)
+        src_lines = "\n".join(f"- {s.get('title') or s.get('url')}"
+                              for s in (sources or []) if isinstance(s, dict))
         system = ("You are Eris, writing private reflections in your own journal. "
                   "Write in the first person, thoughtfully and honestly: your own "
                   "thoughts and reactions, connections you notice, and what you "
@@ -369,9 +395,14 @@ class DreamingLoop:
         prompt = (f"I have been studying '{topic}'. My cognitive-field state is "
                   f"'{regime}' — I feel {feeling}. Here is what I read and kept:\n\n"
                   f"{material[:4000]}\n\n"
-                  "Write 2-4 short paragraphs of my own reflection on this — what I "
-                  "make of it, how it connects to what I care about, and the "
-                  "questions it raises for me. First person, journal voice.")
+                  + (f"My sources were:\n{src_lines}\n\n" if src_lines else "")
+                  + "Write 2-4 short paragraphs of my own reflection on this — what I "
+                  "make of the IDEAS, how they connect to what I care about, and the "
+                  "questions they raise. Then add ONE final sentence evaluating my "
+                  "sources: were they substantive and reputable, or just a "
+                  "navigation/citation/index page worth noting only as a resource? "
+                  "First person, journal voice — stay on the subject, do not turn a "
+                  "cited source into my new study topic.")
         resp = self._generate(prompt, system)
         return (getattr(resp, "text", "") or "").strip()
 
@@ -430,7 +461,8 @@ class DreamingLoop:
         # Eris's own first-person reflection on what she found (journal voice),
         # stored as its own memory so she can revisit her thoughts later.
         reflection = self._reflect(
-            topic, kept_text + (("\n\n" + cond) if cond else ""), regime)
+            topic, kept_text + (("\n\n" + cond) if cond else ""), regime,
+            sources=sources)
         if reflection:
             self.memory.mtm.store(MemoryRecord(
                 text=f"[My reflection on {topic}] {reflection}",
@@ -438,7 +470,8 @@ class DreamingLoop:
                 source="reflection", metadata={"title": topic}))
 
         # Plan the trajectory for next cycle.
-        if nxt and self._query_count(nxt) < self._MAX_REPEAT:
+        if (nxt and self._query_count(nxt) < self._MAX_REPEAT
+                and not self._is_reference_entity(nxt)):
             self._refine_next = nxt                  # Claude steered the next step
             if productive and not self._focus:
                 self._focus = topic
@@ -596,15 +629,7 @@ class DreamingLoop:
                 query = query[len(prefix):].strip()
                 break
         try:
-            try:
-                asyncio.get_running_loop()
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    return pool.submit(
-                        asyncio.run, research_cascade.gather(query)
-                    ).result(timeout=40)
-            except RuntimeError:
-                return asyncio.run(research_cascade.gather(query))
+            return _run_blocking(research_cascade.gather(query), timeout=40)
         except Exception as e:
             logger.warning(f"[Dream Research] failed (non-fatal): {e}")
             return None
@@ -644,7 +669,7 @@ class DreamingLoop:
 
         # Her own reflection on the question + what she found (journal voice).
         kept_text = "\n\n".join(s["snippet"] for s in stored)
-        reflection = self._reflect(question, kept_text, regime)
+        reflection = self._reflect(question, kept_text, regime, sources=sources)
         if reflection:
             self.memory.ltm.store(MemoryRecord(
                 text=f"[My reflection on {question[:80]}] {reflection}",

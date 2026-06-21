@@ -266,7 +266,7 @@ async function dreamPrompt(){
   const q=prompt('Give Eris something to dream on / ponder:'); if(!q)return;
   const it=$('#dreams'); it.insertAdjacentHTML('afterbegin','<div class="muted" id="pending">pondering...</div>');
   try{ const e=await (await fetch('/api/dream/ponder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})})).json();
-    loadDreams(); showModal(e.topic||q, e.timestamp, e.detail||e.summary, e.sources);
+    loadDreams(); if(e&&e.id) openDream(e.id); else showModal(e.topic||q, e.timestamp, e.detail||e.summary, e.sources);
   }catch(err){ alert('ponder failed: '+err);} finally{ const p=$('#pending'); if(p)p.remove(); }
 }
 
@@ -305,7 +305,8 @@ async function editTopics(){
 function showModal(title, ts, body, sources){
   $('#m-title').textContent=title; $('#m-when').textContent=fmtDate(ts);
   $('#m-body').textContent=body||''; const s=$('#m-src'); s.innerHTML='';
-  (sources||[]).filter(Boolean).forEach(u=>{ const a=document.createElement('a'); a.href=u; a.target='_blank'; a.textContent=u; s.appendChild(a); });
+  (sources||[]).filter(Boolean).forEach(u=>{ const o=(typeof u==='object')?u:{title:u,url:u};
+    const a=document.createElement('a'); a.href=o.url||'#'; a.target='_blank'; a.textContent=o.title||o.url; s.appendChild(a); });
   $('#modal').classList.add('on');
 }
 function closeModal(){ $('#modal').classList.remove('on'); }

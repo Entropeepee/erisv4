@@ -522,6 +522,16 @@ def create_app(
                 return HTMLResponse(content=f.read())
         return HTMLResponse(content=_MINIMAL_UI)
 
+    @app.get("/visualizer", response_class=HTMLResponse)
+    async def visualizer():
+        """Stand-alone Living-Field visualizer (the cockpit 'pop out' target).
+        Renders the live PDE field straight off the /ws/field stream."""
+        path = os.path.join(os.path.dirname(__file__), "static", "visualizer.html")
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                return HTMLResponse(content=f.read())
+        return HTMLResponse(content="<h1>visualizer.html missing</h1>", status_code=404)
+
     return app
 
 # Create the global application instance for uvicorn

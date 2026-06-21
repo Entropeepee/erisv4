@@ -23,5 +23,5 @@ start "" http://localhost:8001/
 
 echo.
 echo Eris is online. Cockpit: http://localhost:8001/
-echo (The old React UI is still available via: cd eris-ui ^&^& npm run dev)
+echo (The old React UI is still available via: cd archive\eris-ui ^&^& npm run dev)
 exit
