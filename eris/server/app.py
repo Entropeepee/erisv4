@@ -227,10 +227,15 @@ def create_app(
     async def api_library():
         return {"dir": library_dir(), "documents": library.list_documents()}
 
+    @app.get("/api/library/progress")
+    async def api_library_progress():
+        return library.progress
+
     @app.post("/api/library/scan")
-    async def api_library_scan():
-        """Read & ingest every supported file in the ErisLibrary folder."""
-        return await asyncio.to_thread(library.ingest_dir)
+    async def api_library_scan(force: bool = False):
+        """Read & ingest every supported file in the ErisLibrary folder.
+        force=true re-ingests everything (use after a physics change)."""
+        return await asyncio.to_thread(lambda: library.ingest_dir(force=force))
 
     # File upload needs python-multipart; register the route only if it's
     # installed so the server still starts (and folder-scan still works)
@@ -257,7 +262,7 @@ def create_app(
             try:
                 # Preserve the original name for memory (temp file is random).
                 res = await asyncio.to_thread(
-                    lambda: library.ingest_file(tmp_path, display_name=file.filename))
+                    lambda: library.ingest_upload(tmp_path, file.filename))
             finally:
                 try:
                     os.unlink(tmp_path)

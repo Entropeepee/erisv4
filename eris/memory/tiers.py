@@ -242,7 +242,45 @@ class LongTermMemory:
         self.half_life_hours = half_life_hours
         self.storage_path = storage_path
         self._records: List[MemoryRecord] = []
+        # FAISS acceleration (optional): built lazily; falls back to brute force.
+        self._faiss = None
+        self._faiss_recs: List[MemoryRecord] = []
+        self._faiss_n = -1
         self._load()
+
+    def _ensure_faiss(self):
+        """Build/refresh a FAISS inner-product index over current embeddings.
+        Returns (index, parallel_records) or (None, None) if FAISS is
+        unavailable or there are no usable embeddings. Inner product over
+        L2-normalized vectors == cosine similarity."""
+        try:
+            import faiss
+        except Exception:
+            return None, None
+        if self._faiss is not None and self._faiss_n == len(self._records):
+            return self._faiss, self._faiss_recs  # unchanged since last build
+        recs, vecs, dim = [], [], None
+        for rec in self._records:
+            e = rec.embedding
+            if e is None:
+                continue
+            e = np.asarray(e, dtype=np.float32).ravel()
+            n = float(np.linalg.norm(e))
+            if n < 1e-10:
+                continue
+            if dim is None:
+                dim = e.shape[0]
+            if e.shape[0] != dim:
+                continue  # skip mismatched dims (e.g. embedding model changed)
+            recs.append(rec)
+            vecs.append(e / n)
+        if not vecs:
+            self._faiss, self._faiss_recs, self._faiss_n = None, [], len(self._records)
+            return None, None
+        index = faiss.IndexFlatIP(dim)
+        index.add(np.vstack(vecs).astype(np.float32))
+        self._faiss, self._faiss_recs, self._faiss_n = index, recs, len(self._records)
+        return index, recs
 
     def _load(self) -> None:
         if os.path.exists(self.storage_path):
@@ -273,11 +311,29 @@ class LongTermMemory:
         return [rec for rec, _ in scored[:top_k]]
 
     def search_by_embedding(self, query_emb: np.ndarray, top_k: int = 5) -> List[MemoryRecord]:
-        """Find semantically similar memories via embedding cosine similarity."""
-        results = []
+        """Find semantically similar memories via embedding cosine similarity.
+
+        Uses FAISS when available (scales to the full ChatGPT-history import);
+        otherwise brute-force cosine. Both reweight by Ebbinghaus freshness."""
         qnorm = np.linalg.norm(query_emb)
         if qnorm < 1e-10:
             return []
+        index, recs = self._ensure_faiss()
+        if index is not None:
+            q = (np.asarray(query_emb, dtype=np.float32).ravel() / qnorm)
+            if q.shape[0] == index.d:
+                k = min(len(recs), max(top_k * 4, top_k))
+                sims, idxs = index.search(q.reshape(1, -1), k)
+                scored = []
+                for sim, i in zip(sims[0], idxs[0]):
+                    if i < 0:
+                        continue
+                    rec = recs[i]
+                    scored.append((rec, float(sim) * rec.freshness(self.half_life_hours)))
+                scored.sort(key=lambda x: x[1], reverse=True)
+                return [rec for rec, _ in scored[:top_k]]
+        # brute-force fallback
+        results = []
         for rec in self._records:
             if rec.embedding is None:
                 continue

@@ -32,6 +32,12 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 SUPPORTED_EXT = (".txt", ".md", ".pdf", ".docx", ".json")
 
+# Bump this (or set ERIS_INGEST_VERSION) when the field physics / how documents
+# are processed changes — e.g. adding tan() alongside sin/cos. The library will
+# then re-ingest everything instead of skipping files it has seen before, so the
+# existing corpus is re-encoded under the new physics.
+INGEST_VERSION = os.environ.get("ERIS_INGEST_VERSION", "1")
+
 
 # ─────────────────────────────────────────────────────────── library location
 def library_dir() -> str:
@@ -182,6 +188,22 @@ class DocumentLibrary:
         self.memory = memory
         os.makedirs(data_dir, exist_ok=True)
         self.manifest = LibraryManifest(os.path.join(data_dir, "library_manifest.json"))
+        # Live progress for the cockpit's ingestion bar (polled by the browser).
+        self.progress: Dict[str, Any] = {
+            "running": False, "phase": "idle", "file": "",
+            "files_done": 0, "files_total": 0,
+            "blocks_done": 0, "blocks_total": 0,
+            "chunks": 0, "started": 0.0, "updated": 0.0,
+        }
+
+    def _progress_begin(self, total_files: int) -> None:
+        self.progress.update(running=True, phase="ingesting", file="",
+                             files_total=total_files, files_done=0,
+                             blocks_done=0, blocks_total=0, chunks=0,
+                             started=time.time(), updated=time.time())
+
+    def _progress_end(self) -> None:
+        self.progress.update(running=False, phase="done", updated=time.time())
 
     def ingest_file(self, path: str, *, force: bool = False,
                     display_name: Optional[str] = None) -> Dict[str, Any]:
@@ -194,14 +216,20 @@ class DocumentLibrary:
 
         base = display_name or os.path.basename(path)
         sha = _sha256(path)
-        if self.manifest.seen(sha) and not force:
-            prev = self.manifest.entries.get(sha, {})
+        prev = self.manifest.entries.get(sha, {})
+        # Skip only if we've seen this exact file AND it was ingested under the
+        # current physics version. A version bump re-ingests everything.
+        if (prev and not force
+                and prev.get("ingest_version") == INGEST_VERSION):
             return {"file": base, "skipped": True, "chunks": prev.get("chunks", 0)}
 
         blocks = extract_documents(path)
         total = 0
+        self.progress.update(file=base, blocks_total=len(blocks),
+                             blocks_done=0, updated=time.time())
         for title, text in blocks:
             if not (text or "").strip():
+                self.progress["blocks_done"] += 1
                 continue
             # Prepend the title so the file's NAME is embedded in its chunks —
             # this is what lets you say "find my notes on X" and have Eris
@@ -209,9 +237,12 @@ class DocumentLibrary:
             n = web_reader.ingest_text(f"{title}\n\n{text}", title=title,
                                        extractor=self.extractor, memory=self.memory)
             total += n
+            self.progress["blocks_done"] += 1
+            self.progress["chunks"] += n
+            self.progress["updated"] = time.time()
         info = {"file": base, "title": base, "chunks": total,
                 "blocks": len(blocks), "ingested_at": time.time(),
-                "path": path}
+                "path": path, "ingest_version": INGEST_VERSION}
         self.manifest.record(sha, info)
         # Let freshly-read documents flow up the memory tiers immediately.
         try:
@@ -227,14 +258,22 @@ class DocumentLibrary:
         results: List[Dict[str, Any]] = []
         if not os.path.isdir(directory):
             return {"dir": directory, "error": "folder not found", "files": []}
+        paths = []
         for root, _, files in os.walk(directory):
             for fn in sorted(files):
                 if fn.lower().endswith(SUPPORTED_EXT):
-                    fp = os.path.join(root, fn)
-                    try:
-                        results.append(self.ingest_file(fp, force=force))
-                    except Exception as e:
-                        results.append({"file": fn, "error": str(e)})
+                    paths.append(os.path.join(root, fn))
+        self._progress_begin(len(paths))
+        try:
+            for fp in paths:
+                try:
+                    results.append(self.ingest_file(fp, force=force))
+                except Exception as e:
+                    results.append({"file": os.path.basename(fp), "error": str(e)})
+                self.progress["files_done"] += 1
+                self.progress["updated"] = time.time()
+        finally:
+            self._progress_end()
         return {
             "dir": directory,
             "files": results,
@@ -242,6 +281,16 @@ class DocumentLibrary:
             "skipped": sum(1 for r in results if r.get("skipped")),
             "total_chunks": sum(r.get("chunks", 0) for r in results),
         }
+
+    def ingest_upload(self, path: str, display_name: Optional[str] = None) -> Dict[str, Any]:
+        """Ingest a single uploaded file with progress tracking."""
+        self._progress_begin(1)
+        try:
+            res = self.ingest_file(path, display_name=display_name, force=True)
+            self.progress["files_done"] = 1
+            return res
+        finally:
+            self._progress_end()
 
     def list_documents(self) -> List[Dict[str, Any]]:
         return self.manifest.list()

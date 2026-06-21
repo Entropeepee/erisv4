@@ -117,15 +117,15 @@ aside.right{background:var(--panel);overflow-y:auto;padding:12px;display:flex;fl
   <div class="chat" id="chat"></div>
   <div class="composer">
     <div class="row">
-      <button class="btn" id="addfile" onclick="pickFile()" title="Add a document for Eris to read (txt, md, pdf, docx, json)">＋</button>
-      <textarea id="in" placeholder="Talk to Eris…  (Enter to send, Shift+Enter for newline)"></textarea>
+      <button class="btn" id="addfile" onclick="pickFile()" title="Add a document for Eris to read (txt, md, pdf, docx, json)">+ file</button>
+      <textarea id="in" placeholder="Talk to Eris...  (Enter to send, Shift+Enter for newline)"></textarea>
       <button class="btn accent" onclick="send()">Send</button>
       <input type="file" id="fileinput" accept=".txt,.md,.pdf,.docx,.json" style="display:none" onchange="uploadFile(this)">
     </div>
     <div class="voicebar">
       <label><input type="checkbox" id="speak" checked> Speak</label>
       <span>Voice</span><select id="voice"></select>
-      <button class="btn" id="testvoice" onclick="testVoice()" title="Hear the selected voice">🔊 Test</button>
+      <button class="btn" id="testvoice" onclick="testVoice()" title="Hear the selected voice">Test voice</button>
       <span>Vol</span><input type="range" id="vol" min="0" max="1" step="0.05" value="1">
       <span id="llm" class="muted">llm: checking…</span>
     </div>
@@ -140,7 +140,7 @@ aside.right{background:var(--panel);overflow-y:auto;padding:12px;display:flex;fl
       <div class="tab" data-v="coher">Coherence</div><div class="tab" data-v="regime">Plastic</div>
     </div>
     <div class="hdr"><h4 style="margin:0">Living Field</h4><span class="spacer"></span>
-      <button class="btn" title="Pop out larger" onclick="window.open('/visualizer','eris_vis','width=820,height=900')">⤢ pop&nbsp;out</button></div>
+      <button class="btn" title="Pop out larger" onclick="window.open('/visualizer','eris_vis','width=820,height=900')">pop out</button></div>
     <canvas id="fieldcv" width="220" height="220"></canvas>
   </div>
 
@@ -165,7 +165,7 @@ aside.right{background:var(--panel);overflow-y:auto;padding:12px;display:flex;fl
 
   <div class="panel">
     <div class="hdr"><h4 style="margin:0">Dreams &amp; Reflection</h4><span class="spacer"></span>
-      <button class="btn" onclick="dreamPrompt()">＋ ponder…</button></div>
+      <button class="btn" onclick="dreamPrompt()">+ ponder</button></div>
     <div id="dreams"></div>
   </div>
 
@@ -178,9 +178,14 @@ aside.right{background:var(--panel);overflow-y:auto;padding:12px;display:flex;fl
 
   <div class="panel">
     <div class="hdr"><h4 style="margin:0">Library</h4><span class="spacer"></span>
-      <button class="btn" onclick="pickFile()" title="Upload a file">＋ add</button>
-      <button class="btn" onclick="scanLibrary()" title="Read everything in your ErisLibrary folder">📂 read folder</button></div>
+      <button class="btn" onclick="pickFile()" title="Upload a file">+ add</button>
+      <button class="btn" onclick="scanLibrary(false)" title="Read new/changed files in your ErisLibrary folder">read folder</button>
+      <button class="btn" onclick="scanLibrary(true)" title="Re-read every file (use after a physics change)">re-read all</button></div>
     <div class="muted" id="libdir" style="font-size:10px;word-break:break-all;margin-bottom:6px"></div>
+    <div id="libprog" style="display:none;margin-bottom:8px">
+      <div class="bar"><i id="libprog-fill"></i></div>
+      <div class="muted" id="libprog-txt" style="font-size:10px;margin-top:3px"></div>
+    </div>
     <div id="library"></div>
   </div>
 </aside>

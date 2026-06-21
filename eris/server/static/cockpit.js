@@ -64,7 +64,7 @@ function addMsg(role, text, meta){
   if(meta){ const m=document.createElement('div'); m.className='mm'; m.textContent=meta; d.appendChild(m);}
   if(role==='eris'){
     const bar=document.createElement('div'); bar.className='msgbar';
-    const b=document.createElement('button'); b.className='lbtn'; b.textContent='🔊 Listen';
+    const b=document.createElement('button'); b.className='lbtn'; b.textContent='Listen';
     b.onclick=()=>playReply(d,b); bar.appendChild(b); d.appendChild(bar);
   }
   $('#chat').appendChild(d); $('#chat').scrollTop=$('#chat').scrollHeight; return d;
@@ -85,7 +85,7 @@ async function send(){
     setEmotionFromReply(d);
     if($('#speak').checked) speak(d.response);
     loadConvs();
-  }catch(e){ thinking.firstChild.textContent='⚠ '+e; }
+  }catch(e){ thinking.firstChild.textContent='Error: '+e; }
 }
 function newChat(){ convId=null; $('#chat').innerHTML=''; document.querySelectorAll('.conv').forEach(c=>c.classList.remove('on')); }
 
@@ -115,7 +115,7 @@ async function openConv(id){
 /* ---------------- cognitive vitals (WS) ---------------- */
 function connectVitals(){
   const ws=new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen=()=>{ $('#conn').textContent='● live'; $('#conn').className='status'; };
+  ws.onopen=()=>{ $('#conn').textContent='live'; $('#conn').className='status'; };
   ws.onclose=()=>{ $('#conn').textContent='disconnected'; $('#conn').className='status off'; setTimeout(connectVitals,2000); };
   ws.onmessage=e=>{ try{ updVitals(JSON.parse(e.data)); }catch(_){} };
 }
@@ -192,7 +192,7 @@ async function loadDreams(){
     if(!(d.dreams||[]).length){ el.innerHTML='<div class="muted">No dreams yet. She reflects on cognitive dissonance during idle/nightly cycles, or on your direction.</div>'; return; }
     d.dreams.forEach(x=>{
       const it=document.createElement('div'); it.className='item'; it.onclick=()=>openDream(x.id);
-      it.innerHTML=`<div class="s"></div>${x.question?'<div class="q">❓ needs your input</div>':''}<div class="when">${x.kind} · ${fmtDate(x.timestamp)}</div>`;
+      it.innerHTML=`<div class="s"></div>${x.question?'<div class="q">(needs your input)</div>':''}<div class="when">${x.kind} &middot; ${fmtDate(x.timestamp)}</div>`;
       it.querySelector('.s').textContent=x.summary||'(reflection)';
       el.appendChild(it);
     });
@@ -204,7 +204,7 @@ async function openDream(id){
 }
 async function dreamPrompt(){
   const q=prompt('Give Eris something to dream on / ponder:'); if(!q)return;
-  const it=$('#dreams'); it.insertAdjacentHTML('afterbegin','<div class="muted" id="pending">💭 pondering…</div>');
+  const it=$('#dreams'); it.insertAdjacentHTML('afterbegin','<div class="muted" id="pending">pondering...</div>');
   try{ const e=await (await fetch('/api/dream/ponder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})})).json();
     loadDreams(); showModal(e.topic||q, e.timestamp, e.detail||e.summary, e.sources);
   }catch(err){ alert('ponder failed: '+err);} finally{ const p=$('#pending'); if(p)p.remove(); }
@@ -214,7 +214,7 @@ async function dreamPrompt(){
 async function loadStudy(){
   try{
     const d=await (await fetch('/api/study/reports')).json(); const el=$('#study'); el.innerHTML='';
-    if(!(d.reports||[]).length){ el.innerHTML='<div class="muted">Nothing studied yet. Runs nightly on your topics — or hit “study now”.</div>'; return; }
+    if(!(d.reports||[]).length){ el.innerHTML='<div class="muted">Nothing studied yet. Runs nightly on your topics, or hit "study now".</div>'; return; }
     d.reports.forEach(x=>{
       const it=document.createElement('div'); it.className='item'; it.onclick=()=>openStudy(x.id);
       it.innerHTML=`<div class="s"></div><div class="when">${fmtDate(x.timestamp)} · ${x.total_chunks} passages</div>`;
@@ -229,7 +229,7 @@ async function openStudy(id){
   showModal('Studied: '+(r.topics||[]).join(', '), r.timestamp, r.summary||'', srcs);
 }
 async function studyNow(){
-  const it=$('#study'); it.insertAdjacentHTML('afterbegin','<div class="muted" id="studying">📚 studying… (reading sources)</div>');
+  const it=$('#study'); it.insertAdjacentHTML('afterbegin','<div class="muted" id="studying">studying... (reading sources)</div>');
   try{ await fetch('/api/study/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topics:[]})}); loadStudy(); }
   catch(e){ alert('study failed: '+e);} finally{ const p=$('#studying'); if(p)p.remove(); }
 }
@@ -238,7 +238,7 @@ async function editTopics(){
   const v=prompt('Topics Eris should study (comma-separated). Reliable nonfiction only.', (cur.topics||[]).join(', '));
   if(v===null)return;
   await fetch('/api/study/topics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topics:v.split(',').map(s=>s.trim()).filter(Boolean)})});
-  alert('Topics saved. She will study these on the next nightly cycle (or “study now”).');
+  alert('Topics saved. She will study these on the next nightly cycle (or "study now").');
 }
 
 /* ---------------- modal ---------------- */
@@ -269,7 +269,7 @@ async function playReply(d, btn){
   let au=bar.querySelector('audio.player');
   if(au){ au.paused ? au.play() : au.pause(); return; }   // already loaded → toggle
   const text=cleanForTTS(body.innerText||body.textContent||''); if(!text) return;
-  const old=btn.textContent; btn.textContent='… generating'; btn.disabled=true;
+  const old=btn.textContent; btn.textContent='generating...'; btn.disabled=true;
   try{
     const r=await fetch('/api/tts/generate',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({text, voice_id:$('#voice').value})});
@@ -285,23 +285,54 @@ async function playReply(d, btn){
 function pickFile(){ $('#fileinput').click(); }
 async function uploadFile(input){
   const f=input&&input.files&&input.files[0]; if(!f) return;
-  toast(`📄 reading ${f.name}…`);
+  toast(`reading ${f.name}...`);
   const fd=new FormData(); fd.append('file', f);
+  startProg();
   try{
     const d=await (await fetch('/api/library/upload',{method:'POST',body:fd})).json();
-    toast(d.error ? ('⚠ '+d.error) : `✓ ingested ${d.chunks||0} passages from ${f.name}`);
+    toast(d.error ? ('Error: '+d.error) : `Ingested ${d.chunks||0} passages from ${f.name}`);
     loadLibrary();
-  }catch(e){ toast('⚠ upload failed: '+e); }
+  }catch(e){ toast('upload failed: '+e); }
+  finally{ stopProg(); }
   input.value='';
 }
-async function scanLibrary(){
-  toast('📂 reading your ErisLibrary folder…');
+async function scanLibrary(force){
+  toast(force ? 're-reading your entire ErisLibrary folder...' : 'reading your ErisLibrary folder...');
+  startProg();
   try{
-    const d=await (await fetch('/api/library/scan',{method:'POST'})).json();
-    if(d.error){ toast(`⚠ ${d.error}: ${d.dir}`); return; }
-    toast(`✓ library: ${d.ingested} new, ${d.skipped} unchanged, ${d.total_chunks} passages`);
+    const d=await (await fetch('/api/library/scan'+(force?'?force=true':''),{method:'POST'})).json();
+    if(d.error){ toast(`${d.error}: ${d.dir}`); }
+    else{ toast(`Library: ${d.ingested} new, ${d.skipped} unchanged, ${d.total_chunks} passages`); }
     loadLibrary();
-  }catch(e){ toast('⚠ scan failed: '+e); }
+  }catch(e){ toast('scan failed: '+e); }
+  finally{ stopProg(); }
+}
+
+/* live ingestion progress bar (polls /api/library/progress) */
+let _progTimer=null;
+function startProg(){
+  const p=$('#libprog'); if(p) p.style.display='block';
+  setProg(0,'starting...'); pollProgress();
+  if(_progTimer) clearInterval(_progTimer);
+  _progTimer=setInterval(pollProgress, 800);
+}
+function stopProg(){
+  if(_progTimer){ clearInterval(_progTimer); _progTimer=null; }
+  pollProgress(); setTimeout(()=>{ const p=$('#libprog'); if(p) p.style.display='none'; }, 1800);
+}
+function setProg(frac, txt){
+  const f=$('#libprog-fill'); if(f) f.style.width=Math.max(0,Math.min(100,frac*100)).toFixed(0)+'%';
+  const t=$('#libprog-txt'); if(t) t.textContent=txt||'';
+}
+async function pollProgress(){
+  try{
+    const p=await (await fetch('/api/library/progress')).json();
+    const ft=p.files_total||0, fd=p.files_done||0, bt=p.blocks_total||0, bd=p.blocks_done||0;
+    const frac= ft ? (fd + (bt ? bd/bt : 0)) / ft : (p.running?0:1);
+    setProg(frac, p.running
+      ? `reading ${p.file||''} (file ${Math.min(fd+1,ft)}/${ft}), ${p.chunks||0} passages`
+      : `done: ${p.chunks||0} passages`);
+  }catch(e){}
 }
 async function loadLibrary(){
   try{
