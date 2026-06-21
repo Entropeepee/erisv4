@@ -390,6 +390,19 @@ class MemorySystem:
         self.stm.store(record)
         return record
 
+    def store_text(self, text: str, embedding: Optional[np.ndarray] = None,
+                   source: str = "knowledge", bvec: Optional[BVec] = None,
+                   **meta) -> MemoryRecord:
+        """Store a standalone text fact directly into LONG-term memory (permanent
+        collective knowledge). Used by federation to write a node's novel insight
+        into the shared pool."""
+        if embedding is not None and not isinstance(embedding, np.ndarray):
+            embedding = np.asarray(embedding, dtype=np.float32)
+        record = MemoryRecord(text=text, bvec=bvec or BVec(), embedding=embedding,
+                              source=source, metadata=meta or {})
+        self.ltm.store(record)
+        return record
+
     def retrieve(self, query_bvec: Optional[BVec] = None,
                  query_embedding: Optional[np.ndarray] = None,
                  top_k: int = 5,

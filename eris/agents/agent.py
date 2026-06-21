@@ -25,7 +25,7 @@ def _when(ts: float) -> str:
 
 class Agent:
     def __init__(self, name: str, persona: str, backend_id: str, memory,
-                 field=None, orchestrator=None):
+                 field=None, orchestrator=None, insight_log=None):
         self.name = name
         self.persona = persona
         self.backend_id = backend_id
@@ -33,6 +33,8 @@ class Agent:
         self.field = field
         self._orch = orchestrator        # set only for the 'eris' OverSoul node
         self.has_field = field is not None
+        self.insight_log = insight_log    # real nodes distill insights to federate
+        self._last_distill_count = 0
 
     async def respond(self, user_text: str, backends: dict, top_k: int = 8) -> str:
         # OverSoul = the full cognitive pipeline over the pool.
@@ -80,3 +82,33 @@ class Agent:
             return self.field.detect_regime() if self.field is not None else None
         except Exception:
             return None
+
+    def _private_experiences(self):
+        mem = getattr(self.memory, "private", None)
+        return list(mem.stm.get_all()) if mem is not None else []
+
+    async def distill(self, backends: dict):
+        """Form ONE concise insight from NEW private experiences (WILLOW I.6).
+        Returns the Insight or None (nothing new / no backend / no log)."""
+        if self.insight_log is None:
+            return None
+        exps = self._private_experiences()
+        if len(exps) <= self._last_distill_count:
+            return None                       # nothing new since last distill
+        self._last_distill_count = len(exps)
+        text = "\n".join(r.text for r in exps[-8:])
+        backend = backends.get(self.backend_id) or backends.get("ollama")
+        if backend is None:
+            return None
+        prompt = ("From my recent private experiences below, state ONE concise "
+                  "insight I have formed — a single sentence, no preamble:\n\n"
+                  f"{text}\n\nInsight:")
+        try:
+            resp = await backend.generate(prompt, system=self.persona)
+            summary = (getattr(resp, "text", "") or "").strip().split("\n")[0][:200]
+        except Exception:
+            summary = ""
+        if not summary:
+            return None
+        return self.insight_log.add(summary, get_embedding(summary),
+                                    regime=self.regime() or "", trigger=text[:120])

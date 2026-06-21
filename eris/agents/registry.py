@@ -18,6 +18,7 @@ from eris.memory.tiers import MemorySystem
 from eris.field.pde import FractalField
 from eris.agents.agent import Agent
 from eris.agents.memory_view import LayeredMemory
+from eris.agents.insights import InsightLog
 
 
 class AgentRegistry:
@@ -53,10 +54,12 @@ def build_default_registry(orchestrator, *, data_dir: str = "eris_data",
                   backend_id="ollama", memory=pool,
                   field=orchestrator.field, orchestrator=orchestrator))
 
-    # Willow = companion node: shares the pool, owns her field + private memory.
-    willow_private = MemorySystem(
-        data_dir=os.path.join(data_dir, "agents", "willow", "memory"))
+    # Willow = companion node: shares the pool, owns her field + private memory
+    # + an insight log (so she can federate what she learns through her own life).
+    willow_dir = os.path.join(data_dir, "agents", "willow")
+    willow_private = MemorySystem(data_dir=os.path.join(willow_dir, "memory"))
     reg.add(Agent("willow", persona=_WILLOW_PERSONA, backend_id="ollama",
                   memory=LayeredMemory(pool, willow_private),
-                  field=FractalField(size=field_size)))
+                  field=FractalField(size=field_size),
+                  insight_log=InsightLog(os.path.join(willow_dir, "insights.json"))))
     return reg
