@@ -92,6 +92,34 @@ Runs OFFLINE on a built-in near/far-domain corpus for reproducibility; `--online
 reads real Wikipedia. The offline numbers are a smoke test, **not** evidence —
 a real verdict needs `ERIS_EMBEDDINGS=on` (BGE-M3) and 100+ articles on the box.
 
+## Tier 6 — Sine-aware resonant retrieval (RAG: good → strong)
+First-principles fix to memory retrieval. Eris's conservation law is
+`cos²θ + sin²θ = 1`, but retrieval only ever used the **cosine** half
+(`elastic_energy`) — returning redundant near-duplicates and discarding the
+**sine** half (`plastic_energy`), which is the Emergence/learning channel.
+- `MemorySystem.retrieve_resonant()` returns `(aligned, tension)`: `aligned` is
+  ordinary cosine/embedding relevance; `tension` is ranked by `plastic_energy`
+  (sin²·coupling) — memories strongly *coupled* to the query but *unresolved*.
+  Coupling weighting means unrelated memories score ~0, so the sine set is
+  "productive dissonance", not noise.
+- The live conversational turn now feeds the LLM both sets (the tension set
+  labeled "related but unresolved — look for the hidden connection"), so Eris
+  connects ideas instead of parroting the nearest neighbor. This also brings
+  resonance into the **live** loop (previously only in the Tier 5 experiment).
+- **Real embeddings default-ON (auto):** `get_embedding()` now tries the
+  semantic model first and falls back to the deterministic hash only if
+  `sentence-transformers` is absent. Install it (`pip install
+  sentence-transformers`) to make the field encode *meaning*; set
+  `ERIS_EMBEDDINGS=off` to force the fast fallback for tests. **Throw this
+  switch before running the grok Experiment 5A.**
+
+## Pre-existing test bugs fixed (from the Opus 4.8 audit)
+- `tests/test_infrastructure.py` had a literal newline inside a string literal,
+  making the whole file uncollectable. Fixed → suite now collects.
+- `tests/test_computation.py::test_memory_independent_of_decay` referenced
+  `PDEParams(D_decay=…)`; the June refactor renamed it `d_decay`. Fixed.
+- Result: full suite **120 passed, 0 failed** (with fastapi installed).
+
 ## Bug fix (pre-existing)
 - `pde.clone()` copied non-existent `_C_hist` / `_X_hist`, raising
   `AttributeError`. Because `clone()` runs every turn via `probe_reactivity()`

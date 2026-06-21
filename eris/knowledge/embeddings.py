@@ -37,8 +37,13 @@ _MODEL_TRIED = False
 
 
 def _use_real_model() -> bool:
-    return os.environ.get("ERIS_EMBEDDINGS", "").lower() in ("on", "1", "true", "model") \
-        or bool(os.environ.get("ERIS_EMBED_MODEL"))
+    """Default is AUTO: try the real semantic model, fall back to deterministic
+    if sentence-transformers is not installed. Set ERIS_EMBEDDINGS=off to force
+    the deterministic fallback (e.g. for fast tests)."""
+    val = os.environ.get("ERIS_EMBEDDINGS", "auto").lower()
+    if val in ("off", "0", "false", "none"):
+        return False
+    return True
 
 
 def _model():

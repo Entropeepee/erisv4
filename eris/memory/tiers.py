@@ -42,6 +42,7 @@ import math
 import numpy as np
 
 from eris.computation.activations import BVec, bvec_cosine, bvec_distance
+from eris.memory.interference import _csba_coupling_geometry
 from eris.computation.sgt import SGTGate
 from eris.config import CONFIG
 
@@ -387,6 +388,53 @@ class MemorySystem:
             rec.reinforce()
             
         return results
+
+    def retrieve_resonant(self, query_bvec: BVec,
+                          query_embedding: Optional[np.ndarray] = None,
+                          top_k: int = 5, tension_k: int = 2):
+        """Resonant retrieval — cosine AND sine (Remediation Tier 6).
+
+        Eris's conservation law is cos^2(theta) + sin^2(theta) = 1:
+          * cos^2 (ELASTIC coupling) = what is already aligned/resolved — the
+            memories that directly *answer* the query. This is ordinary
+            similarity retrieval.
+          * sin^2 (PLASTIC coupling) = the orthogonal, unresolved component —
+            memories that are strongly *coupled* to the query but in tension
+            with it. This is the Emergence channel: where new structure forms
+            under orthogonal pressure. Plain cosine RAG throws this away and
+            returns only redundant near-duplicates.
+
+        Returns ``(aligned, tension)``:
+          * ``aligned`` — the usual relevance set (cosine / elastic + embedding).
+          * ``tension`` — coupled-but-unresolved memories ranked by PLASTIC
+            energy (sin^2 * coupling, so unrelated memories score ~0 and never
+            surface). Feeding these to the LLM as "related-but-unresolved" is
+            how Eris learns more from the input and makes non-obvious
+            connections instead of parroting the nearest neighbor.
+        """
+        aligned = self.retrieve(query_bvec=query_bvec,
+                                query_embedding=query_embedding, top_k=top_k)
+        seen_text = {r.text for r in aligned}
+
+        pool = (self.stm.get_all()
+                + self.mtm.get_fresh(min_freshness=0.05)
+                + self.ltm._records)
+        scored = []
+        for r in pool:
+            if r.text in seen_text:
+                continue
+            ir = _csba_coupling_geometry(query_bvec, r.bvec)
+            # learning value = sin^2 coupling. Because coupling weights it, a
+            # memory must actually be related (shared active domains) to score —
+            # this is "productive dissonance", not noise.
+            if ir.plastic_energy > 1e-6:
+                scored.append((r, ir.plastic_energy))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        tension = []
+        for r, _ in scored[:tension_k]:
+            if r.text not in seen_text:
+                tension.append(r); seen_text.add(r.text)
+        return aligned, tension
 
     def consolidate(self) -> Dict[str, int]:
         """SGT-gated consolidation: promote worthy memories up tiers.

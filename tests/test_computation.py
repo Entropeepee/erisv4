@@ -214,14 +214,14 @@ class TestModulators:
         from eris.field.pde import FractalField, PDEParams
 
         # High memory, normal decay
-        p1 = PDEParams(memory_tau=50.0, D_decay=0.05)
+        p1 = PDEParams(memory_tau=50.0, d_decay=0.05)
         f1 = FractalField(size=32, params=p1)
         f1.seed_from_text("independence test")
         f1.run(30)
         mem_high = float(np.asarray(f1.memory).mean())
 
         # Low memory, same decay
-        p2 = PDEParams(memory_tau=2.0, D_decay=0.05)
+        p2 = PDEParams(memory_tau=2.0, d_decay=0.05)
         f2 = FractalField(size=32, params=p2)
         f2.seed_from_text("independence test")
         f2.run(30)

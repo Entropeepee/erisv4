@@ -120,3 +120,20 @@ def test_full_turn_runs_without_llm_backend():
     assert "dissonance" in v and "dCdX" in v          # Tier 1.4 split
     assert res.specialist_source                       # a field bid won
     assert hasattr(orch, "_router_gate")               # Tier 0 SGT router gate
+
+
+# ── Tier 6: sine-aware resonant retrieval ────────────────────────────────
+def test_resonant_retrieval_returns_cosine_and_sine_sets():
+    """cosine (elastic) returns the near-duplicate; sine (plastic) returns the
+    coupled-but-unresolved 'teacher' — not the near-duplicate, not noise."""
+    import tempfile
+    from eris.memory.tiers import MemorySystem, MemoryRecord
+    from eris.computation.activations import BVec
+    m = MemorySystem(data_dir=tempfile.mkdtemp())
+    q = BVec(B=0.2, F=0.2, E=0.7, C=0.7, D=0.1, S=0.1)
+    m.ltm.store(MemoryRecord(text="ALIGNED", bvec=BVec(B=0.2, F=0.2, E=0.7, C=0.7, D=0.1, S=0.1)))
+    m.ltm.store(MemoryRecord(text="TENSION", bvec=BVec(B=0.8, F=0.2, E=0.5, C=0.2, D=0.8, S=0.3)))
+    m.ltm.store(MemoryRecord(text="UNRELATED", bvec=BVec(B=0.0, F=0.0, E=0.0, C=0.0, D=0.0, S=0.9)))
+    aligned, tension = m.retrieve_resonant(q, top_k=1, tension_k=1)
+    assert aligned and aligned[0].text == "ALIGNED"
+    assert tension and tension[0].text == "TENSION"   # sine surfaces the teacher

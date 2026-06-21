@@ -230,12 +230,22 @@ class ErisOrchestrator:
         # Tier 4.4: real (semantic-or-deterministic) embedding so the LTM
         # embedding retriever is actually exercised, not just BFECDS alignment.
         q_embedding = get_embedding(user_message)
-        memory_context = self.memory.retrieve(
-            query_bvec=input_bvec, query_embedding=q_embedding, top_k=5
+        # Tier 6: resonant retrieval — cosine (aligned/answer) AND sine
+        # (tension/learning). The tension set is coupled-but-unresolved memory:
+        # giving it to the LLM as "related but unresolved" is how Eris connects
+        # ideas instead of echoing the nearest neighbor.
+        aligned, tension = self.memory.retrieve_resonant(
+            query_bvec=input_bvec, query_embedding=q_embedding,
+            top_k=5, tension_k=2,
         )
         memory_text = "\n".join(
-            f"[{r.source}] {r.text[:200]}" for r in memory_context
-        ) if memory_context else ""
+            f"[{r.source}] {r.text[:200]}" for r in aligned
+        ) if aligned else ""
+        if tension:
+            memory_text += (
+                "\n\n[Related but unresolved — look for the hidden connection]\n"
+                + "\n".join(f"[{r.source}] {r.text[:160]}" for r in tension)
+            )
 
         # ── Layer 5: Set active goal ──────────────────────────────────
         self.goal_network.set_goal(user_message, input_bvec)
