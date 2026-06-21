@@ -44,6 +44,7 @@ from typing import Optional, Dict, Any, List
 import asyncio
 import time
 import os
+import re
 import numpy as np
 
 from eris.config import CONFIG, to_numpy
@@ -340,8 +341,17 @@ class ErisOrchestrator:
                 system=system_context or self._default_system_prompt(),
             )
 
+        # Lever 2: don't let a stale-training contradiction reach the user
+        # uncorrected. Only pays for a web check + re-gen on contradiction turns.
+        final_response_text = await self._ground_if_contradicting(
+            user_message,
+            (llm_response.text if llm_response else ""),
+            system_context,
+            prompt,
+        )
+
         if llm_response:
-            result.response_text = llm_response.text
+            result.response_text = final_response_text or llm_response.text
             result.reasoning_text = getattr(llm_response, 'reasoning', '')
             result.llm_provider = f"{llm_response.provider}/{llm_response.model}"
         else:
@@ -473,8 +483,74 @@ class ErisOrchestrator:
             "a cue to re-examine the premise or ask a clarifying question -- it "
             "is an internal-processing signal, not a verdict on whether the "
             "content is true. Verify factual claims against any GROUNDING "
-            "provided; if the premise is unsupported, say so."
+            "provided; if the premise is unsupported, say so.\n\n"
+            "IMPORTANT -- your knowledge has a cutoff. Your language ability comes "
+            "from a model trained up to a fixed date, so your built-in knowledge of "
+            "recent events, product releases, hardware, software versions, prices, "
+            "and other current facts may be OUT OF DATE. Do NOT confidently tell the "
+            "user that something recent does not exist, is fake, or hasn't been "
+            "released based on your training alone. If the user states a fact you "
+            "believe is false -- especially about hardware, software, or recent "
+            "events -- treat that as a signal that YOUR training is probably stale, "
+            "not that the user is wrong. Defer to the user or to any GROUNDING "
+            "provided rather than correcting them from memory, and state plainly when "
+            "you have nothing to check against."
         )
+
+    # Cheap pre-filter: phrases that signal Eris is denying / correcting the
+    # user. Kept tight to avoid false positives (needless searches).
+    _CONTRADICTION_MARKERS = re.compile(
+        r"(do(es)?\s+not\s+exist|don'?t\s+exist|no\s+such\b|not\s+a\s+real\b|"
+        r"isn'?t\s+(a\s+)?real\b|perhaps\s+you\s+mean|you\s+(probably\s+)?mean\b|"
+        r"you'?re\s+(probably\s+)?(mistaken|confusing)|that'?s\s+not\s+correct|"
+        r"hasn'?t\s+been\s+released|not\s+yet\s+(been\s+)?released|"
+        r"no\s+(current\s+)?product|i'?m\s+not\s+aware\s+of\s+any|"
+        r"there\s+is\s+no\s+such|that\s+model\s+do(es)?\s+not)",
+        re.IGNORECASE,
+    )
+
+    async def _ground_if_contradicting(self, user_message: str, response_text: str,
+                                       system_context: str, prompt: str) -> str:
+        """If Eris is about to CORRECT/CONTRADICT the user on a factual point,
+        verify the user's claim on the web first -- a confident "that doesn't
+        exist" is often just a stale-training artifact. Returns the (possibly
+        revised) response text. Any failure returns the original unchanged."""
+        if not response_text or not self._CONTRADICTION_MARKERS.search(response_text):
+            return response_text  # not a contradiction — leave the draft alone
+
+        try:
+            from eris.knowledge import research as research_cascade
+            bundle = await research_cascade.gather(
+                user_message, max_results=4, allow_expert=False
+            )
+        except Exception as e:
+            print(f"[ground-check] research failed (non-fatal): {e}")
+            return response_text
+
+        if not bundle.grounding:
+            return response_text  # found nothing — keep the draft, don't fabricate
+
+        grounded_prompt = (
+            f"{prompt}\n\n"
+            f"BEFORE YOU ANSWER: your draft told the user that something they said is "
+            f"wrong, fake, or doesn't exist. Your training has a cutoff and may be out "
+            f"of date, so this may be a stale-knowledge error. Here is current web "
+            f"information about the user's claim:\n\n{bundle.grounding}\n\n"
+            f"If these sources show the user is correct, ACCEPT it and answer "
+            f"accordingly -- do not keep insisting the thing doesn't exist. Only if the "
+            f"sources are genuinely silent or actually contradict the user may you say "
+            f"so, and then cite what you found."
+        )
+        print("[ground-check] contradiction detected -> grounded re-generation")
+        try:
+            revised = await self.mediator.generate(
+                prompt=grounded_prompt,
+                system=system_context or self._default_system_prompt(),
+            )
+            return revised.text if revised else response_text
+        except Exception as e:
+            print(f"[ground-check] regeneration failed (non-fatal): {e}")
+            return response_text
 
     async def run_dream_cycle(self) -> Dict[str, Any]:
         """Manually trigger a dreaming cycle.

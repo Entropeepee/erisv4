@@ -32,6 +32,12 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 SUPPORTED_EXT = (".txt", ".md", ".pdf", ".docx", ".json")
 
+# Bump this (or set ERIS_INGEST_VERSION) when the field physics / how documents
+# are processed changes — e.g. adding tan() alongside sin/cos. The library will
+# then re-ingest everything instead of skipping files it has seen before, so the
+# existing corpus is re-encoded under the new physics.
+INGEST_VERSION = os.environ.get("ERIS_INGEST_VERSION", "1")
+
 
 # ─────────────────────────────────────────────────────────── library location
 def library_dir() -> str:
@@ -194,8 +200,11 @@ class DocumentLibrary:
 
         base = display_name or os.path.basename(path)
         sha = _sha256(path)
-        if self.manifest.seen(sha) and not force:
-            prev = self.manifest.entries.get(sha, {})
+        prev = self.manifest.entries.get(sha, {})
+        # Skip only if we've seen this exact file AND it was ingested under the
+        # current physics version. A version bump re-ingests everything.
+        if (prev and not force
+                and prev.get("ingest_version") == INGEST_VERSION):
             return {"file": base, "skipped": True, "chunks": prev.get("chunks", 0)}
 
         blocks = extract_documents(path)
@@ -211,7 +220,7 @@ class DocumentLibrary:
             total += n
         info = {"file": base, "title": base, "chunks": total,
                 "blocks": len(blocks), "ingested_at": time.time(),
-                "path": path}
+                "path": path, "ingest_version": INGEST_VERSION}
         self.manifest.record(sha, info)
         # Let freshly-read documents flow up the memory tiers immediately.
         try:
