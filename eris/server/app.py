@@ -40,12 +40,25 @@ from eris.orchestrator import ErisOrchestrator
 from eris.sandbox.executor import SandboxExecutor
 from eris.knowledge.extractor import KnowledgeExtractor
 from eris.interface.tts import TTSEngine
+from eris.server.system_stats import get_system_stats
+from eris.memory.conversations import ConversationStore
+from eris.knowledge.study import StudyEngine
 from fastapi import Response
 
 
 class ChatRequest(BaseModel if HAS_FASTAPI else object):
     message: str = ""
     system_context: str = ""
+    conversation_id: str = ""
+
+class PonderRequest(BaseModel if HAS_FASTAPI else object):
+    question: str = ""
+
+class TopicsRequest(BaseModel if HAS_FASTAPI else object):
+    topics: list = []
+
+class StudyRunRequest(BaseModel if HAS_FASTAPI else object):
+    topics: list = []
 
 class OpenAIChatRequest(BaseModel if HAS_FASTAPI else object):
     model: str = "eris"
@@ -84,6 +97,11 @@ def create_app(
         version="4.0.0",
     )
 
+    # Tier 7: serve the cockpit's static assets (JS, portrait, Live2D model dir).
+    _static_dir = os.path.join(os.path.dirname(__file__), "static")
+    os.makedirs(_static_dir, exist_ok=True)
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
     # Core systems
     orchestrator = ErisOrchestrator(
         field_size=field_size,
@@ -97,6 +115,10 @@ def create_app(
     )
 
     tts_engine = TTSEngine()
+    conversations = ConversationStore(
+        data_dir=os.path.join(data_dir, "conversations"))
+    study = StudyEngine(extractor, orchestrator.memory, data_dir=data_dir,
+                        journal=orchestrator.dream_journal, mediator=orchestrator.mediator)
 
     # WebSocket connections for real-time metrics
     ws_connections: list = []
@@ -109,6 +131,14 @@ def create_app(
         result = await orchestrator.process(
             req.message, system_context=req.system_context
         )
+        # Tier 7: persist into a conversation thread for the history sidebar.
+        cid = req.conversation_id or conversations.new_thread(req.message)
+        try:
+            conversations.add_turn(cid, req.message, result.response_text,
+                                   meta={"regime": result.regime,
+                                         "archetype": result.archetype})
+        except Exception:
+            pass
 
         # Broadcast metrics to WebSocket clients
         vitals = orchestrator.get_vitals()
@@ -133,7 +163,62 @@ def create_app(
             "latency_ms": result.latency_ms,
             "contradiction_compiled": result.contradiction_compiled,
             "research_triggered": result.research_triggered,
+            "conversation_id": cid,
         }
+
+    # ── Tier 7 cockpit endpoints ─────────────────────────────────────────
+    @app.get("/api/system")
+    async def api_system():
+        """Host telemetry: CPU/RAM/GPU/VRAM/temperatures."""
+        return get_system_stats()
+
+    @app.get("/api/conversations")
+    async def api_conversations():
+        return {"conversations": conversations.list_threads()}
+
+    @app.get("/api/conversations/{cid}")
+    async def api_conversation(cid: str):
+        d = conversations.get_thread(cid)
+        return d or JSONResponse({"error": "not found"}, status_code=404)
+
+    @app.get("/api/dreams")
+    async def api_dreams():
+        return {"dreams": orchestrator.get_dreams(limit=60)}
+
+    @app.get("/api/dreams/{did}")
+    async def api_dream(did: str):
+        d = orchestrator.get_dream(did)
+        return d or JSONResponse({"error": "not found"}, status_code=404)
+
+    @app.post("/api/dream/ponder")
+    async def api_ponder(req: PonderRequest):
+        if not req.question.strip():
+            return JSONResponse({"error": "question required"}, status_code=400)
+        entry = await orchestrator.ponder(req.question.strip())
+        return entry
+
+    @app.get("/api/study/topics")
+    async def api_get_topics():
+        return {"topics": study.get_topics()}
+
+    @app.post("/api/study/topics")
+    async def api_set_topics(req: TopicsRequest):
+        return {"topics": study.set_topics(list(req.topics))}
+
+    @app.get("/api/study/reports")
+    async def api_study_reports():
+        return {"reports": study.list_reports(limit=60)}
+
+    @app.get("/api/study/reports/{rid}")
+    async def api_study_report(rid: str):
+        r = study.get_report(rid)
+        return r or JSONResponse({"error": "not found"}, status_code=404)
+
+    @app.post("/api/study/run")
+    async def api_study_run(req: StudyRunRequest):
+        topics = list(req.topics) or None
+        report = await asyncio.to_thread(study.study, topics)
+        return report
 
     @app.post("/v1/chat/completions")
     async def chat_completions(req: OpenAIChatRequest):
@@ -217,9 +302,30 @@ def create_app(
             except Exception as e:
                 print(f"[Dream Loop Error] {e}")
 
+    async def _nightly_learning_loop():
+        """Tier 7: once per day (default 03:00 local), study the topic list and
+        write a study report for the cockpit. Set ERIS_STUDY_HOUR to change the
+        hour; ERIS_STUDY_ENABLED=0 to disable."""
+        import datetime
+        if os.environ.get("ERIS_STUDY_ENABLED", "1") == "0":
+            return
+        hour = int(os.environ.get("ERIS_STUDY_HOUR", "3"))
+        last_day = None
+        while True:
+            now = datetime.datetime.now()
+            if now.hour == hour and now.date() != last_day:
+                last_day = now.date()
+                try:
+                    rep = await asyncio.to_thread(study.study)
+                    print(f"[Study] nightly session: {rep['total_chunks']} passages on {rep['topics']}")
+                except Exception as e:
+                    print(f"[Study Error] {e}")
+            await asyncio.sleep(300)  # check every 5 min
+
     @app.on_event("startup")
     async def startup_event():
         asyncio.create_task(_periodic_dream_loop())
+        asyncio.create_task(_nightly_learning_loop())
 
     @app.get("/api/tts/voices")
     async def get_tts_voices():

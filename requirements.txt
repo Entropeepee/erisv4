@@ -9,6 +9,8 @@ numpy>=1.24
 fastapi>=0.104
 uvicorn>=0.24
 httpx>=0.25
+psutil>=5.9          # cockpit system vitals (CPU/RAM)
+# wmi>=1.5            # (Windows only) CPU temperature via LibreHardwareMonitor
 
 # GPU ACCELERATION (RTX 5080 / CUDA 13.2)
 # Uncomment when CUDA toolkit is installed:

@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eris Echo — Cockpit</title>
+<style>
+:root{
+  --bg:#07080d; --panel:#10131c; --panel2:#161a26; --line:#232838;
+  --ink:#e7ecf5; --dim:#8b93a7; --faint:#5a6276;
+  --accent:#7dd3fc; --plastic:#fb7185; --elastic:#60a5fa; --ok:#4ade80; --warn:#fbbf24;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);
+  display:grid;grid-template-columns:248px 1fr 360px;grid-template-rows:46px 1fr;
+  height:100vh;overflow:hidden;gap:1px;background:var(--line)}
+header{grid-column:1/-1;background:var(--panel);display:flex;align-items:center;gap:14px;padding:0 16px}
+header .title{font-weight:700} header .title b{color:var(--accent)}
+header .sub{color:var(--faint);font-size:11px;font-family:var(--mono)}
+header .spacer{flex:1}
+.status{font-size:12px;color:var(--ok);font-family:var(--mono)} .status.off{color:var(--plastic)}
+button{font-family:var(--sans);cursor:pointer}
+.btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:6px 11px;font-size:12px}
+.btn:hover{border-color:var(--accent)} .btn.accent{background:var(--accent);color:#04121b;border:0;font-weight:700}
+
+/* ---- left: history ---- */
+aside.hist{background:var(--panel);overflow-y:auto;display:flex;flex-direction:column}
+.hist .top{padding:12px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
+.hist h4,.col h4,.panel h4{margin:0 0 8px;font-size:10px;text-transform:uppercase;letter-spacing:.13em;color:var(--faint);font-weight:600}
+.conv{padding:9px 12px;border-bottom:1px solid var(--line);cursor:pointer}
+.conv:hover{background:var(--panel2)} .conv.on{background:var(--panel2);border-left:2px solid var(--accent)}
+.conv .t{font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conv .d{font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.conv .meta{font-size:10px;color:var(--faint);font-family:var(--mono);margin-top:3px}
+
+/* ---- center: avatar + chat ---- */
+.col{background:var(--bg);display:flex;flex-direction:column;overflow:hidden}
+.avatar-wrap{height:230px;min-height:230px;position:relative;background:radial-gradient(ellipse at center,#0c1018 0%,#06070c 100%);
+  display:flex;align-items:center;justify-content:center;border-bottom:1px solid var(--line);overflow:hidden}
+#live2d{position:absolute;inset:0;width:100%;height:100%}
+#portrait{max-height:200px;max-width:80%;border-radius:12px;transition:transform .08s linear, filter .25s ease;
+  filter:drop-shadow(0 0 18px rgba(125,211,252,.25))}
+.emotion-badge{position:absolute;top:8px;left:10px;font-family:var(--mono);font-size:11px;color:var(--dim);
+  background:rgba(7,8,13,.6);border:1px solid var(--line);border-radius:7px;padding:3px 8px}
+.chat{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:86%;padding:9px 13px;border-radius:12px;font-size:14px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word}
+.msg.user{align-self:flex-end;background:#1c2740;color:#cfe3ff}
+.msg.eris{align-self:flex-start;background:var(--panel2);border:1px solid var(--line)}
+.msg .mm{font-size:10px;color:var(--faint);font-family:var(--mono);margin-top:5px}
+.composer{border-top:1px solid var(--line);padding:10px;background:var(--panel)}
+.composer .row{display:flex;gap:8px}
+textarea#in{flex:1;resize:none;height:42px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+  border-radius:8px;padding:10px;font-family:var(--sans);font-size:14px}
+.voicebar{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;font-size:12px;color:var(--dim)}
+select,input[type=range]{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:4px}
+
+/* ---- right: stacked panels ---- */
+aside.right{background:var(--panel);overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
+.panel{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px}
+.panel .hdr{display:flex;align-items:center;gap:8px} .panel .hdr .spacer{flex:1}
+.kv{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12px}
+.kv:last-child{border-bottom:0} .kv .k{color:var(--dim)} .kv .v{color:var(--ink)}
+.bar{height:6px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:3px}
+.bar > i{display:block;height:100%;background:var(--accent);width:0%}
+.bar.warn > i{background:var(--warn)} .bar.hot > i{background:var(--plastic)}
+#fieldcv{width:100%;background:#05060a;border-radius:7px;image-rendering:pixelated;aspect-ratio:1}
+.item{padding:8px;border-bottom:1px solid var(--line);cursor:pointer;font-size:12px}
+.item:hover{background:var(--panel)} .item .s{color:var(--ink)} .item .when{color:var(--faint);font-size:10px;font-family:var(--mono);margin-top:2px}
+.item .q{color:var(--warn);font-size:11px;margin-top:2px}
+.muted{color:var(--faint);font-size:11px}
+/* modal */
+.modal{position:fixed;inset:0;background:rgba(2,3,6,.7);display:none;align-items:center;justify-content:center;z-index:50}
+.modal.on{display:flex}
+.modal .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;max-width:680px;width:90%;max-height:80vh;overflow-y:auto;padding:20px}
+.modal h3{margin:0 0 6px} .modal pre{white-space:pre-wrap;word-wrap:break-word;font-family:var(--sans);font-size:13px;line-height:1.6;color:var(--ink)}
+.modal .src a{color:var(--accent);font-size:11px;display:block;margin-top:3px;word-break:break-all}
+.tabs{display:flex;gap:4px;margin-bottom:6px}
+.tab{font-size:11px;padding:4px 9px;border-radius:6px;background:var(--panel);border:1px solid var(--line);color:var(--dim)}
+.tab.on{background:var(--accent);color:#04121b;font-weight:700;border:0}
+</style></head>
+<body>
+
+<header>
+  <div class="title">Eris Echo <b>Cockpit</b></div>
+  <div class="sub" id="provider">—</div>
+  <div class="spacer"></div>
+  <div id="conn" class="status off">connecting…</div>
+</header>
+
+<!-- LEFT: conversation history -->
+<aside class="hist">
+  <div class="top"><button class="btn accent" style="width:100%" onclick="newChat()">+ New conversation</button></div>
+  <div id="convs"></div>
+</aside>
+
+<!-- CENTER: avatar + chat -->
+<section class="col">
+  <div class="avatar-wrap">
+    <canvas id="live2d"></canvas>
+    <img id="portrait" src="/static/eris_portrait.png" alt="Eris" onerror="this.style.display='none'">
+    <div class="emotion-badge" id="emotion">idle</div>
+  </div>
+  <div class="chat" id="chat"></div>
+  <div class="composer">
+    <div class="row">
+      <textarea id="in" placeholder="Talk to Eris…  (Enter to send, Shift+Enter for newline)"></textarea>
+      <button class="btn accent" onclick="send()">Send</button>
+    </div>
+    <div class="voicebar">
+      <label><input type="checkbox" id="speak" checked> Speak</label>
+      <span>Voice</span><select id="voice"></select>
+      <span>Vol</span><input type="range" id="vol" min="0" max="1" step="0.05" value="1">
+      <span id="llm" class="muted">llm: checking…</span>
+    </div>
+  </div>
+</section>
+
+<!-- RIGHT: panels -->
+<aside class="right">
+  <div class="panel">
+    <div class="tabs">
+      <div class="tab on" data-v="field">Field</div><div class="tab" data-v="phase">Phase</div>
+      <div class="tab" data-v="coher">Coherence</div><div class="tab" data-v="regime">Plastic</div>
+    </div>
+    <div class="hdr"><h4 style="margin:0">Living Field</h4><span class="spacer"></span>
+      <button class="btn" title="Pop out larger" onclick="window.open('/visualizer','eris_vis','width=820,height=900')">⤢ pop&nbsp;out</button></div>
+    <canvas id="fieldcv" width="220" height="220"></canvas>
+  </div>
+
+  <div class="panel">
+    <h4>Cognitive Vitals</h4>
+    <div class="kv"><span class="k">regime</span><span class="v" id="v-regime">—</span></div>
+    <div class="kv"><span class="k">coherence C</span><span class="v" id="v-coh">—</span></div>
+    <div class="kv"><span class="k">dC/dX</span><span class="v" id="v-dcdx">—</span></div>
+    <div class="kv"><span class="k">dissonance (sine)</span><span class="v" id="v-diss">—</span></div>
+    <div class="kv"><span class="k">archetype</span><span class="v" id="v-arch">—</span></div>
+    <div class="kv"><span class="k">memory (S/M/L)</span><span class="v" id="v-mem">—</span></div>
+  </div>
+
+  <div class="panel">
+    <h4>System Vitals</h4>
+    <div class="kv"><span class="k">CPU</span><span class="v" id="s-cpu">—</span></div><div class="bar" id="b-cpu"><i></i></div>
+    <div class="kv"><span class="k">RAM</span><span class="v" id="s-ram">—</span></div><div class="bar" id="b-ram"><i></i></div>
+    <div class="kv"><span class="k">GPU</span><span class="v" id="s-gpu">—</span></div><div class="bar" id="b-gpu"><i></i></div>
+    <div class="kv"><span class="k">VRAM</span><span class="v" id="s-vram">—</span></div><div class="bar" id="b-vram"><i></i></div>
+    <div class="kv"><span class="k">temps (CPU/GPU)</span><span class="v" id="s-temp">—</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="hdr"><h4 style="margin:0">Dreams &amp; Reflection</h4><span class="spacer"></span>
+      <button class="btn" onclick="dreamPrompt()">＋ ponder…</button></div>
+    <div id="dreams"></div>
+  </div>
+
+  <div class="panel">
+    <div class="hdr"><h4 style="margin:0">Studied Recently</h4><span class="spacer"></span>
+      <button class="btn" onclick="editTopics()">topics</button>
+      <button class="btn" onclick="studyNow()">study now</button></div>
+    <div id="study"></div>
+  </div>
+</aside>
+
+<div class="modal" id="modal" onclick="if(event.target===this)closeModal()">
+  <div class="box"><h3 id="m-title"></h3><div class="muted" id="m-when"></div><pre id="m-body"></pre><div class="src" id="m-src"></div>
+    <div style="margin-top:14px;text-align:right"><button class="btn" onclick="closeModal()">close</button></div></div>
+</div>
+
+<script src="/static/cockpit.js"></script>
+</body></html>
