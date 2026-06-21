@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 node_modules/
 .env
+
+# Tier 5 grokking experiment artifacts
+grok_kb/
+grok_experiment_results.json

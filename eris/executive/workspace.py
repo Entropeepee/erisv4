@@ -110,16 +110,21 @@ class TransfixionDetector:
         if len(self._dCdX_history) < self.history_length // 2:
             return False
 
-        # PRIMARY: Conservation law check
-        # dC/dX near zero while coherence is high = transfixion
-        recent_dCdX = list(self._dCdX_history)[-5:]
-        recent_C = list(self._coherence_history)[-5:]
-        mean_abs_dCdX = np.mean([abs(x) for x in recent_dCdX])
-        mean_C = np.mean(recent_C)
-
+        # PRIMARY (Tier 1.3): the SGT stagnation gate is the decision authority,
+        # not a hardcoded `dCdX_stagnation_threshold`. SGT z-scoring is
+        # scale-adaptive (works whether C is 0.04 or 0.8), so the detector no
+        # longer depends on magic constants tuned for a since-replaced engine.
+        # Transfixion = the latest |dC/dX| is a significant LOW outlier
+        # (stagnation) while coherence sits at/above its own median.
+        cur = abs(self._dCdX_history[-1])
+        gate_open, _z = self._stagnation_gate.update(cur)
+        c_hist = list(self._coherence_history)
+        c_now = c_hist[-1] if c_hist else 0.0
+        c_med = float(np.median(c_hist)) if c_hist else 0.0
         conservation_transfixed = (
-            mean_abs_dCdX < self.dCdX_stagnation_threshold and
-            mean_C > 0.5  # High coherence but no exchange
+            gate_open
+            and cur < self._stagnation_gate.running_mean  # LOW outlier, not high
+            and c_now >= c_med                              # coherence not collapsing
         )
 
         # SECONDARY: BFECDS diversity check
@@ -138,22 +143,32 @@ class TransfixionDetector:
 
         return conservation_transfixed or diversity_transfixed
 
-    def check_hallucination_signature(self, bvec: BVec,
-                                       coherence: float,
-                                       tau_rms: float,
-                                       dCdX: float = 0.0) -> bool:
-        """Direct check for hallucination.
+    def check_empty_confidence_signature(self, bvec: BVec,
+                                          coherence: float,
+                                          tau_rms: float,
+                                          dCdX: float = 0.0) -> bool:
+        """Internal-metacognition signal: high coherence with no exchange.
 
-        Conservation law version:
-            dC/dX ≈ 0 + high C + low tau = fake confidence
-        BFECDS version (backup):
-            high phi + low tau + low E = no genuine processing
+        Remediation Tier 1.1 — this was named `check_hallucination_signature`,
+        but it does NOT detect factual hallucination. A fluent fabrication is
+        internally coherent by construction, so field coherence cannot tell you
+        whether a claim matches the world (that is a GROUNDING failure, caught in
+        Tier 4). What this DOES detect is "empty confidence": the field reports
+        coherence while exchanging nothing with the input. Route its output to
+        internal metacognition (nudge the dream loop / re-query) — never to a
+        user-facing "this is a hallucination" claim.
+
+        Conservation-law form:  |dC/dX| ~ 0 + high C            -> empty confidence
+        BFECDS backup form:     high C + low tau + low Emergence -> no processing
         """
-        # Conservation law check (primary)
         if abs(dCdX) < 0.003 and coherence > 0.7:
             return True
-        # BFECDS check (secondary)
         return coherence > 0.7 and tau_rms < 0.05 and bvec.E < 0.1
+
+    # Backwards-compatible alias (deprecated name; do not re-bolt as a fact-checker).
+    def check_hallucination_signature(self, bvec: BVec, coherence: float,
+                                      tau_rms: float, dCdX: float = 0.0) -> bool:
+        return self.check_empty_confidence_signature(bvec, coherence, tau_rms, dCdX)
 
     def reset(self) -> None:
         self._bvec_history.clear()
@@ -250,13 +265,13 @@ class MoEGate:
 
         # Record for transfixion tracking
         is_stuck = self.transfixion_detector.is_transfixed(field=field, input_text=input_text)
-        hallucinating = False
+        empty_confidence = False
         if self.goal_bvec:
-            hallucinating = self.transfixion_detector.check_hallucination_signature(
+            empty_confidence = self.transfixion_detector.check_empty_confidence_signature(
                 self.goal_bvec, coherence, tau_rms, dCdX
             )
 
-        if is_stuck or hallucinating:
+        if is_stuck or empty_confidence:
             # Override: inject novelty to break the attentional loop
             winner = max(findings, key=lambda f: f.bvec.E)
         else:

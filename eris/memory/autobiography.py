@@ -173,13 +173,29 @@ class Autobiography:
         """Get all entries logged in this session."""
         return list(self._entries_today)
 
-    def get_high_torsion(self, threshold: float = 0.3) -> List[AutobiographyEntry]:
+    def get_high_torsion(self, threshold: float = 0.3,
+                         include_persisted: bool = False,
+                         max_persisted: int = 200) -> List[AutobiographyEntry]:
         """Get entries with high dissonance — candidates for dreaming loop.
 
         The metacognition loop selects high-torsion memories for re-processing.
         High dissonance = genuine information processing was happening.
+
+        Remediation Tier 2.1: with ``include_persisted=True`` this also scans the
+        most recent persisted entries from disk (deduped against this session's
+        in-memory entries), so a restart no longer forgets prior-session
+        tensions. The autobiography is already persisted on every write
+        (append-only JSONL); this is the matching load path the dream loop uses.
         """
-        return [e for e in self._entries_today if e.dissonance > threshold]
+        entries: List[AutobiographyEntry] = list(self._entries_today)
+        if include_persisted:
+            seen = {(e.timestamp, e.input_text) for e in entries}
+            for e in self.load_all()[-max_persisted:]:
+                key = (e.timestamp, e.input_text)
+                if key not in seen:
+                    entries.append(e)
+                    seen.add(key)
+        return [e for e in entries if e.dissonance > threshold]
 
     def load_all(self) -> List[AutobiographyEntry]:
         """Load full autobiography from disk."""

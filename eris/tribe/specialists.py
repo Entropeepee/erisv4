@@ -144,3 +144,30 @@ def should_trigger_research(bvec: BVec) -> bool:
     """Research fires when C > 0.4 AND E > 0.2 — genuine criticality
     combined with emergence signal. Without both, log and move on."""
     return bvec.C > 0.4 and bvec.E > 0.2
+
+
+def make_field_finding(specialist: Specialist, field_bvec: BVec) -> SpecialistFinding:
+    """Build a specialist finding from the FIELD signature (Remediation Tier 3-A).
+
+    The previous build set every finding's content to
+    ``f"[{name}] Analysis of: {user_message[:100]}"`` — it echoed the user's
+    words with a name attached and added nothing, so the MoEGate scored
+    placeholder text.
+
+    Here the finding IS the specialist's field signature: the live field BFECDS
+    projected onto the specialist's domain sensitivity (element-wise). The
+    projected vector is the bid, its magnitude is the bid strength, and its
+    dominant domains name what the specialist 'sees'. Free at runtime (no LLM
+    call), fast on CPU, and it makes the MoEGate's wave-interference selection
+    operate on real field projections instead of placeholder echoes.
+    """
+    bid = field_bvec.elementwise(specialist.sensitivity_bvec)
+    strength = bid.magnitude()
+    top = bid.dominant_domains(k=2)
+    text = f"{specialist.name}: {strength:.3f} bid on {'+'.join(top)}"
+    return SpecialistFinding(
+        specialist_id=specialist.id,
+        content=text,
+        bvec=bid,
+        confidence=strength,
+    )

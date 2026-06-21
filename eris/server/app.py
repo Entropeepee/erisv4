@@ -184,7 +184,7 @@ def create_app(
     @app.get("/questions")
     async def questions():
         """Pending questions from the metacognition loop."""
-        return {"questions": orchestrator.get_pending_questions()}
+        return {"questions": orchestrator.drain_pending_questions()}
 
     @app.post("/sandbox")
     async def sandbox_exec(req: SandboxRequest):

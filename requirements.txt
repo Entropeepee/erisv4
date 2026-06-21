@@ -25,3 +25,15 @@ httpx>=0.25
 
 # TESTING
 pytest>=8.0
+
+# ── Remediation v4.1 additions ──────────────────────────────
+# Knowledge / grounding stack. The local instance runs WITHOUT any of these:
+#   * web_search & web_reader use only the Python standard library (urllib).
+#   * embeddings default to a fast deterministic fallback (no model needed).
+#   * ask_expert is dormant until ANTHROPIC_API_KEY is set.
+# Install these only to UPGRADE a capability:
+#
+# Real semantic embeddings (set ERIS_EMBEDDINGS=on to activate):
+# sentence-transformers>=2.3
+# External research oracle (set ANTHROPIC_API_KEY to activate):
+# anthropic>=0.39

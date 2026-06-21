@@ -42,6 +42,7 @@ import math
 import numpy as np
 
 from eris.computation.activations import BVec, bvec_cosine, bvec_distance
+from eris.memory.interference import _csba_coupling_geometry
 from eris.computation.sgt import SGTGate
 from eris.config import CONFIG
 
@@ -144,6 +145,20 @@ class ShortTermMemory:
 
     def get_recent(self, n: int = 5) -> List[MemoryRecord]:
         return list(self._buffer)[-n:]
+
+    def novelty(self, bvec: BVec) -> float:
+        """BFECDS novelty of `bvec` vs the rest of STM (Remediation Tier 2.4).
+
+        Returns ``1 - max cosine similarity`` to existing records. This is a
+        DIRECTION-aware distance: two different memories that happen to share the
+        same total activation no longer collide (the old `sum(as_array())`
+        scalar treated them as identical). 1.0 = wholly novel, 0.0 = duplicate.
+        """
+        others = list(self._buffer)
+        if not others:
+            return 1.0
+        sims = [bvec_cosine(bvec, r.bvec) for r in others]
+        return float(1.0 - max(sims)) if sims else 1.0
 
     @property
     def size(self) -> int:
@@ -374,6 +389,53 @@ class MemorySystem:
             
         return results
 
+    def retrieve_resonant(self, query_bvec: BVec,
+                          query_embedding: Optional[np.ndarray] = None,
+                          top_k: int = 5, tension_k: int = 2):
+        """Resonant retrieval — cosine AND sine (Remediation Tier 6).
+
+        Eris's conservation law is cos^2(theta) + sin^2(theta) = 1:
+          * cos^2 (ELASTIC coupling) = what is already aligned/resolved — the
+            memories that directly *answer* the query. This is ordinary
+            similarity retrieval.
+          * sin^2 (PLASTIC coupling) = the orthogonal, unresolved component —
+            memories that are strongly *coupled* to the query but in tension
+            with it. This is the Emergence channel: where new structure forms
+            under orthogonal pressure. Plain cosine RAG throws this away and
+            returns only redundant near-duplicates.
+
+        Returns ``(aligned, tension)``:
+          * ``aligned`` — the usual relevance set (cosine / elastic + embedding).
+          * ``tension`` — coupled-but-unresolved memories ranked by PLASTIC
+            energy (sin^2 * coupling, so unrelated memories score ~0 and never
+            surface). Feeding these to the LLM as "related-but-unresolved" is
+            how Eris learns more from the input and makes non-obvious
+            connections instead of parroting the nearest neighbor.
+        """
+        aligned = self.retrieve(query_bvec=query_bvec,
+                                query_embedding=query_embedding, top_k=top_k)
+        seen_text = {r.text for r in aligned}
+
+        pool = (self.stm.get_all()
+                + self.mtm.get_fresh(min_freshness=0.05)
+                + self.ltm._records)
+        scored = []
+        for r in pool:
+            if r.text in seen_text:
+                continue
+            ir = _csba_coupling_geometry(query_bvec, r.bvec)
+            # learning value = sin^2 coupling. Because coupling weights it, a
+            # memory must actually be related (shared active domains) to score —
+            # this is "productive dissonance", not noise.
+            if ir.plastic_energy > 1e-6:
+                scored.append((r, ir.plastic_energy))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        tension = []
+        for r, _ in scored[:tension_k]:
+            if r.text not in seen_text:
+                tension.append(r); seen_text.add(r.text)
+        return aligned, tension
+
     def consolidate(self) -> Dict[str, int]:
         """SGT-gated consolidation: promote worthy memories up tiers.
 
@@ -387,9 +449,20 @@ class MemorySystem:
         promoted_to_ltm = 0
 
         # STM → MTM
+        mtm_attractors = self.mtm.get_fresh(min_freshness=0.01)
         for rec in self.stm.get_all():
-            # Novelty = how different is this from the running average?
-            novelty = sum(rec.bvec.as_array())  # Simple signal strength
+            # Novelty = BFECDS distance from the nearest existing MTM attractor
+            # (Tier 2.4 — direction-aware, not a scalar activation sum). A turn
+            # that points somewhere genuinely new promotes; a near-duplicate of
+            # something already stored does not.
+            if mtm_attractors:
+                nearest_sim = max(
+                    (bvec_cosine(rec.bvec, m.bvec) for m in mtm_attractors),
+                    default=0.0,
+                )
+                novelty = 1.0 - nearest_sim
+            else:
+                novelty = 1.0  # MTM empty — everything is novel
             should_promote, _ = self._stm_to_mtm_gate.update(novelty)
             if should_promote:
                 self.mtm.store(rec)
@@ -412,4 +485,13 @@ class MemorySystem:
                 self.ltm.store(rec)
                 promoted_to_ltm += 1
 
-        return {"stm_to_mtm": promoted_to_mtm, "mtm_to_ltm": promoted_to_ltm}
+        # Prune dead MTM memories (Tier 2.2). `prune()` existed but was never
+        # invoked, so freshness<0.01 records accumulated unbounded. Run it as
+        # part of every consolidation pass.
+        pruned = self.mtm.prune()
+
+        return {
+            "stm_to_mtm": promoted_to_mtm,
+            "mtm_to_ltm": promoted_to_ltm,
+            "mtm_pruned": pruned,
+        }

@@ -16,8 +16,7 @@ import pytest
 class TestValidator:
     def test_safe_code_passes(self):
         from eris.sandbox.validator import validate_code
-        ok, msg = validate_code("import numpy as np
-from eris.config import to_numpy, xp\nprint(np.pi)")
+        ok, msg = validate_code("import numpy as np\nfrom eris.config import to_numpy, xp\nprint(np.pi)")
         assert ok, msg
 
     def test_blocked_import_os(self):

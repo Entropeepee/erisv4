@@ -348,18 +348,37 @@ class FractalField:
         return field
 
     def detect_regime(self) -> str:
-        """Determines cognitive phase based on dC/dX ratio."""
-        if len(self._dCdX_history) < 5:
+        """Internal information-processing regime — NOT a hallucination flag.
+
+        Remediation Tier 1.2: the old logic used absolute thresholds
+        (`mean_abs < 0.01 and tau_rms < 0.01`) tuned for a since-replaced
+        advection PDE. On the BCDC Kuramoto engine tau_rms lives ~0.1 and never
+        drops below 0.01, so "transfixed" was unreachable and the regime stayed
+        pinned at "elastic". We now calibrate against THIS engine's own running
+        dC/dX distribution (self-calibrating percentiles), so the regime varies
+        meaningfully regardless of the engine's absolute scale.
+
+        This signal tells you whether the field is stuck / under-coupled, not
+        whether a claim is factually true — factual hallucination is a grounding
+        failure handled in Tier 4 (knowledge), orthogonal to field coherence.
+        """
+        if len(self._dCdX_history) < 8:
             return "warmup"
-        recent_dCdX = self._dCdX_history[-5:]
-        mean_abs = np.mean([abs(x) for x in recent_dCdX])
-        recent_tau_rms = float(to_numpy(xp.sqrt(xp.mean(self.tau ** 2))))
-        if mean_abs < 0.01 and recent_tau_rms < 0.01:
-            return "transfixed"
-        elif mean_abs > 0.5:
-            return "plastic"
+        hist = [abs(x) for x in self._dCdX_history]
+        cur = hist[-1]
+        lo = float(np.percentile(hist, 20))
+        hi = float(np.percentile(hist, 80))
+        c_hist = self._coherence_history
+        c_stable = (
+            len(c_hist) >= 5 and
+            float(np.std(c_hist[-5:])) < 0.25 * (float(np.mean(c_hist[-5:])) + 1e-9)
+        )
+        if cur <= lo and c_stable:
+            return "transfixed"   # dC/dX in its own low tail + flat coherence = stuck / under-coupled
+        elif cur >= hi:
+            return "plastic"      # dC/dX in its own high tail = genuine restructuring
         else:
-            return "elastic"
+            return "elastic"      # mid-range = smooth incremental update
 
     def clone(self) -> "FractalField":
         import copy
@@ -376,11 +395,14 @@ class FractalField:
         new_field._flux_theta = xp.copy(self._flux_theta)
         new_field._lc = xp.copy(self._lc)
         new_field.step_count = self.step_count
-        new_field._C_hist = self._C_hist.copy()
-        new_field._X_hist = self._X_hist.copy()
-        new_field._coherence_history = self._coherence_history.copy()
-        new_field._exchange_history = self._exchange_history.copy()
-        new_field._dCdX_history = self._dCdX_history.copy()
+        # NOTE: the real history attributes are _coherence_history /
+        # _exchange_history / _dCdX_history. The previous clone() also copied
+        # non-existent `_C_hist` / `_X_hist`, which raised AttributeError every
+        # time clone() ran — and clone() runs on every turn via
+        # probe_reactivity() -> the transfixion check. That crash is removed.
+        new_field._coherence_history = list(self._coherence_history)
+        new_field._exchange_history = list(self._exchange_history)
+        new_field._dCdX_history = list(self._dCdX_history)
         return new_field
 
     def probe_reactivity(self, input_text: str = "", use_frt: bool = False, steps: int = 12):

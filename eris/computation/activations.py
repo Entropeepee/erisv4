@@ -109,6 +109,29 @@ class BVec:
         return {"B": self.B, "F": self.F, "E": self.E,
                 "C": self.C, "D": self.D, "S": self.S}
 
+    def elementwise(self, other: "BVec") -> "BVec":
+        """Per-domain product with another BVec.
+
+        Used for domain-projected specialist bids (Remediation Tier 3-A):
+        projecting the live field vector onto a specialist's sensitivity vector
+        yields that specialist's real field signature.
+        """
+        return BVec(
+            B=self.B * other.B, F=self.F * other.F, E=self.E * other.E,
+            C=self.C * other.C, D=self.D * other.D, S=self.S * other.S,
+        )
+
+    def magnitude(self) -> float:
+        """L2 magnitude of the activation vector (bid strength)."""
+        return float(np.linalg.norm(self.as_array()))
+
+    def dominant_domains(self, k: int = 2) -> list:
+        """Names of the k most-active domains, strongest first."""
+        names = ["B", "F", "E", "C", "D", "S"]
+        arr = self.as_array()
+        order = list(np.argsort(arr)[::-1][:max(1, k)])
+        return [names[int(i)] for i in order]
+
     @classmethod
     def from_array(cls, arr) -> "BVec":
         """Create from a 6-element array."""
