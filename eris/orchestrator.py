@@ -349,7 +349,12 @@ class ErisOrchestrator:
         result.archetype = response_bvec.archetype()
 
         # ── Layer 4: Detect dissonance (SGT-gated) ───────────────────
+        # NOTE (Tier 1.4): `dissonance` is the BFECDS distance between input and
+        # response vectors (input<->response coupling). It is a DIFFERENT quantity
+        # from `dCdX` (the conservation-law ratio). They are surfaced as two
+        # separate fields in get_vitals()/the UI -- do not conflate them.
         result.dissonance = bvec_distance(input_bvec, response_bvec)
+        self._last_dissonance = result.dissonance
         should_compile, z_score = self._dissonance_gate.update(result.dissonance)
 
         if should_compile:
@@ -435,7 +440,7 @@ class ErisOrchestrator:
         regime_desc = {
             "elastic": "processing smoothly",
             "plastic": "actively restructuring understanding",
-            "transfixed": "WARNING: may be generating without genuine processing",
+            "transfixed": "the field is stuck / under-coupled on some channel — re-examine or ask for clarification",
             "warmup": "still calibrating",
         }.get(regime, "unknown state")
 
@@ -455,8 +460,11 @@ class ErisOrchestrator:
             "You have been given a specialist analysis, memory context, "
             "and cognitive state assessment. Use these to formulate your "
             "response. Be direct, thoughtful, and honest. If the cognitive "
-            "state indicates transfixion, acknowledge uncertainty rather "
-            "than generating a confident-sounding response."
+            "state indicates the field is stuck or under-coupled, treat that as "
+            "a cue to re-examine the premise or ask a clarifying question -- it "
+            "is an internal-processing signal, not a verdict on whether the "
+            "content is true. Verify factual claims against any GROUNDING "
+            "provided; if the premise is unsupported, say so."
         )
 
     async def run_dream_cycle(self) -> Dict[str, Any]:
@@ -482,7 +490,11 @@ class ErisOrchestrator:
             "field_step_count": self.field.step_count,
             "coherence": self.field.coherence,
             "exchange": self.field.exchange,
+            # Tier 1.4: dCdX (conservation-law ratio) and dissonance (input<->response
+            # BFECDS distance) are DISTINCT quantities — surfaced separately so the
+            # UI stops mislabeling dC/dX as "Dissonance".
             "dCdX": self.field.dCdX,
+            "dissonance": self._last_dissonance,
             "regime": self.field.detect_regime(),
             "current_bvec": self.field.compute_bvec().as_dict(),
             "archetype": self.field.compute_bvec().archetype(),
