@@ -546,6 +546,20 @@ class MemorySystem:
             hits.sort(key=lambda r: cosine(query_embedding, r.embedding), reverse=True)
         return hits[:max_chunks]
 
+    def max_similarity(self, embedding) -> float:
+        """Highest cosine similarity of `embedding` to anything stored, across
+        all tiers. Used by federation to gate an insight as novel vs the pool."""
+        if embedding is None:
+            return 0.0
+        best = 0.0
+        for rec in (list(self.stm.get_all()) + list(self.mtm._records)
+                    + list(self.ltm._records)):
+            if rec.embedding is not None:
+                s = cosine(embedding, rec.embedding)
+                if s > best:
+                    best = s
+        return best
+
     def consolidate(self) -> Dict[str, int]:
         """SGT-gated consolidation: promote worthy memories up tiers.
 

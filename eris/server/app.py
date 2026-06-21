@@ -132,6 +132,15 @@ def create_app(
     author = DocumentAuthor(orchestrator.mediator,
                             out_dir=os.path.join(_lib_dir(), "generated"))
 
+    # WILLOW Part I — the multi-node collective: the pool is orchestrator.memory;
+    # 'eris' is the OverSoul, 'willow' a companion node. Unreal addresses nodes
+    # by `model` name. Single-Eris behaviour is unchanged (eris is the default).
+    from eris.agents.registry import build_default_registry
+    from eris.agents.backends import build_backends
+    agent_backends = build_backends()
+    registry = build_default_registry(orchestrator, data_dir=data_dir,
+                                      field_size=field_size)
+
     # WebSocket connections for real-time metrics
     ws_connections: list = []
 
@@ -319,7 +328,9 @@ def create_app(
 
     @app.post("/v1/chat/completions")
     async def chat_completions(req: OpenAIChatRequest):
-        """OpenAI-compatible chat completions endpoint for NVIDIA ACE."""
+        """OpenAI-compatible endpoint. Routes by `model` to a node (WILLOW I.5):
+        model:"willow" -> the Willow node, model:"eris" (default) -> the OverSoul.
+        Used by NVIDIA ACE and the Unreal NPC plugins."""
         message_text = ""
         system_context = ""
         for msg in req.messages:
@@ -328,9 +339,13 @@ def create_app(
             elif msg.get("role") == "user":
                 message_text += msg.get("content", "") + "\n"
 
-        result = await orchestrator.process(
-            message_text.strip(), system_context=system_context.strip()
-        )
+        agent = registry.get(req.model)
+        if agent is not None and agent.name != "eris":
+            reply = await agent.respond(message_text.strip(), agent_backends)
+        else:
+            result = await orchestrator.process(
+                message_text.strip(), system_context=system_context.strip())
+            reply = result.response_text
 
         return {
             "id": "chatcmpl-eris",
@@ -339,18 +354,29 @@ def create_app(
             "model": req.model,
             "choices": [{
                 "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": result.response_text,
-                },
+                "message": {"role": "assistant", "content": reply},
                 "finish_reason": "stop"
             }],
-            "usage": {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0
-            }
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         }
+
+    @app.get("/agents")
+    async def api_agents():
+        """List nodes (debug / Unreal config)."""
+        return {"agents": [
+            {"name": a.name, "backend": a.backend_id, "has_field": a.has_field}
+            for a in registry.agents.values()]}
+
+    @app.get("/health")
+    async def health():
+        """Lets the Llama-Unreal / NPC plugins connect cleanly."""
+        return {"status": "ok"}
+
+    @app.get("/props")
+    async def props():
+        """Minimal llama.cpp-style props stub for NPC plugins."""
+        return {"default_generation_settings": {"model": "eris"},
+                "model": "eris", "chat_template": ""}
 
     @app.get("/vitals")
     async def vitals():
@@ -550,27 +576,28 @@ def create_app(
                 ws_connections.remove(websocket)
 
     @app.websocket("/ws/field")
-    async def websocket_field_endpoint(websocket: WebSocket):
-        """WebSocket for real-time field state streaming."""
+    async def websocket_field_endpoint(websocket: WebSocket, agent: str = "eris"):
+        """Send-only field stream for a node (WILLOW I.10): /ws/field?agent=willow
+        streams that node's mind. Defaults to eris (the existing cockpit viz)."""
         await websocket.accept()
         from eris.config import to_numpy
+        node = registry.get(agent)
+        field = node.field if node is not None else orchestrator.field
         try:
             while True:
-                # Only send if field exists
-                if orchestrator.field is not None:
-                    # Extract live arrays
-                    phi = to_numpy(orchestrator.field.phi).tolist()
-                    theta = to_numpy(orchestrator.field.theta).tolist()
-
+                f = (node.field if node is not None else orchestrator.field)
+                if f is not None:
+                    phi = to_numpy(f.phi).tolist()
+                    theta = to_numpy(f.theta).tolist()
                     await websocket.send_json({
-                        "size": orchestrator.field.size,
-                        "step_count": orchestrator.field.step_count,
+                        "agent": (node.name if node is not None else "eris"),
+                        "size": f.size,
+                        "step_count": f.step_count,
                         "phi": phi,
                         "theta": theta,
-
-                        "coherence": orchestrator.field.coherence,
-                        "dCdX": orchestrator.field.dCdX,
-                        "regime_str": orchestrator.field.detect_regime(),
+                        "coherence": f.coherence,
+                        "dCdX": f.dCdX,
+                        "regime_str": f.detect_regime(),
                     })
                 # 10 fps is enough for the visualizer without overloading
                 await asyncio.sleep(0.1)
