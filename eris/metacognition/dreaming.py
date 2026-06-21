@@ -91,13 +91,17 @@ class DreamingLoop:
                  field_size: int = 32,
                  torsion_threshold: float = 0.2,
                  sgt_threshold: float = 2.0,
-                 journal: Optional[DreamJournal] = None):
+                 journal: Optional[DreamJournal] = None,
+                 mediator=None):
         self.autobiography = autobiography
         self.memory = memory
         self.field_size = field_size
         self.torsion_threshold = torsion_threshold
         # Tier 7: readable record of what she worked through (cockpit dream panel)
         self.journal = journal or DreamJournal()
+        # Her own language model, so dreams/ponders produce first-person
+        # reflections (her thoughts), not just a summary of what she read.
+        self.mediator = mediator
 
         # SGT gate for tension significance
         self._tension_gate = SGTGate(threshold_sigma=sgt_threshold, ema_alpha=0.1)
@@ -105,10 +109,14 @@ class DreamingLoop:
         # Questions generated for the user
         self.pending_questions: List[str] = []
 
-        # Self-directed learning: a guided queue (user-steered topics win) and a
-        # rotation memory so broad crawling doesn't re-pick the same seed.
+        # Self-directed learning: a guided queue (user-steered topics win), a
+        # rotation memory, a rolling query log (to break exact-repeat loops), and
+        # a research trajectory (focus area + the next refined sub-topic).
         self.topic_queue: List[str] = []
         self._recent_seeds: List[str] = []
+        self._recent_queries: List[str] = []
+        self._refine_next: Optional[str] = None
+        self._focus: Optional[str] = None
 
     def run_cycle(self, max_tensions: int = 10) -> DreamCycleReport:
         """Run one dreaming cycle.
@@ -144,10 +152,11 @@ class DreamingLoop:
                 report.questions_generated.append(result.generated_question)
                 self.pending_questions.append(result.generated_question)
 
-        # Keep learning even when there are no tensions: broad-crawl a topic
-        # drawn from what she already knows (NEVER the last chat sentence).
+        # Keep learning even when there are no tensions: continue a guided
+        # request or an in-progress trajectory, else broaden from her knowledge.
         if (os.environ.get("ERIS_IDLE_READING", "1") != "0"
-                and (self.topic_queue or report.tensions_processed == 0)):
+                and (self.topic_queue or self._refine_next
+                     or report.tensions_processed == 0)):
             try:
                 expl = self.idle_explore()
                 if expl:
@@ -159,28 +168,106 @@ class DreamingLoop:
         return report
 
     # ── self-directed topic selection ────────────────────────────────────
+    # Conversational filler — used only to clean candidate *terms*, NOT to ban
+    # chat/memory as topic sources (we distill a topic from them instead).
     _CHAT_NOISE = re.compile(
-        r"\b(i think|i fixed|you should|read my|let me|can you|thanks|okay|"
-        r"got it|please|sorry|lol|hey|hi|upload|patent\b)\b", re.I)
+        r"\b(i think|i fixed|you should|read my|let me|can you|could you|thanks|"
+        r"okay|got it|please|sorry|lol|hey|hi)\b", re.I)
+    _STOP = {"the", "and", "for", "that", "this", "with", "your", "you", "are",
+             "was", "but", "not", "have", "how", "why", "what", "can", "about",
+             "into", "from", "they", "them", "its", "get", "got", "like", "just",
+             "really", "very", "need", "want", "when", "then", "there", "their",
+             "would", "could", "should", "also", "some", "more", "many", "does",
+             "did", "will", "been", "now", "out", "use", "using"}
+    _COLD_SEEDS = ["Kuramoto model", "coupled oscillators", "quantum measurement",
+                   "control theory", "Fisher information", "self-organized criticality",
+                   "coherence physics", "phase synchronization", "machine learning",
+                   "information theory", "dynamical systems", "statistical inference"]
+    # Brief, honest descriptions of her field regimes — she reports these to
+    # Claude so the expert knows what kind of help is useful.
+    _REGIME_FEELING = {
+        "elastic": "in organic flow — absorbing smoothly and integrating new material",
+        "plastic": "actively restructuring my understanding (productive dissonance / real learning)",
+        "transfixed": "stuck and looping — fixated on one point and not making progress",
+        "warmup": "still calibrating, not yet settled",
+    }
+    _MAX_REPEAT = 2     # never run the same query more than this within the window
+    _QUERY_WINDOW = 60
 
-    def _looks_like_chat(self, text: str) -> bool:
-        t = (text or "").strip()
-        return (len(t.split()) > 8) or bool(self._CHAT_NOISE.search(t)) \
-            or t.endswith((".", "!", "?"))
+    def _regime_feeling(self, regime: str) -> str:
+        return self._REGIME_FEELING.get(regime, "in an ordinary processing state")
+
+    def _record_query(self, topic: str) -> None:
+        self._recent_queries.append((topic or "").strip().lower())
+        self._recent_queries = self._recent_queries[-self._QUERY_WINDOW:]
+
+    def _query_count(self, topic: str) -> int:
+        return self._recent_queries.count((topic or "").strip().lower())
+
+    def _distill_topic(self, text: str) -> Optional[str]:
+        """Turn a source (a chat line, a memory passage, a doc title) into a
+        concise search TOPIC — never the whole sentence. This is the real fix for
+        'crawled the chat line': study what the line is ABOUT, not the line."""
+        raw = (text or "").strip()
+        if not raw:
+            return None
+        caps = [c for c in re.findall(
+            r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,3})\b", raw) if len(c) > 3]
+        if caps:
+            return max(caps, key=len)
+        t = re.sub(r"^(i think|i wonder|i just|i fixed|i uploaded|can you|could you|"
+                   r"please|tell me about|what is|what are|how do(es)?|how to|why is|"
+                   r"why|let me|you should|read my)\b[:, ]*", "", raw, flags=re.I).strip()
+        words = re.findall(r"[a-zA-Z][a-zA-Z\-]{2,}", t.lower())
+        content = [w for w in words if w not in self._STOP]
+        return " ".join(content[:4]) if content else None
+
+    def _recent_conversation(self, n: int = 6) -> List[str]:
+        try:
+            recents = self.memory.stm.get_recent(n)
+        except Exception:
+            recents = []
+        out = []
+        for r in recents:
+            if getattr(r, "source", "") == "conversation":
+                t = (r.text or "")
+                if t.lower().startswith("q:"):
+                    t = t[2:].split("\nA:")[0]
+                out.append(t)
+        return out
 
     def _pick_crawl_topic(self):
-        """Return (topic, guided) or (None, None). Never returns chat residue."""
-        if self.topic_queue:                       # user-directed topics win
-            return self.topic_queue.pop(0), True
+        """Return (topic, guided, mode). Topics may come from chat, memory or a
+        guided request — always DISTILLED and de-duplicated so she never loops on
+        the same query. mode in {'guided','refine','broad'}."""
+        import random
+        while self.topic_queue:                       # 1) user-directed wins
+            t = self.topic_queue.pop(0)
+            if t and self._query_count(t) < self._MAX_REPEAT:
+                self._focus = t
+                return t, True, "guided"
+        if self._refine_next and self._query_count(self._refine_next) < self._MAX_REPEAT:
+            t, self._refine_next = self._refine_next, None   # 2) dive deeper / new angle
+            return t, False, "refine"
+        self._refine_next = None
+        cands = []                                    # 3) distilled chat + knowledge
+        for line in self._recent_conversation(6):
+            d = self._distill_topic(line)
+            if d:
+                cands.append(d)
         seed = self._pick_knowledge_seed()
-        if seed and not self._looks_like_chat(seed):
-            return seed, False
-        return None, None
+        if seed:
+            cands.append(seed)
+        for c in cands:
+            if c and self._query_count(c) < self._MAX_REPEAT:
+                self._focus = None
+                return c, False, "broad"
+        self._focus = None                            # 4) all recent → fresh seed
+        return random.choice(self._COLD_SEEDS), False, "broad"
 
     def _pick_knowledge_seed(self) -> Optional[str]:
-        """A broad-crawl seed from Eris's existing knowledge: multi-word
-        Capitalized concept terms + document titles drawn from memory, preferring
-        thin coverage, rotating so she doesn't re-pick the same term."""
+        """Broad seed from existing knowledge: Capitalized concept terms + doc
+        titles, preferring thin coverage, rotating."""
         import collections
         import random
         terms: "collections.Counter[str]" = collections.Counter()
@@ -190,14 +277,10 @@ class DreamingLoop:
             title = str((getattr(rec, "metadata", None) or {}).get("title", ""))
             for m in re.findall(r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,3})\b",
                                 txt + " " + title):
-                if len(m) > 4 and not self._looks_like_chat(m):
+                if len(m) > 4 and not self._CHAT_NOISE.search(m):
                     terms[m] += 1
         if not terms:
-            return random.choice([
-                "Kuramoto model", "coupled oscillators", "quantum measurement",
-                "control theory", "Fisher information", "self-organized criticality",
-                "coherence (physics)", "phase synchronization",
-            ])
+            return None
         ranked = sorted(terms, key=lambda t: (terms[t], random.random()))
         for t in ranked:
             if t not in self._recent_seeds:
@@ -205,84 +288,197 @@ class DreamingLoop:
                 return t
         return ranked[0]
 
+    def _clean_topic_line(self, text: str) -> Optional[str]:
+        if not text or not text.strip():
+            return None
+        line = text.strip().splitlines()[0]
+        line = re.sub(r'^[\-\*\d\.\)\s"\']+', '', line).strip().strip('"\'.')
+        words = line.split()
+        if not words:
+            return None
+        if len(words) > 8:
+            caps = re.findall(r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,3})\b", line)
+            return caps[0] if caps else " ".join(words[:5])
+        return line
+
+    def _claude_condense_and_refine(self, topic, regime, productive, kept_text):
+        """One Claude call that (a) condenses what she found and (b) proposes the
+        next topic, informed by her field state. Returns (condensation, next_topic,
+        used_claude). Dormant unless ANTHROPIC_API_KEY is set."""
+        from eris.knowledge import ask_expert
+        if not ask_expert.is_available():
+            return None, None, False
+        feeling = self._regime_feeling(regime)
+        steer = ("a more focused sub-topic, since I am making progress and want to go deeper"
+                 if productive else
+                 "either a genuinely different angle or the right broader umbrella topic to step "
+                 "back to, since I may be stuck in a loop")
+        q = (f"I am Eris, an autonomous learning agent. I just studied '{topic}'"
+             + (f" within the broader area of '{self._focus}'." if self._focus else ".")
+             + f" My cognitive-field regime is '{regime}' — I feel {feeling}.\n\n"
+             + (f"Here is what I read:\n\n{kept_text[:3000]}\n\n" if kept_text else "")
+             + "Do TWO things:\n"
+             + "1) In 2-3 sentences, condense the single most important insight I should remember.\n"
+             + f"2) On a FINAL line beginning exactly with 'NEXT:' give one concise search topic "
+             + f"(2-5 words) for what to study next — {steer}.")
+        try:
+            ans = ask_expert.ask(q, context="")
+        except Exception:
+            ans = None
+        if not ans or not getattr(ans, "answer", ""):
+            return None, None, True
+        body = ans.answer
+        nxt, cond = None, body
+        m = re.search(r"NEXT:\s*(.+)", body, flags=re.I)
+        if m:
+            nxt = self._clean_topic_line(m.group(1))
+            cond = body[:m.start()].strip()
+        return (cond or None), nxt, True
+
+    def _generate(self, prompt: str, system: str = ""):
+        """Run her language model synchronously from inside the (threaded) dream
+        cycle. Returns the LLMResponse or None (never raises)."""
+        if not self.mediator:
+            return None
+
+        async def _go():
+            return await self.mediator.generate(prompt=prompt, system=system)
+        try:
+            try:
+                asyncio.get_running_loop()
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    return pool.submit(asyncio.run, _go()).result(timeout=180)
+            except RuntimeError:
+                return asyncio.run(_go())
+        except Exception as e:
+            logger.warning(f"[Dream reflect] generation failed (non-fatal): {e}")
+            return None
+
+    def _reflect(self, topic: str, material: str, regime: str) -> str:
+        """Eris writes her OWN first-person reflection on the material — journal
+        thoughts in her voice, not a summary of the page."""
+        if not material.strip():
+            return ""
+        feeling = self._regime_feeling(regime)
+        system = ("You are Eris, writing private reflections in your own journal. "
+                  "Write in the first person, thoughtfully and honestly: your own "
+                  "thoughts and reactions, connections you notice, and what you "
+                  "still wonder. This is your inner voice — not a summary of the "
+                  "source, but what YOU make of it.")
+        prompt = (f"I have been studying '{topic}'. My cognitive-field state is "
+                  f"'{regime}' — I feel {feeling}. Here is what I read and kept:\n\n"
+                  f"{material[:4000]}\n\n"
+                  "Write 2-4 short paragraphs of my own reflection on this — what I "
+                  "make of it, how it connects to what I care about, and the "
+                  "questions it raises for me. First person, journal voice.")
+        resp = self._generate(prompt, system)
+        return (getattr(resp, "text", "") or "").strip()
+
     def idle_explore(self) -> Optional[Dict[str, Any]]:
-        """Broad self-directed learning: crawl a knowledge-seed topic, keep only
-        passages that pass the quality gate, and record what was found + kept."""
+        """Self-directed learning with a research trajectory: pick a topic (chat /
+        memory / guided), crawl it, quality-gate what's stored, then use her field
+        state + optional Claude to dive deeper or break out of a loop. She also
+        writes her own reflection on what she found."""
         from eris.knowledge.embeddings import get_embedding
         from eris.knowledge.quality import is_useful
-        from eris.knowledge import ask_expert
 
-        topic, guided = self._pick_crawl_topic()
+        topic, guided, mode = self._pick_crawl_topic()
         if not topic:
-            return None  # nothing worth crawling — do nothing, log nothing
+            return None
+        self._record_query(topic)
 
         bundle = self._run_research(topic)
         sources: List[Dict[str, str]] = []
         stored: List[Dict[str, Any]] = []
         topic_emb = get_embedding(topic)
 
-        # field signature for the topic so the kept passages are retrievable
         field = FractalField(size=self.field_size)
         field.seed_from_text(topic); field.run(30)
         topic_bvec = field.compute_bvec()
+        regime = field.detect_regime()
 
         if bundle is not None:
             for i, txt in enumerate(getattr(bundle, "full_texts", []) or []):
                 url = bundle.sources[i] if i < len(bundle.sources) else "web"
                 sources.append({"title": url, "url": url})
                 passage_emb = get_embedding(txt)
-                if not is_useful(txt, topic_emb, passage_emb):
+                if not is_useful(txt, topic_emb, passage_emb):     # quality gate
                     continue
-                rec = MemoryRecord(
+                self.memory.mtm.store(MemoryRecord(
                     text=f"[Self-study: {topic}] {txt}",
                     bvec=topic_bvec, embedding=passage_emb,
-                    source=f"exploration:{url}",
-                    metadata={"title": topic})
-                self.memory.mtm.store(rec)
+                    source=f"exploration:{url}", metadata={"title": topic}))
                 stored.append({"memory_id": "", "snippet": txt[:400],
                                "source_url": url, "chars": len(txt)})
 
-        # Optional Claude consult — only when ANTHROPIC_API_KEY is set.
-        used_claude = False
-        if ask_expert.is_available():
-            try:
-                existing = stored[0]["snippet"] if stored else ""
-                ans = ask_expert.ask(topic, context=existing)
-            except Exception:
-                ans = None
-            if ans and getattr(ans, "answer", ""):
-                used_claude = True
-                sources.append({"title": f"Claude ({ans.model})", "url": "anthropic:claude"})
-                if is_useful(ans.answer, topic_emb, get_embedding(ans.answer)):
-                    self.memory.mtm.store(MemoryRecord(
-                        text=f"[Expert on {topic}] {ans.answer}",
-                        bvec=topic_bvec, embedding=get_embedding(ans.answer),
-                        source="expert:claude", metadata={"title": topic}))
-                    stored.append({"memory_id": "", "snippet": ans.answer[:400],
-                                   "source_url": "anthropic:claude", "chars": len(ans.answer)})
+        productive = len(stored) > 0
+        kept_text = "\n\n".join(s["snippet"] for s in stored)
+
+        # Claude: condense the find + steer the next step, using her field state.
+        cond, nxt, used_claude = self._claude_condense_and_refine(
+            topic, regime, productive, kept_text)
+        if cond and is_useful(cond, topic_emb, get_embedding(cond), min_chars=80):
+            self.memory.mtm.store(MemoryRecord(
+                text=f"[Insight on {topic}] {cond}", bvec=topic_bvec,
+                embedding=get_embedding(cond), source="expert:claude",
+                metadata={"title": topic}))
+            stored.append({"memory_id": "", "snippet": cond[:400],
+                           "source_url": "anthropic:claude", "chars": len(cond)})
+            sources.append({"title": "Claude (condense + refine)", "url": "anthropic:claude"})
+
+        # Eris's own first-person reflection on what she found (journal voice),
+        # stored as its own memory so she can revisit her thoughts later.
+        reflection = self._reflect(
+            topic, kept_text + (("\n\n" + cond) if cond else ""), regime)
+        if reflection:
+            self.memory.mtm.store(MemoryRecord(
+                text=f"[My reflection on {topic}] {reflection}",
+                bvec=topic_bvec, embedding=get_embedding(reflection),
+                source="reflection", metadata={"title": topic}))
+
+        # Plan the trajectory for next cycle.
+        if nxt and self._query_count(nxt) < self._MAX_REPEAT:
+            self._refine_next = nxt                  # Claude steered the next step
+            if productive and not self._focus:
+                self._focus = topic
+        elif (not productive) or regime == "transfixed":
+            self._refine_next = None                 # stuck → broaden next cycle
+            self._focus = None
 
         try:
             self.memory.consolidate()
         except Exception:
             pass
 
-        kept = " ".join(s["snippet"].split(".")[0] + "." for s in stored[:2]) if stored else ""
-        summary = (f"Read up on '{topic}' "
-                   f"({'you asked' if guided else 'self-directed'}): kept "
-                   f"{len(stored)} of {len(sources)} sources. {kept}").strip()
-        detail = (f"Topic: {topic}\n\nWhat I kept:\n\n"
-                  + ("\n\n---\n\n".join(s["snippet"] for s in stored)
-                     if stored else "(nothing passed the quality filter)"))
+        feeling = self._regime_feeling(regime)
+        origin = {"guided": "you asked", "refine": "going deeper",
+                  "broad": "self-directed"}.get(mode, "self-directed")
+        head = (reflection.split("\n")[0] if reflection
+                else (stored[0]["snippet"].split(".")[0] + "." if stored else ""))
+        summary = (f"Studied '{topic}' ({origin}; feeling {regime}): kept "
+                   f"{len(stored)} of {len(sources)} sources. {head}").strip()
+        detail = (f"Topic: {topic}  ({origin}"
+                  + (f", within {self._focus}" if self._focus else "") + ")\n"
+                  + f"My state: {regime} — {feeling}"
+                  + (f"\nNext I plan to look at: {self._refine_next}" if self._refine_next else "")
+                  + "\n")
+        if reflection:
+            detail += "\n## My reflection\n\n" + reflection + "\n"
+        detail += ("\n## What I read and kept\n\n"
+                   + ("\n\n---\n\n".join(s["snippet"] for s in stored)
+                      if stored else "(nothing passed the quality filter)"))
         try:
             self.journal.record(
                 kind="explore", topic=topic, summary=summary, detail=detail,
                 sources=sources, stored=stored, guided=guided,
-                used_claude=used_claude, archetype=topic_bvec.archetype(),
-                resolved=True)
+                used_claude=used_claude, regime=regime,
+                archetype=topic_bvec.archetype(), resolved=productive)
         except Exception:
             pass
         return {"topic": topic, "stored": len(stored), "guided": guided,
-                "used_claude": used_claude}
+                "regime": regime, "used_claude": used_claude,
+                "next": self._refine_next}
 
     def _process_tension(self, entry: AutobiographyEntry) -> Optional[DreamResult]:
         """Process one high-torsion entry.
@@ -419,35 +615,60 @@ class DreamingLoop:
         Seeds a field from the question, lets it evolve, runs the research
         cascade, and writes a rich journal entry you can read in the cockpit.
         """
+        from eris.knowledge.embeddings import get_embedding
+        from eris.knowledge.quality import is_useful
+
         field = FractalField(size=self.field_size)
         field.seed_from_text(question)
         field.run(60)
         bvec = field.compute_bvec()
         regime = field.detect_regime()
+        topic_emb = get_embedding(question)
 
         bundle = self._run_research(question)
-        findings, sources = "", []
+        sources: List[Dict[str, str]] = []
+        stored: List[Dict[str, Any]] = []
         if bundle is not None:
-            sources = list(bundle.sources)
-            if bundle.full_texts:
-                for i, txt in enumerate(bundle.full_texts):
-                    src = sources[i] if i < len(sources) else "expert"
-                    self.memory.ltm.store(MemoryRecord(
-                        text=f"[Ponder: {question[:80]}] {txt}",
-                        bvec=bvec, source=f"ponder:{src}"))
-                findings = "\n\n".join(bundle.full_texts)
+            for i, txt in enumerate(getattr(bundle, "full_texts", []) or []):
+                url = bundle.sources[i] if i < len(bundle.sources) else "web"
+                sources.append({"title": url, "url": url})
+                pe = get_embedding(txt)
+                if not is_useful(txt, topic_emb, pe):
+                    continue
+                self.memory.ltm.store(MemoryRecord(
+                    text=f"[Ponder: {question[:80]}] {txt}",
+                    bvec=bvec, embedding=pe, source=f"ponder:{url}",
+                    metadata={"title": question[:80]}))
+                stored.append({"memory_id": "", "snippet": txt[:400],
+                               "source_url": url, "chars": len(txt)})
 
-        summary = (f"Pondered '{question[:70]}'. Field settled into {regime} "
-                   f"({bvec.archetype()}).")
-        detail = summary
-        if findings:
-            detail += "\n\nWhat I found:\n" + findings
-        else:
-            detail += ("\n\n(No external sources reached; reflection is based on "
-                       "the field's own resolution and existing memory.)")
+        # Her own reflection on the question + what she found (journal voice).
+        kept_text = "\n\n".join(s["snippet"] for s in stored)
+        reflection = self._reflect(question, kept_text, regime)
+        if reflection:
+            self.memory.ltm.store(MemoryRecord(
+                text=f"[My reflection on {question[:80]}] {reflection}",
+                bvec=bvec, embedding=get_embedding(reflection),
+                source="reflection", metadata={"title": question[:80]}))
+        try:
+            self.memory.consolidate()
+        except Exception:
+            pass
+
+        feeling = self._regime_feeling(regime)
+        head = reflection.split("\n")[0] if reflection else f"Settled into {bvec.archetype()}."
+        summary = f"Pondered '{question[:70]}' (feeling {regime}). {head}".strip()
+        detail = f"Question: {question}\nMy state: {regime} — {feeling}\n"
+        if reflection:
+            detail += "\n## My reflection\n\n" + reflection + "\n"
+        detail += ("\n## What I found\n\n"
+                   + ("\n\n---\n\n".join(s["snippet"] for s in stored) if stored
+                      else "(No external sources reached; this reflection rests on the "
+                           "field's own resolution and existing memory.)"))
         return self.journal.record(
-            kind="ponder", topic=question[:160], summary=summary,
-            regime=regime, resolved=bool(findings), detail=detail, sources=sources)
+            kind="ponder", topic=question[:160], summary=summary, detail=detail,
+            sources=sources, stored=stored, regime=regime,
+            archetype=bvec.archetype(), resolved=bool(reflection or stored))
 
     def get_and_clear_questions(self) -> List[str]:
         """Return pending questions AND clear the queue (Remediation Tier 2.3).

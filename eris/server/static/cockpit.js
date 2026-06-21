@@ -227,8 +227,8 @@ async function openDream(id){
   const d=await (await fetch('/api/dreams/'+id)).json();
   if(d.error) return;
   $('#m-title').textContent=`${d.kind||'reflection'}: ${d.topic||''}`+(d.used_claude?'  (consulted Claude)':'');
-  $('#m-when').textContent=fmtDate(d.timestamp)+(d.guided?' · you asked':' · self-directed');
-  $('#m-body').textContent=d.summary||d.detail||'';
+  $('#m-when').textContent=fmtDate(d.timestamp)+(d.regime?' · feeling '+d.regime:'')+(d.guided?' · you asked':' · self-directed');
+  $('#m-body').textContent=d.detail||d.summary||'';   // detail = her reflection + what she read
   const s=$('#m-src'); s.innerHTML='';
   const srcs=d.sources||[];
   if(srcs.length){
@@ -254,6 +254,13 @@ async function openDream(id){
   btn.onclick=()=>{ box.style.display = (box.style.display==='none')?'block':'none'; };
   s.appendChild(btn); s.appendChild(box);
   $('#modal').classList.add('on');
+}
+async function steerTopic(){
+  const t=prompt('Point Eris at a topic to study next (she keeps choosing on her own too):'); if(!t)return;
+  try{
+    const d=await (await fetch('/api/study-topic',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:t})})).json();
+    toast(d.error?('Error: '+d.error):`Queued "${d.queued}" — she'll study it on her next cycle.`);
+  }catch(e){ toast('could not queue topic: '+e); }
 }
 async function dreamPrompt(){
   const q=prompt('Give Eris something to dream on / ponder:'); if(!q)return;

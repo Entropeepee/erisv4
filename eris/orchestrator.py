@@ -82,6 +82,15 @@ from eris.interface.mediator import LLMMediator, LLMBackend
 from eris.metacognition.dreaming import DreamingLoop
 
 
+def _mem_when(ts: float) -> str:
+    """Human-readable timestamp for a memory, so Eris has a sense of time and can
+    see how her thinking on a subject has evolved across dates."""
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+    except Exception:
+        return "undated"
+
+
 @dataclass
 class ProcessingResult:
     """Full result of processing one user message."""
@@ -159,6 +168,7 @@ class ErisOrchestrator:
             memory=self.memory,
             field_size=field_size,
             journal=self.dream_journal,
+            mediator=self.mediator,
         )
 
         # SGT gate for dissonance detection
@@ -246,13 +256,16 @@ class ErisOrchestrator:
         )
         # Give the LLM the FULL retrieved memory, not a sliver — truncating here
         # is what made Eris say she hadn't read an uploaded document she had.
+        # Each line is tagged with WHEN it was formed, so she has a sense of time
+        # and can notice how her understanding of a subject evolved.
         memory_text = "\n\n".join(
-            f"[{r.source}] {r.text}" for r in aligned
+            f"[{_mem_when(r.timestamp)} · {r.source}] {r.text}" for r in aligned
         ) if aligned else ""
         if tension:
             memory_text += (
                 "\n\n[Related but unresolved — look for the hidden connection]\n"
-                + "\n\n".join(f"[{r.source}] {r.text}" for r in tension)
+                + "\n\n".join(f"[{_mem_when(r.timestamp)} · {r.source}] {r.text}"
+                              for r in tension)
             )
 
         # Named-document direct retrieval: if the user names a file/document,
@@ -262,7 +275,8 @@ class ErisOrchestrator:
         named_docs = self.memory.documents_matching(
             user_message, max_chunks=6, query_embedding=q_embedding)
         if named_docs:
-            doc_block = "\n\n".join(f"[{r.source}] {r.text}" for r in named_docs)
+            doc_block = "\n\n".join(
+                f"[{_mem_when(r.timestamp)} · {r.source}] {r.text}" for r in named_docs)
             memory_text = (
                 "[A document you have ALREADY READ that the user is asking about "
                 "— answer from this text; do NOT say you can't access it]\n"
@@ -479,7 +493,10 @@ class ErisOrchestrator:
         if memory_text:
             parts.append(
                 "[Your memory — conversations + documents/articles you have "
-                f"already read; use this, do not deny having read it]\n{memory_text}")
+                "already read. Each item is tagged with the date/time you formed "
+                "it; use these to sense time and notice how your thinking on a "
+                "subject has evolved. Use this memory; do not deny having read it]\n"
+                f"{memory_text}")
 
         # Field state in natural language
         archetype = input_bvec.archetype()
