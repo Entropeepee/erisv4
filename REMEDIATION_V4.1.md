@@ -81,6 +81,17 @@ so the MoEGate's wave-interference selection operates on real field projections.
   research trigger runs the cascade and ingests findings; a field-resonance
   retriever is fused (weighted high) into the RRF swarm.
 
+## Tier 5 — The grokking experiment (`run_experiment_grok.py`)
+Runnable, checkpoint-safe harness for the two falsifiable tests:
+- **5A (gating):** field-resonance R_ij vs embedding-cosine top-neighbor
+  agreement, plus cross-domain *analogy recall* (does the field surface
+  immune-system↔firewall / predator-prey↔arms-race / resonance↔consensus?).
+- **5B (sharpness):** basin width vs N (1,2,4,8,…) — looks for a *sharp* jump
+  (grok-as-phase-transition) vs a smooth curve.
+Runs OFFLINE on a built-in near/far-domain corpus for reproducibility; `--online`
+reads real Wikipedia. The offline numbers are a smoke test, **not** evidence —
+a real verdict needs `ERIS_EMBEDDINGS=on` (BGE-M3) and 100+ articles on the box.
+
 ## Bug fix (pre-existing)
 - `pde.clone()` copied non-existent `_C_hist` / `_X_hist`, raising
   `AttributeError`. Because `clone()` runs every turn via `probe_reactivity()`
