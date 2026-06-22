@@ -8,6 +8,9 @@ numpy>=1.24
 # SERVER (for web UI + API)
 fastapi>=0.104
 uvicorn>=0.24
+# websockets >=12 fixes the legacy-protocol keepalive assertion bug
+# (websockets/legacy/protocol.py _drain_helper) that dropped the /ws connection.
+websockets>=12.0
 httpx>=0.25
 psutil>=5.9          # cockpit system vitals (CPU/RAM)
 # wmi>=1.5            # (Windows only) CPU temperature via LibreHardwareMonitor

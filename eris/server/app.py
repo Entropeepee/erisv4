@@ -796,6 +796,13 @@ ws.onmessage = (e) => {
 if __name__ == "__main__":
     if HAS_FASTAPI:
         import uvicorn
-        uvicorn.run("eris.server.app:app", host="0.0.0.0", port=8001, reload=True)
+        # Disable uvicorn's protocol-level keepalive ping. That ping path hits a
+        # known assertion bug in the legacy `websockets` implementation
+        # (websockets/legacy/protocol.py `_drain_helper`) and drops the cockpit
+        # `/ws` connection with "keepalive ping failed". We don't need it: the
+        # cockpit stream already sends vitals every ~2s, which keeps the socket
+        # warm on its own. (ws_ping_interval=None turns the buggy ping off.)
+        uvicorn.run("eris.server.app:app", host="0.0.0.0", port=8001, reload=True,
+                    ws_ping_interval=None, ws_ping_timeout=None)
     else:
         print("FastAPI not installed. Run: pip install fastapi uvicorn")
