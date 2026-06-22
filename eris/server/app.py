@@ -91,6 +91,9 @@ class IngestRequest(BaseModel if HAS_FASTAPI else object):
     text: str = ""
     title: str = ""
 
+class DeepReadRequest(BaseModel if HAS_FASTAPI else object):
+    source: str = ""   # a file/folder path on the server, 'ltm', or raw text
+
 class TTSGenerateRequest(BaseModel if HAS_FASTAPI else object):
     text: str = ""
     voice_id: str = ""
@@ -656,6 +659,40 @@ def create_app(
         if not wav_bytes:
             return JSONResponse({"error": "TTS generation failed."}, status_code=500)
         return Response(content=wav_bytes, media_type="audio/wav")
+
+    @app.post("/api/deep-read")
+    async def api_deep_read(req: DeepReadRequest):
+        """Comprehend a document/folder/codebase larger than the context window
+        (RAPTOR map-reduce): summarize chunks on the Fast profile, recursively
+        reduce, synthesize on the Deep profile, and store every node in memory so
+        Eris can answer from it. Runs OFF the event loop; resumable + idempotent."""
+        from eris.knowledge.deep_read import deep_read
+        from eris.interface.mediator import run_blocking
+        src = (req.source or "").strip()
+        if not src:
+            return JSONResponse({"error": "source required (path, 'ltm', or text)"},
+                                status_code=400)
+        fast, deep = profiles.get("fast"), profiles.get("deep")
+
+        def summarize(text: str, deep_mode: bool) -> str:
+            prof = deep if deep_mode else fast
+            system = ("You are Eris, synthesizing your understanding of a whole "
+                      "document or codebase from section summaries. Write a coherent, "
+                      "grounded high-level understanding in prose: what it is, how the "
+                      "parts fit, what stands out, what could be improved."
+                      if deep_mode else
+                      "Summarize this one section faithfully and concisely (2-4 "
+                      "sentences). Capture its real content/structure; no preamble.")
+            prompt = (("Synthesize these section summaries into one understanding:\n\n"
+                       if deep_mode else "Summarize this section:\n\n") + text)
+            resp = run_blocking(orchestrator.mediator.generate(
+                prompt=prompt, system=system,
+                max_tokens=prof.max_tokens, temperature=prof.temperature))
+            return (getattr(resp, "text", "") or "").strip() if resp else ""
+
+        result = await asyncio.to_thread(
+            deep_read, orchestrator.memory, summarize, src, data_dir=data_dir)
+        return result
 
     @app.get("/api/accelerators")
     async def api_accelerators():
