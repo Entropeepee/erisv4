@@ -142,9 +142,11 @@ class ErisOrchestrator:
             orchestration benchmark varies this to report mean ± std over seeds.
         """
         os.makedirs(data_dir, exist_ok=True)
+        self.data_dir = data_dir
         self.field_size = field_size
         self.field_seed = field_seed
         self.use_frt_seeding = use_frt_seeding
+        self._durable_memory = None  # lazily created by the agent's memory tools
 
         # Layer 1: Persistent field state
         self.field = FractalField(size=field_size, seed=field_seed)
@@ -616,11 +618,17 @@ class ErisOrchestrator:
             return resp
         return await self.mediator.generate(prompt=prompt, system=system)
 
-    async def run_agent(self, goal: str, tools, *, max_steps: int = 6) -> dict:
+    async def run_agent(self, goal: str, tools=None, *, max_steps: int = 6) -> dict:
         """Run a grounded ReAct loop (roadmap 3.1) over `tools`, using Eris's
         mediator and LIVE field state as the grounding signal. Opt-in: nothing
-        calls this automatically, so default behavior is unchanged."""
+        calls this automatically, so default behavior is unchanged.
+
+        If `tools` is None, the enabled default tools are used (factual_lookup,
+        durable memory — gated by CONFIG.agent_tool_*, default OFF)."""
         from eris.executive.agent_loop import ReActAgent
+        if tools is None:
+            from eris.executive.agent_tools import default_tools
+            tools = default_tools(self)
 
         def _field_state() -> dict:
             return {

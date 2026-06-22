@@ -153,6 +153,13 @@ class ErisConfig:
     ttc_budget_forcing: bool = False      # force a min reasoning budget (needs a
     ttc_min_thinking_tokens: int = 0      #   thinking-capable model)
     ttc_max_extensions: int = 2           # how many "Wait" continuations to allow
+
+    # ── Agent tools (ReAct loop) — DEFAULT OFF ───────────────────────
+    # Capabilities the grounded ReAct loop (run_agent) may call. Q1 decision:
+    # precise factual lookup is a TOOL the agent escalates to, NOT a per-turn cost
+    # on the resonant fast path. Q2: the durable store is the built-in local one.
+    agent_tool_factual_lookup: bool = False   # hybrid BM25+dense lookup over memory
+    agent_tool_durable_memory: bool = False   # remember_fact / recall_facts
     orch_resp_blend: float = 0.7          # Tier 3 warm-reseed: new-text weight (1.0 = cold)
 
 
@@ -177,3 +184,10 @@ if _orch_env in ("on", "1", "true", "yes"):
 _ttc_env = os.environ.get("ERIS_TTC", "off").strip().lower()
 if _ttc_env in ("on", "1", "true", "yes"):
     CONFIG.ttc_self_consistency = True
+
+# ERIS_AGENT_TOOLS = "off" (default) | "on". Enables the factual-lookup and
+# durable-memory tools in the ReAct loop's default tool set.
+_agent_env = os.environ.get("ERIS_AGENT_TOOLS", "off").strip().lower()
+if _agent_env in ("on", "1", "true", "yes"):
+    CONFIG.agent_tool_factual_lookup = True
+    CONFIG.agent_tool_durable_memory = True

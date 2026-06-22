@@ -37,15 +37,22 @@ Every change is its own commit, so nothing is entangled:
 4. **Memory differentiator untouched.** New retrieval/memory code is built as
    *parallel, opt-in* modules; `retrieve_resonant` is not modified.
 
-## Open questions for you (answer anytime via Claude chat)
-- **Q1 (RAG):** do you want the hybrid retrieval wired *into* Eris's live retrieval
-  (replacing/augmenting `retrieve_resonant`), or kept as a separate tool the agent
-  can call? I'm building it standalone first so it changes nothing until you decide.
-- **Q2 (memory):** mem0 vs Letta as the durable store under the field layer — or
-  the simple built-in JSON store I'm scaffolding? Needs a `pip install` either way
-  (your machine).
-- **Q3 (vision):** which VLM — Qwen3-VL-8B (general) or InternVL3-8B (UI/screens)?
-  Affects only the machine-side download; the code hook is model-agnostic.
+## Decisions (resolved)
+- **Q1 (RAG) → tool, not live path.** Resonant retrieval (associative recall) stays
+  the per-turn fast path; hybrid BM25+dense (precise factual lookup) is a TOOL the
+  ReAct loop escalates to *when a turn needs facts* — same continue/escalate gate,
+  applied to retrieval. Running the reranker every turn is the unconditional
+  expensive stage the orchestration discipline exists to kill. *Flip if eval shows
+  non-agent Q&A turns regularly miss exact-token facts → add to live path behind a
+  flag + benchmark.*
+- **Q2 (memory) → built-in local store; mem0 deferred; Letta skipped.** Eris already
+  owns memory (persistent store + resonant + GLNCS + field consolidation). Letta
+  wants to *own* the agent's memory → competes with Eris's loop. mem0 slots
+  underneath but isn't needed yet; the seam stays in `eris.memory.durable`. *Flip to
+  mem0 if you need graph relations / scale / smarter dedup.*
+- **Q3 (vision) → Qwen3-VL-8B, later.** General all-rounder for a game-character
+  perceiving a 3D world (not UI). Stays in the Qwen3 family. Hook is plumbed; do
+  NOT download/wire the model until core loop + retrieval + memory are benchmarked.
 
 ## In progress / log
 - (this session) Building Stage-1 `[code]` items as parallel, flag-gated modules:
@@ -75,6 +82,15 @@ Every change is its own commit, so nothing is entangled:
   backend-agnostic, **resumable** JSONL trace collection from any teacher
   (re-runs skip done prompts), lean Alpaca-style schema. Foundation for the
   machine-side Unsloth QLoRA distill (2.2). 4 tests. **Total suite: 180 green.**
+
+- **Agent tools wired (Q1/Q2 operationalized)** — `eris/executive/agent_tools.py`:
+  `factual_lookup` (hybrid BM25+dense over a read-only `MemorySystem.all_records()`
+  pool) + `remember_fact`/`recall_facts` (built-in durable store). Gated by
+  `CONFIG.agent_tool_*` (`ERIS_AGENT_TOOLS=on`); `run_agent(goal)` uses the enabled
+  set by default. Added `MemorySystem.all_records()` (read-only; also fixed a latent
+  STM `_buffer` vs `_records` bug the end-to-end test caught). Did NOT build the mem0
+  adapter and did NOT wire hybrid into the per-turn path (the deferred options).
+  4 tests. **Total suite: 184 green.**
 
 ## Status: all buildable `[code]` items done
 Everything that can be built without your Alienware is on this branch. What
