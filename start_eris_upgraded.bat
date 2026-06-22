@@ -1,32 +1,46 @@
 @echo off
 cd /d "%~dp0"
-title Eris Echo (UPGRADED - optional new functions ON)
-echo ============================================
+title Eris Echo (UPGRADED - all no-install upgrade flags ON)
+echo ==================================================================
 echo   Eris Echo - UPGRADED MODE
 echo.
-echo   The web-reading cleanup, the new voice, the dream-loop
-echo   fix, and the chat "answer the person" fix are ALREADY ON
-echo   by default - you do not need any flag for those.
+echo   The web-reading cleanup, the new voice, the dream-loop fix, and
+echo   the chat "answer the person" fix are ALREADY ON by default - no
+echo   flag needed. This launcher also turns on every upgrade flag that
+echo   needs NO extra install:
 echo.
-echo   This launcher additionally turns ON the optional:
-echo     * Web reader proxy - lets Eris read bot-blocked or
-echo       VPN-blocked articles (fetches via r.jina.ai).
-echo       NOTE: this sends the page URL to a third party.
-echo ============================================
+echo     ERIS_TTC           smarter replies - drafts several answers and
+echo                        returns the consensus.  *** 3-8x SLOWER per
+echo                        reply on a local model; this is the one you
+echo                        will actually notice. ***
+echo     ERIS_WEB_PROXY     read bot-blocked / VPN-blocked articles
+echo                        (fetches via r.jina.ai - sends the URL to a
+echo                        third party; that is the tradeoff).
+echo     ERIS_AGENT_TOOLS   arms the ReAct tools (factual_lookup /
+echo                        remember_fact / recall_facts). No visible
+echo                        change in normal chat yet - nothing in the
+echo                        cockpit triggers the agent loop so far.
+echo     ERIS_ORCHESTRATION the smart local-^>cloud router. Only escalates
+echo                        if you have a cloud API key set; with just the
+echo                        local model it stays local and looks the same.
+echo.
+echo   If replies feel too slow, close this and run start_eris.bat instead.
+echo ==================================================================
 
-REM === optional upgrade flags (environment variables - no code editing) ===
+REM === upgrade flags that need NO extra install (environment vars; no code edits) ===
+set ERIS_TTC=on
 set ERIS_WEB_PROXY=on
+set ERIS_AGENT_TOOLS=on
+set ERIS_ORCHESTRATION=on
 
-REM  Want "smarter but slower" replies? Eris will sample several answers
-REM  and return the consensus. It is 3-8x slower per message on a local
-REM  model, so it is OFF here. To try it: delete the word REM (and the
-REM  space) at the start of the next line, then save and run again.
-REM set ERIS_TTC=on
-
-REM  Smart local->cloud router (only escalates to a cloud model on genuine
-REM  outliers, and ONLY if you have a cloud API key set). Harmless without
-REM  a key. To try it, un-REM the next line:
-REM set ERIS_ORCHESTRATION=on
+REM === these need extra setup - leave OFF until you have it ===
+REM  Point the language model at a vLLM / llama-server you started yourself:
+REM     set ERIS_LLM_BASE_URL=http://localhost:8000/v1
+REM  Durable memory: built-in "local" is the default and works now.
+REM  Do NOT set this to mem0 - that adapter is deferred and will error:
+REM     set ERIS_MEMORY_BACKEND=local
+REM  Vision: only after you pull a vision model and serve it:
+REM     set ERIS_VISION_BASE_URL=http://localhost:8000/v1
 
 echo Starting Eris's language model (Ollama)...
 echo (If its window says "address already in use", that is fine -
