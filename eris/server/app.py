@@ -51,6 +51,7 @@ class ChatRequest(BaseModel if HAS_FASTAPI else object):
     message: str = ""
     system_context: str = ""
     conversation_id: str = ""
+    profile: str = ""   # mode/profile id (e.g. "fast" | "deep"); "" => default
 
 class PonderRequest(BaseModel if HAS_FASTAPI else object):
     question: str = ""
@@ -65,6 +66,7 @@ class OpenAIChatRequest(BaseModel if HAS_FASTAPI else object):
     model: str = "eris"
     messages: list = []
     temperature: float = 0.7
+    profile: str = ""   # optional Eris mode/profile id (fast|deep|…)
 
 
 class SandboxRequest(BaseModel if HAS_FASTAPI else object):
@@ -134,6 +136,8 @@ def create_app(
     study = StudyEngine(extractor, orchestrator.memory, data_dir=data_dir,
                         journal=orchestrator.dream_journal, mediator=orchestrator.mediator)
     library = DocumentLibrary(extractor, orchestrator.memory, data_dir=data_dir)
+    from eris.interface.profiles import ProfileStore
+    profiles = ProfileStore(data_dir)   # Fast/Deep mode selector (re-read on demand)
     from eris.knowledge.author import DocumentAuthor
     from eris.knowledge.documents import library_dir as _lib_dir
     author = DocumentAuthor(orchestrator.mediator,
@@ -158,11 +162,19 @@ def create_app(
 
     # ── Endpoints ─────────────────────────────────────────────
 
+    @app.get("/api/profiles")
+    async def api_profiles():
+        """The mode/profile dropdown (re-read from disk so edits need no reboot)."""
+        profiles.reload()
+        return {"profiles": [p.public() for p in profiles.list()],
+                "default": profiles.default().id}
+
     @app.post("/chat")
     async def chat(req: ChatRequest):
         """Main conversation endpoint."""
+        prof = profiles.get(req.profile)
         result = await orchestrator.process(
-            req.message, system_context=req.system_context
+            req.message, system_context=req.system_context, profile=prof
         )
         # Tier 7: persist into a conversation thread for the history sidebar.
         cid = req.conversation_id or conversations.new_thread(req.message)
@@ -372,7 +384,8 @@ def create_app(
             reply = await agent.respond(message_text.strip(), agent_backends)
         else:
             result = await orchestrator.process(
-                message_text.strip(), system_context=system_context.strip())
+                message_text.strip(), system_context=system_context.strip(),
+                profile=profiles.get(req.profile))
             reply = result.response_text
 
         return {

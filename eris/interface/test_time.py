@@ -46,6 +46,7 @@ async def self_consistent_generate(
     min_samples: Optional[int] = None,
     max_samples: Optional[int] = None,
     temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
     embed_fn: Optional[Callable[[str], np.ndarray]] = None,
     k: Optional[float] = None,
     patience: int = 2,
@@ -79,8 +80,11 @@ async def self_consistent_generate(
     last_medoid_text: Optional[str] = None
     stable = 0
 
+    gen_kw = {"temperature": temperature}
+    if max_tokens is not None:
+        gen_kw["max_tokens"] = max_tokens
     for _ in range(max_samples):
-        resp = await mediator.generate(prompt, system, temperature=temperature)
+        resp = await mediator.generate(prompt, system, **gen_kw)
         if resp is None or not getattr(resp, "text", "").strip():
             if samples:
                 break          # backend dried up; go with what we have
