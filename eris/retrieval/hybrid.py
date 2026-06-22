@@ -100,6 +100,38 @@ def _dense_ranking(query_embedding, embeddings: List[Optional[np.ndarray]]) -> L
 Reranker = Callable[[str, List[str]], List[float]]
 
 
+def http_reranker(base_url: Optional[str] = None, model: Optional[str] = None,
+                  timeout: Optional[float] = None) -> Optional[Reranker]:
+    """Phase 2: a Reranker backed by a local OpenAI-style /rerank service
+    (NPU/iGPU). Returns None when no rerank endpoint is configured, so callers
+    transparently fall back to RRF-only. On any per-call error it returns neutral
+    scores (keeps the fused order) — never raises into retrieval."""
+    from eris.config import CONFIG
+    base = (base_url or CONFIG.rerank_base_url or "").rstrip("/")
+    if not base:
+        return None
+    mdl = model or CONFIG.rerank_model or "reranker"
+    to = timeout if timeout is not None else CONFIG.accel_timeout_s
+
+    def _rr(query: str, texts: List[str]) -> List[float]:
+        from eris.knowledge import embeddings as _emb   # reuse the HTTP seam
+        try:
+            data = _emb._post_json(
+                f"{base}/rerank",
+                {"model": mdl, "query": query, "documents": list(texts)}, to)
+            scores = [0.0] * len(texts)
+            for r in data.get("results", []):
+                i = r.get("index")
+                s = r.get("relevance_score", r.get("score", 0.0))
+                if isinstance(i, int) and 0 <= i < len(texts):
+                    scores[i] = float(s)
+            return scores
+        except Exception:
+            return [0.0] * len(texts)   # neutral -> RRF order preserved
+
+    return _rr
+
+
 def hybrid_search(
     query: str,
     records: Sequence[Any],

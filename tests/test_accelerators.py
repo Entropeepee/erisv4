@@ -74,5 +74,48 @@ class TestEmbeddingProvider(unittest.TestCase):
         self.assertEqual(v.shape[0], EMBED_DIM)
 
 
+class _Rec:
+    def __init__(self, text):
+        self.text = text
+        self.embedding = None
+
+
+class TestRerankProvider(unittest.TestCase):
+    def setUp(self):
+        self._base = CONFIG.rerank_base_url
+        self._post = emb._post_json
+
+    def tearDown(self):
+        CONFIG.rerank_base_url = self._base
+        emb._post_json = self._post
+
+    def test_none_when_unset(self):
+        from eris.retrieval.hybrid import http_reranker
+        CONFIG.rerank_base_url = ""
+        self.assertIsNone(http_reranker())
+
+    def test_reranker_reorders_via_hybrid(self):
+        from eris.retrieval.hybrid import http_reranker, hybrid_search
+        CONFIG.rerank_base_url = "http://localhost:9/v1"
+        def fake(url, payload, timeout):
+            docs = payload["documents"]
+            return {"results": [{"index": i, "relevance_score": (1.0 if i == len(docs) - 1 else 0.0)}
+                                for i in range(len(docs))]}
+        emb._post_json = fake
+        out = hybrid_search("q", [_Rec("a"), _Rec("b"), _Rec("c")],
+                            top_k=3, reranker=http_reranker())
+        self.assertEqual(out[0].text, "c")              # endpoint preferred the last
+
+    def test_reranker_error_is_rrf_only(self):
+        from eris.retrieval.hybrid import http_reranker, hybrid_search
+        CONFIG.rerank_base_url = "http://localhost:9/v1"
+        def boom(url, payload, timeout):
+            raise ConnectionError("down")
+        emb._post_json = boom
+        out = hybrid_search("q", [_Rec("a"), _Rec("b")], top_k=2,
+                            reranker=http_reranker())
+        self.assertEqual(len(out), 2)                   # no error; fused order kept
+
+
 if __name__ == "__main__":
     unittest.main()

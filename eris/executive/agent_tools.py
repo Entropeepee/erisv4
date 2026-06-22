@@ -22,15 +22,16 @@ from eris.executive.agent_loop import Tool
 
 def factual_lookup_tool(memory, *, pool_limit: int = 400, top_k: int = 5) -> Tool:
     """Hybrid (BM25 + dense) factual lookup over a read-only memory pool."""
-    from eris.retrieval.hybrid import hybrid_search
+    from eris.retrieval.hybrid import hybrid_search, http_reranker
     from eris.knowledge.embeddings import get_embedding
 
     def _run(query: str) -> str:
         records = memory.all_records(limit=pool_limit)
         if not records:
             return "No records in memory."
+        # Use the external reranker (NPU/iGPU) when configured; else RRF-only.
         hits = hybrid_search(query, records, query_embedding=get_embedding(query),
-                             top_k=top_k)
+                             top_k=top_k, reranker=http_reranker())
         if not hits:
             return "No relevant facts found."
         return "\n".join(f"- {getattr(h, 'text', '')}" for h in hits)
