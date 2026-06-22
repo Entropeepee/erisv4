@@ -239,6 +239,12 @@ class ErisOrchestrator:
         self._field_depth_monitor = CriticalityMonitor(
             "field_depth", self._noise_floor, "field_depth",
             k=CONFIG.orch_k, protected_steps=0)
+        # Tier 3: the response-field warm-start. A persistent field reused across
+        # turns (warm φ/θ prior) + a settle monitor on the response bvec.
+        self._response_field: Optional[FractalField] = None
+        self._resp_monitor = CriticalityMonitor(
+            "response_field", self._noise_floor, "response_field",
+            k=CONFIG.orch_k, protected_steps=0)
         # Tier 4: the formalized local↔cloud router (built here, wired below).
         self._router_monitor = CriticalityMonitor(
             "router", self._noise_floor, "router",
@@ -438,16 +444,32 @@ class ErisOrchestrator:
         # Tier 0: a FULL second field is built cold and re-run every turn just
         # to get a response bvec (~2× per-turn field cost). Counted here; the
         # Tier 3 warm-start gate is what later shrinks it.
-        self.counters.field_rebuilds += 1
-        # Seed the response field from the SAME field_seed as the main field, so
-        # the benchmark's M-seed repeats actually vary the response-field noise
-        # (an honest fidelity A/B for the Tier 3 warm-start). At the default
-        # seed=42 this is byte-identical to the old fixed-seed construction.
-        response_field = FractalField(size=self.field_size, seed=self.field_seed)
-        response_field.seed_from_text(result.response_text, use_frt=self.use_frt_seeding)
-        response_field.run(CONFIG.pde_steps_per_input // 2)
-        self.counters.resp_field_steps += CONFIG.pde_steps_per_input // 2
-        response_bvec = response_field.compute_bvec()
+        if CONFIG.orchestration_enabled and CONFIG.gate_response_field:
+            # Tier 3 warm-start: reuse a PERSISTENT field (no cold rebuild), blend
+            # the new response text into its warm φ/θ prior, and suspend once the
+            # response bvec stabilizes. Isolated + fidelity-gated — this bvec
+            # feeds dissonance, so the bench reports the dissonance delta.
+            if self._response_field is None:
+                self._response_field = FractalField(
+                    size=self.field_size, seed=self.field_seed)
+            rf = self._response_field
+            rf.warm_reseed(result.response_text, blend=CONFIG.orch_resp_blend)
+            executed = rf.run_gated_response(
+                self._resp_monitor, CONFIG.pde_steps_per_input // 2,
+                min_steps=CONFIG.orch_min_field_steps)
+            self.counters.resp_field_steps += executed
+            response_bvec = rf.compute_bvec()
+        else:
+            self.counters.field_rebuilds += 1
+            # Seed the response field from the SAME field_seed as the main field, so
+            # the benchmark's M-seed repeats actually vary the response-field noise
+            # (an honest fidelity A/B for the Tier 3 warm-start). At the default
+            # seed=42 this is byte-identical to the old fixed-seed construction.
+            response_field = FractalField(size=self.field_size, seed=self.field_seed)
+            response_field.seed_from_text(result.response_text, use_frt=self.use_frt_seeding)
+            response_field.run(CONFIG.pde_steps_per_input // 2)
+            self.counters.resp_field_steps += CONFIG.pde_steps_per_input // 2
+            response_bvec = response_field.compute_bvec()
         result.response_bvec = response_bvec
         result.archetype = response_bvec.archetype()
 

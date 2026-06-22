@@ -138,6 +138,7 @@ class ErisConfig:
     orch_k: float = 2.5                   # shared gate threshold (σ)
     orch_min_field_steps: int = 8         # protected floor for the field gate
     orch_answer_tol: float = 0.05         # bvec-distance fidelity tolerance
+    orch_resp_blend: float = 0.7          # Tier 3 warm-reseed: new-text weight (1.0 = cold)
 
 
 # Singleton config — import and modify before system init

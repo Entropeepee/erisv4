@@ -202,5 +202,31 @@ class TestFieldDepthGate(unittest.TestCase):
         self.assertEqual(executed, 12)
 
 
+class TestResponseFieldGate(unittest.TestCase):
+    def test_warm_reseed_blend1_matches_cold_seed(self):
+        """blend=1.0 must reproduce a cold seed_from_text (no warm prior leaks)."""
+        import numpy as np
+        from eris.config import to_numpy
+        a = FractalField(size=16, seed=3)
+        a.seed_from_text("the quick brown fox")
+        b = FractalField(size=16, seed=3)
+        b.run(7)                                  # evolve so it has a real warm state
+        b.warm_reseed("the quick brown fox", blend=1.0)
+        self.assertTrue(np.allclose(to_numpy(a.phi), to_numpy(b.phi), atol=1e-5))
+        self.assertTrue(np.allclose(to_numpy(a.theta), to_numpy(b.theta), atol=1e-5))
+
+    def test_run_gated_response_suspends_and_respects_floor(self):
+        f = FractalField(size=16, seed=2)
+        f.seed_from_text("hello")
+        executed = f.run_gated_response(_SuspendAfter(1), max_steps=25,
+                                        check_every=4, min_steps=8)
+        self.assertEqual(executed, 8)
+        f2 = FractalField(size=16, seed=2)
+        f2.seed_from_text("hello")
+        full = f2.run_gated_response(_AlwaysContinue(), max_steps=25,
+                                     check_every=4, min_steps=8)
+        self.assertEqual(full, 25)
+
+
 if __name__ == "__main__":
     unittest.main()

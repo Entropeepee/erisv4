@@ -11,7 +11,7 @@ Run the ruler yourself: `python bench_orchestration.py` (offline, deterministic)
 | Tier | Gate | Flag | Verdict | Status |
 |---|---|---|---|---|
 | 2 | field-evolution depth | `gate_field_depth` | **flagged OFF** — no safe savings on this engine | implemented, measured |
-| 3 | response-field warm-start | `gate_response_field` | (pending) | |
+| 3 | response-field warm-start | `gate_response_field` | **flagged OFF** — regresses dissonance, no savings | implemented, measured |
 | 4 | formalized router | `gate_router` | (pending) | |
 | 5 | failure reports → dreams | `gate_failure_reports` | (pending) | |
 | 6 | β-star bridge | `use_beta_star` | (pending) | |
@@ -43,3 +43,24 @@ settled trajectory suspends, a turbulent one runs full, `min_steps` is honored),
 but on this Kuramoto engine early field termination is a fidelity regression, not
 a saving. It stays **OFF by default**. The real, safe wins live downstream (the
 router's skipped cloud calls — Tier 4).
+
+## Tier 3 — response-field warm-start → **leave OFF** (isolated, as flagged)
+
+**What it does.** Reuses a persistent response field across turns (no cold
+rebuild), blends the new response text into its warm φ/θ prior
+(`warm_reseed`, `orch_resp_blend=0.7`), and suspends once the response bvec
+stabilizes (`run_gated_response`, settle mode).
+
+**Why it doesn't earn its place (measured).**
+- *No step savings.* The response bvec plateaus just like the main field, so the
+  settle signal never fires: resp-field steps 25→25 (+0%).
+- *It regresses the answer.* The warm prior (30% carryover) plus the persistent
+  field's advanced RNG stream shift the response bvec by **0.15** on both classes
+  — and since this bvec **is** the dissonance input, the dissonance delta is also
+  **~0.15**, 3× over the 0.05 tolerance. FAIL on A and B.
+
+So the warm-start is strictly worse here: it costs fidelity and saves nothing.
+This is exactly the drift the spec anticipated in marking Tier 3 isolated and
+fidelity-gated. It stays **OFF by default**. (A fidelity-safe variant would need
+to reset the RNG per turn and use blend≈1.0 — at which point it's just instance
+reuse saving a cheap allocation, not a real amortization win.)
