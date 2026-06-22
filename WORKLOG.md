@@ -62,3 +62,12 @@ Every change is its own commit, so nothing is entangled:
   tools, with every step grounded in live field state (coherence/regime/archetype)
   and a Reflexion nudge on unparseable steps or tool errors. Nothing calls it
   automatically — default `process()` unchanged. 5 tests.
+- **1.5 vision hook** — `eris/interface/vision.py`: model-agnostic OpenAI
+  multimodal plumbing (base64 image_url messages → `/chat/completions`). Pure
+  builders unit-tested; `see()` posts to `ERIS_VISION_BASE_URL`. You pick the VLM
+  (**Q3**). 4 tests.
+- **1.4 durable fact store** — `eris/memory/durable.py`: `DurableMemory` protocol
+  + `LocalFactStore` (JSON, durable, self-edits exact duplicates, BM25 lexical
+  recall of names/IDs/values). `get_durable_memory()` selects backend via
+  `ERIS_MEMORY_BACKEND`; mem0/Letta are documented seams (**Q2**). Standalone —
+  not wired into `process()` yet. 6 tests. **Total suite: 176 green.**

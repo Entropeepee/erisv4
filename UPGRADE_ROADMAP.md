@@ -32,8 +32,8 @@ it, with an acceptance check and a live status box. Update the boxes as we go.
 | 1.1 | Serving-route abstraction: Eris talks to Ollama **or** vLLM via one OpenAI-compatible path (`ERIS_LLM_BASE_URL`) | `[code]` | — | switch backend by env, no code change | `[x]` **this session** |
 | 1.2 | vLLM (NVFP4) serving path for concurrent multi-agent calls | `[machine]` | 1.1, 0.1 | vLLM serves; Eris routes to it when >1 concurrent call | `[ ]` |
 | 1.3 | Local hybrid RAG: dense + BM25 + RRF + cross-encoder reranker over Qdrant/LanceDB | `[code]` + `[machine]` | — | reranked Recall@1 beats current on a 50-query eval | `[~]` code done (standalone module + tests); reranker model + vector DB are yours |
-| 1.4 | Durable episodic/semantic memory (mem0 or Letta) under the field-salience layer | `[code]` + `[machine]` | 1.3 | facts persist across restarts; self-edits conflicts | `[ ]` |
-| 1.5 | Vision: optional Qwen3-VL-8B tool; expose tools via MCP | `[code]` + `[machine]` | — | Eris can read a screenshot/game-frame on request | `[ ]` |
+| 1.4 | Durable episodic/semantic memory (mem0 or Letta) under the field-salience layer | `[code]` + `[machine]` | 1.3 | facts persist across restarts; self-edits conflicts | `[~]` local default built + tested (persists, self-edits); mem0/Letta seam awaits **Q2** |
+| 1.5 | Vision: optional Qwen3-VL-8B tool; expose tools via MCP | `[code]` + `[machine]` | — | Eris can read a screenshot/game-frame on request | `[~]` model-agnostic hook built + tested; you supply the VLM server (**Q3**) |
 
 ## Stage 2 — "Smarter" via distillation
 
