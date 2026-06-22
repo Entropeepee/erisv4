@@ -447,6 +447,8 @@ class ErisOrchestrator:
         )
 
         system = system_context or self._default_system_prompt()
+        from eris.interface.profiles import reasoning_system
+        system = reasoning_system(system, getattr(prof, "reasoning", ""))
         mediator = self._resolve_mediator(prof)
         if prof.orchestration:
             # Tier 4: the FORMALIZED router. The shared CriticalityMonitor widens

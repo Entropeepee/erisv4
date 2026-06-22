@@ -62,14 +62,24 @@ def _coerce(d: dict) -> Optional[Profile]:
 
 def builtin_profiles() -> List[Profile]:
     return [
-        Profile(id="fast", label="Fast", default=True, max_tokens=1024,
+        Profile(id="fast", label="Fast", default=True, max_tokens=4096,
                 ttc=False, reasoning="low", orchestration=False, field_steps=30,
-                desc="Quick, responsive chat. One call, short answers."),
-        Profile(id="deep", label="Deep reasoning", max_tokens=4096,
+                desc="Quick chat. Brief reasoning, but a full (untruncated) answer."),
+        Profile(id="deep", label="Deep reasoning", max_tokens=8192,
                 ttc=True, ttc_max_samples=3, reasoning="high", orchestration=True,
                 field_steps=50,
-                desc="Slow, thorough. Multi-sample + full reasoning. For hard work."),
+                desc="Slow, thorough. Full reasoning + multi-sample. For hard work."),
     ]
+
+
+def reasoning_system(system: str, reasoning: str) -> str:
+    """Prepend a reasoning-effort hint that gpt-oss honors (low|medium|high), so
+    'Fast' gets SHORT thinking (and thus speed) instead of a truncated answer.
+    Harmless for models that ignore it."""
+    r = (reasoning or "").strip().lower()
+    if r in ("low", "medium", "high"):
+        return f"Reasoning: {r}\n\n{system}"
+    return system
 
 
 class ProfileStore:
