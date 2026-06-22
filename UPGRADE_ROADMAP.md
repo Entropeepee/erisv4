@@ -29,7 +29,7 @@ it, with an acceptance check and a live status box. Update the boxes as we go.
 
 | # | Item | Who | Depends on | Acceptance | Status |
 |---|---|---|---|---|---|
-| 1.1 | Serving-route abstraction: Eris talks to Ollama **or** vLLM via one OpenAI-compatible path (`ERIS_LLM_BASE_URL`) | `[code]` | — | switch backend by env, no code change | `[ ]` next |
+| 1.1 | Serving-route abstraction: Eris talks to Ollama **or** vLLM via one OpenAI-compatible path (`ERIS_LLM_BASE_URL`) | `[code]` | — | switch backend by env, no code change | `[x]` **this session** |
 | 1.2 | vLLM (NVFP4) serving path for concurrent multi-agent calls | `[machine]` | 1.1, 0.1 | vLLM serves; Eris routes to it when >1 concurrent call | `[ ]` |
 | 1.3 | Local hybrid RAG: dense + BM25 + RRF + cross-encoder reranker over Qdrant/LanceDB | `[code]` + `[machine]` | — | reranked Recall@1 beats current on a 50-query eval | `[ ]` |
 | 1.4 | Durable episodic/semantic memory (mem0 or Letta) under the field-salience layer | `[code]` + `[machine]` | 1.3 | facts persist across restarts; self-edits conflicts | `[ ]` |
@@ -67,3 +67,14 @@ it, with an acceptance check and a live status box. Update the boxes as we go.
   convergent signal *actually exists*: vote-stability across samples), plus
   budget-forcing hooks. Wired into the orchestrator behind `CONFIG.ttc_*` /
   `ERIS_TTC` (default OFF). New `llm_samples` counter. Offline tests.
+- **1.1 Serving-route abstraction**: `ERIS_LLM_BASE_URL` swaps the primary local
+  backend from Ollama to any OpenAI-compatible server (vLLM / TensorRT-LLM, NVFP4)
+  with no code change. Default unset → Ollama. Your machine-side 1.2 (stand up
+  vLLM) now just needs to point Eris at the URL.
+
+## To run on your Alienware later (the `[machine]` side, ready for you)
+- **0.2 model swap:** `set ERIS_LOCAL_MODEL=qwen3:14b` (or your R1-Distill GGUF tag
+  in Ollama), restart Eris. Try `/think` mode for reasoning.
+- **0.3 turn on TTC:** `set ERIS_TTC=on` for self-consistency on hard turns.
+- **1.2 vLLM:** once vLLM serves on `:8000`, `set ERIS_LLM_BASE_URL=http://localhost:8000/v1`
+  and `set ERIS_LOCAL_MODEL=<served-model-name>`; Eris routes to it automatically.

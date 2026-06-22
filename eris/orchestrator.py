@@ -201,8 +201,27 @@ class ErisOrchestrator:
         )
         self._local_model = os.environ.get("ERIS_LOCAL_MODEL", "gpt-oss:20b")
 
+        # Serving route (roadmap 1.1): the local "Broca's area" backend is either
+        # Ollama (default, dev) or any OpenAI-compatible server — set
+        # ERIS_LLM_BASE_URL to point at a vLLM/TensorRT-LLM endpoint (NVFP4 etc.)
+        # without touching code. vLLM needs no real key; a dummy satisfies the
+        # availability check.
+        self._llm_base_url = os.environ.get("ERIS_LLM_BASE_URL", "").strip()
+
+        def _make_local_backend():
+            if self._llm_base_url:
+                return OpenAIBackend(
+                    model=self._local_model,
+                    api_key=os.environ.get("ERIS_LLM_API_KEY", "local"),
+                    base_url=self._llm_base_url)
+            return OllamaBackend(model=self._local_model)
+
+        if self._llm_base_url:
+            print(f"[Eris LLM] primary backend -> OpenAI-compatible server at "
+                  f"{self._llm_base_url} (model {self._local_model})")
+
         # Fast path: one resident local model (Broca's area).
-        self.mediator.add_backend(OllamaBackend(model=self._local_model))
+        self.mediator.add_backend(_make_local_backend())
 
         # Deep path: cloud experts ONLY if keyed, plus a local fallback so the
         # ensemble is never empty. Dormant (keyless) cloud backends are skipped.
@@ -212,7 +231,7 @@ class ErisOrchestrator:
             _key = os.environ.get(_env, "")
             if _key:
                 self.deep_mediator.add_backend(_backend_cls(api_key=_key))
-        self.deep_mediator.add_backend(OllamaBackend(model=self._local_model))
+        self.deep_mediator.add_backend(_make_local_backend())
 
         # Number of genuine (cloud) experts wired for deep synthesis.
         self._cloud_experts = len(self.deep_mediator._backends) - 1
