@@ -424,6 +424,41 @@ class DreamingLoop:
         resp = self._generate(prompt, system)
         return (getattr(resp, "text", "") or "").strip()
 
+    def _introspect(self, query: str, seed_hits, mode: str, guided: bool):
+        """Layer 1 'introspect': she already holds material on this — reflect over
+        her OWN memory instead of web-searching it. Stores the reflection; no crawl."""
+        from eris.knowledge.embeddings import get_embedding
+        material = "\n\n".join((getattr(r, "text", "") or "")[:600]
+                               for r in (seed_hits or [])[:6])
+        if not material.strip():
+            return None
+        field = FractalField(size=self.field_size)
+        field.seed_from_text(query)
+        field.run(30)
+        regime = field.detect_regime()
+        bvec = field.compute_bvec()
+        reflection = self._reflect(query, material, regime,
+                                   dominant_domains=bvec.dominant_domains(2))
+        if reflection:
+            self.memory.mtm.store(MemoryRecord(
+                text=f"[My reflection on {query}] {reflection}", bvec=bvec,
+                embedding=get_embedding(reflection), source="introspection",
+                metadata={"title": query}))
+        feeling = self._regime_feeling(regime, bvec.dominant_domains(2))
+        summary = (f"Reflected on what I already know about '{query}' "
+                   f"(feeling {regime} — {feeling}).")
+        try:
+            self.journal.record(
+                kind="introspect", topic=query, summary=summary,
+                detail=(reflection or summary), sources=[], stored=[],
+                guided=guided, used_claude=False, regime=regime,
+                archetype=bvec.archetype(), resolved=True)
+        except Exception:
+            pass
+        return {"topic": query, "stored": 1 if reflection else 0, "guided": guided,
+                "regime": regime, "used_claude": False, "next": None,
+                "mode": "introspect"}
+
     def idle_explore(self) -> Optional[Dict[str, Any]]:
         """Self-directed learning with a research trajectory: pick a topic (chat /
         memory / guided), crawl it, quality-gate what's stored, then use her field
@@ -435,7 +470,18 @@ class DreamingLoop:
         topic, guided, mode = self._pick_crawl_topic()
         if not topic:
             return None
+        # Layer 1: reason about the topic before searching. skip chat residue /
+        # stray words ("Prompt"); reflect over her own memory when she already
+        # holds the material (don't web-search her own code/papers); else crawl.
+        from eris.metacognition.topic_router import route_topic
+        plan = route_topic(topic, self.memory, get_embedding)
+        if plan["action"] == "skip":
+            return None
         self._record_query(topic)
+        if plan["action"] == "introspect":
+            return self._introspect(plan["query"], plan.get("seed_hits") or [],
+                                    mode, guided)
+        topic = plan.get("query") or topic
 
         bundle = self._run_research(topic)
         sources: List[Dict[str, str]] = []

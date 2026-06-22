@@ -28,6 +28,7 @@ class Profile:
     ttc_max_samples: int = 3
     reasoning: str = "low"    # low|medium|high (bounded primarily by max_tokens)
     orchestration: bool = False   # use the formalized criticality router this turn
+    critic: bool = False      # run the deep calibration-critic pass before finalizing
     field_steps: int = 0      # 0 => CONFIG.pde_steps_per_input
     default: bool = False
     desc: str = ""
@@ -52,6 +53,7 @@ def _coerce(d: dict) -> Optional[Profile]:
             ttc_max_samples=int(d.get("ttc_max_samples", 3)),
             reasoning=str(d.get("reasoning", "low")),
             orchestration=bool(d.get("orchestration", False)),
+            critic=bool(d.get("critic", False)),
             field_steps=int(d.get("field_steps", 0)),
             default=bool(d.get("default", False)),
             desc=str(d.get("desc", "")),
@@ -67,8 +69,9 @@ def builtin_profiles() -> List[Profile]:
                 desc="Quick chat. Brief reasoning, but a full (untruncated) answer."),
         Profile(id="deep", label="Deep reasoning", max_tokens=8192,
                 ttc=True, ttc_max_samples=3, reasoning="high", orchestration=True,
-                field_steps=50,
-                desc="Slow, thorough. Full reasoning + multi-sample. For hard work."),
+                critic=True, field_steps=50,
+                desc="Slow, thorough. Full reasoning + multi-sample + calibration "
+                     "critic. For hard work."),
     ]
 
 

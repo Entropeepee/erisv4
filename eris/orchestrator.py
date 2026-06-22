@@ -505,6 +505,17 @@ class ErisOrchestrator:
             # No LLM available — use the specialist finding directly
             result.response_text = winner.content if winner else "I need an LLM backend to generate a full response. Add one with add_llm_backend()."
 
+        # Reasoning discipline (Layer 2): the deterministic quote guard runs on
+        # EVERY answer (cheap — strips any quote not verbatim in her sources, the
+        # fabricated-quote fix). The full critic LLM pass runs only in deep mode.
+        if result.response_text and memory_text:
+            from eris.reasoning.calibration import verify_quotes, is_synthesis_task
+            result.response_text, _q = verify_quotes(result.response_text, memory_text)
+            if getattr(prof, "critic", False):
+                result.response_text = await self._calibrate(
+                    user_message, result.response_text, memory_text, prof,
+                    is_synthesis_task(user_message, len(named_docs)), result.regime)
+
         # ── Layer 0: Compute response BFECDS ──────────────────────────
         # Tier 0: a FULL second field is built cold and re-run every turn just
         # to get a response bvec (~2× per-turn field cost). Counted here; the
@@ -800,6 +811,34 @@ class ErisOrchestrator:
         r"there\s+is\s+no\s+such|that\s+model\s+do(es)?\s+not)",
         re.IGNORECASE,
     )
+
+    async def _calibrate(self, query: str, answer: str, sources_text: str, prof,
+                         is_synthesis: bool, regime: str) -> str:
+        """Layer 2 critic pass (deep mode): rewrite the draft with calibrated
+        verbs + honest attribution per the five-tier discipline, then re-run the
+        deterministic quote guard on the critic's output. Any failure returns the
+        (already quote-guarded) draft unchanged."""
+        from eris.reasoning.calibration import calibration_system, verify_quotes
+        system = calibration_system(is_synthesis, regime)
+        prompt = (
+            f"[The question]\n{query}\n\n"
+            f"[Your draft answer]\n{answer}\n\n"
+            f"[The ONLY sources you may quote — quote verbatim from here or "
+            f"paraphrase]\n{sources_text[:6000]}\n\n"
+            "Rewrite your answer following the discipline above. Stay bold where "
+            "the sources back you; mark analogies as analogies.")
+        try:
+            resp = await self.mediator.generate(
+                prompt=prompt, system=system,
+                max_tokens=prof.max_tokens, temperature=prof.temperature)
+            revised = (getattr(resp, "text", "") or "").strip() if resp else ""
+        except Exception as e:
+            print(f"[calibrate] critic pass failed (non-fatal): {e}")
+            return answer
+        if not revised:
+            return answer
+        revised, _ = verify_quotes(revised, sources_text)
+        return revised
 
     async def _ground_if_contradicting(self, user_message: str, response_text: str,
                                        system_context: str, prompt: str,
