@@ -167,6 +167,20 @@ class ErisConfig:
     # r.jina.ai, which returns clean reader markdown. PRIVACY TRADEOFF: this
     # sends the target URL to a third party. Default OFF — David's call.
     web_reader_proxy: bool = False
+
+    # ── Accelerator services (optional local OpenAI-compatible endpoints) ──
+    # Unset => current in-process behavior. Eris NEVER imports openvino; the NPU/
+    # iGPU models run as separate local services (OpenArc / OpenVINO Model Server)
+    # that Eris talks to over HTTP, with graceful fallback when unset/unreachable.
+    embed_base_url: str = os.environ.get("ERIS_EMBED_BASE_URL", "")   # e.g. http://localhost:8013/v1
+    embed_model: str = os.environ.get("ERIS_EMBED_MODEL", "")
+    rerank_base_url: str = os.environ.get("ERIS_RERANK_BASE_URL", "")
+    rerank_model: str = os.environ.get("ERIS_RERANK_MODEL", "")
+    tts_base_url: str = os.environ.get("ERIS_TTS_BASE_URL", "")       # local iGPU TTS; else edge-tts
+    tts_model: str = os.environ.get("ERIS_TTS_MODEL", "")
+    stt_base_url: str = os.environ.get("ERIS_STT_BASE_URL", "")       # Whisper-on-NPU; else off
+    stt_model: str = os.environ.get("ERIS_STT_MODEL", "")
+    accel_timeout_s: float = float(os.environ.get("ERIS_ACCEL_TIMEOUT", "20"))
     orch_resp_blend: float = 0.7          # Tier 3 warm-reseed: new-text weight (1.0 = cold)
 
 
