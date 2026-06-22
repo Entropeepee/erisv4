@@ -287,6 +287,22 @@ async function openDream(id){
   s.appendChild(btn); s.appendChild(box);
   $('#modal').classList.add('on');
 }
+async function deepRead(){
+  const src=prompt("Comprehend what? Give a file or FOLDER path on this PC "
+    +"(e.g. your erisv4 folder), or type 'ltm' to synthesize her own memory:");
+  if(!src) return;
+  toast("Comprehending "+src+" — this can take a while (resumable if interrupted)…");
+  try{
+    const d=await (await fetch('/api/deep-read',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({source:src})})).json();
+    if(d.error){ toast('Deep-read error: '+d.error); return; }
+    loadLibrary&&loadLibrary();
+    const note=`Comprehended ${d.n_chunks} chunk(s), ${d.levels} level(s)`
+      +(d.capped?' (hit cap)':'')+(d.cached?' (already done)':'')+'. Now ask her about it.';
+    addMsg('eris', (d.synthesis||'(no synthesis)')+"\n\n_"+note+"_");
+    toast(note);
+  }catch(e){ toast('deep-read failed: '+e); }
+}
 async function steerTopic(){
   const t=prompt('Point Eris at a topic to study (she keeps choosing on her own too):'); if(!t)return;
   const now=confirm(`Study "${t}" now?\n\nOK = study immediately (may take a moment)\nCancel = queue it for her next dream cycle`);
