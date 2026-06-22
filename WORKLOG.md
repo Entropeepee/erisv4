@@ -57,3 +57,8 @@ Every change is its own commit, so nothing is entangled:
   (operates on a caller-supplied record list, read-only); `retrieve_resonant`
   untouched. 7 tests. **Open: Q1** (wire into live retrieval, or keep as a tool?).
   Machine side: download a cross-encoder reranker + (optionally) a vector DB.
+- **3.1 grounded ReAct loop** — `eris/executive/agent_loop.py` + opt-in
+  `ErisOrchestrator.run_agent(goal, tools)`: Reason→Act→Observe over plain-callable
+  tools, with every step grounded in live field state (coherence/regime/archetype)
+  and a Reflexion nudge on unparseable steps or tool errors. Nothing calls it
+  automatically — default `process()` unchanged. 5 tests.

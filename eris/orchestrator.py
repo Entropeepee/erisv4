@@ -616,6 +616,24 @@ class ErisOrchestrator:
             return resp
         return await self.mediator.generate(prompt=prompt, system=system)
 
+    async def run_agent(self, goal: str, tools, *, max_steps: int = 6) -> dict:
+        """Run a grounded ReAct loop (roadmap 3.1) over `tools`, using Eris's
+        mediator and LIVE field state as the grounding signal. Opt-in: nothing
+        calls this automatically, so default behavior is unchanged."""
+        from eris.executive.agent_loop import ReActAgent
+
+        def _field_state() -> dict:
+            return {
+                "coherence": self.field.coherence,
+                "regime": self.field.detect_regime(),
+                "archetype": self.field.compute_bvec().archetype(),
+                "dCdX": self.field.dCdX,
+            }
+
+        agent = ReActAgent(self.mediator, tools,
+                           field_state_fn=_field_state, max_steps=max_steps)
+        return await agent.run(goal)
+
     def _assemble_prompt(self, user_message: str,
                          winner: Optional[SpecialistFinding],
                          memory_text: str,

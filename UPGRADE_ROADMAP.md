@@ -46,7 +46,7 @@ it, with an acceptance check and a live status box. Update the boxes as we go.
 
 | # | Item | Who | Depends on | Acceptance | Status |
 |---|---|---|---|---|---|
-| 3.1 | Formalize ReAct **grounded in field state** + Reflexion self-critique; log failures to memory | `[code]` | 1.4 | loop cites field state each step; failures recalled | `[ ]` |
+| 3.1 | Formalize ReAct **grounded in field state** + Reflexion self-critique; log failures to memory | `[code]` | 1.4 | loop cites field state each step; failures recalled | `[~]` loop built + tested (`ErisOrchestrator.run_agent`); memory-logging of failures pairs with 1.4 |
 | 3.2 | SEAL-style self-edits: dreaming loop generates LoRA data from successful interactions; periodic QLoRA update with rollback guard | `[code]` + `[machine]` | 2.2, 3.1 | held-out eval never regresses (catastrophic-forgetting guard) | `[ ]` |
 | 3.3 | (Only if dense-32B target) EAGLE-3 / draft-model speculation | `[machine]` | 0.2 | end-to-end tok/s improves (else abandon) | `[ ]` |
 
