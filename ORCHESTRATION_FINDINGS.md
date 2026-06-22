@@ -13,7 +13,7 @@ Run the ruler yourself: `python bench_orchestration.py` (offline, deterministic)
 | 2 | field-evolution depth | `gate_field_depth` | **flagged OFF** — no safe savings on this engine | implemented, measured |
 | 3 | response-field warm-start | `gate_response_field` | **flagged OFF** — regresses dissonance, no savings | implemented, measured |
 | 4 | formalized router | `gate_router` | **fidelity-safe** — enabled by `ERIS_ORCHESTRATION=on` | implemented, measured |
-| 5 | failure reports → dreams | `gate_failure_reports` | (pending) | |
+| 5 | failure reports → dreams | `gate_failure_reports` | **safe** — metacognition feature, no perf cost | implemented, tested |
 | 6 | β-star bridge | `use_beta_star` | (pending) | |
 
 ---
@@ -92,3 +92,16 @@ selection). Behind `gate_router`; baseline path unchanged when off.
 easy) and structurally better than the old binary router. It is what
 `ERIS_ORCHESTRATION=on` enables. Emits `FailureModeReport`s on SWITCH/ESCALATE
 for Tier 5.
+
+## Tier 5 — failure reports → dream queue → **safe (metacognition, not perf)**
+
+**What it does.** When a gate makes a mechanism-changing decision (router
+SWITCH/ESCALATE), the orchestrator turns its `FailureModeReport` into a question
+in `dreaming_loop.pending_questions` (CIP §0111 — never silently proceed; reflect
+on it). The orchestrator mediates, so gates stay decoupled from the dream loop.
+Behind `gate_failure_reports`.
+
+**Measured.** Pure plumbing — no resource or fidelity effect. Unit-tested both
+ways: a forced ESCALATE adds exactly one dream question when the flag is on, and
+none when off. Safe to enable alongside the router; it makes the router's
+escalations *observable* in Eris's metacognition rather than invisible.

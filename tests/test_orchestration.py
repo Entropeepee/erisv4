@@ -291,6 +291,24 @@ class TestRouterGate(unittest.TestCase):
         asyncio.run(o.process("hello"))
         self.assertEqual(o.counters.cloud_calls, 0)        # local only
 
+    def test_failure_report_becomes_dream_question(self):
+        """Tier 5: a SWITCH/ESCALATE report lands as a question in the dream
+        queue when gate_failure_reports is on — and does NOT when it's off."""
+        from eris.config import CONFIG
+        o = self._orch()
+        o._router_monitor.observe = lambda *a, **k: (
+            Decision.ESCALATE,
+            FailureModeReport("router", "router", Decision.ESCALATE, "outlier", 9.0,
+                              recommended_action="run elevated fidelity"))
+        CONFIG.gate_failure_reports = False
+        asyncio.run(o.process("hello"))
+        self.assertEqual(len(o.dreaming_loop.pending_questions), 0)
+        CONFIG.gate_failure_reports = True
+        asyncio.run(o.process("hello again"))
+        qs = o.dreaming_loop.pending_questions
+        self.assertEqual(len(qs), 1)
+        self.assertIn("ESCALATE", qs[0])
+
 
 if __name__ == "__main__":
     unittest.main()

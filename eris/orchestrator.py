@@ -393,6 +393,8 @@ class ErisOrchestrator:
                 "dcdx", abs(result.dCdX), {"mode": "anomaly"})
             if report is not None:
                 self._last_router_report = report   # Tier 5 picks this up
+                if CONFIG.gate_failure_reports:
+                    self._route_failure_report(report)
             if decision is Decision.ESCALATE and self._cloud_experts >= 1:
                 self.counters.cloud_calls += self._cloud_experts
                 print(f"[ROUTER] ESCALATE -> full {self._cloud_experts}-expert ensemble.")
@@ -536,6 +538,16 @@ class ErisOrchestrator:
 
         result.latency_ms = (time.time() - t0) * 1000
         return result
+
+    def _route_failure_report(self, report: FailureModeReport) -> None:
+        """Tier 5 (CIP §0111 — never silently proceed on a possibly-wrong answer).
+        Turn a mechanism-changing decision (SWITCH/ESCALATE) into a metacognitive
+        question in the dream queue. The orchestrator mediates, so gates stay
+        decoupled from the dream loop."""
+        q = (f"Gate '{report.specialization}' chose {report.decision.name} "
+             f"({report.reason}, z={report.z_score:.2f}) on turn {self.turn_count}. "
+             f"{report.recommended_action}. Was the premise sound?")
+        self.dreaming_loop.pending_questions.append(q)
 
     async def _deep_ensemble(self, prompt: str, system: str):
         """ESCALATE path: fire the full cloud MoE ensemble and synthesize. Shared
