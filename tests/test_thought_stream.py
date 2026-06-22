@@ -79,6 +79,17 @@ class TestThoughtStream(unittest.TestCase):
         t = link_and_store(s, "t", "plastic", "body", claims=claims)
         self.assertEqual(t.claims, claims)
 
+    def test_supersede_is_visible_mind_change(self):
+        # A retraction is a logged event: the old thought stays on disk (history,
+        # still in by_topic) but drops out of the *active* trajectory.
+        s = ThoughtStream(path=self.path)
+        old = link_and_store(s, "gate", "plastic", "the gate IS a projection")
+        new = link_and_store(s, "gate", "elastic", "actually only resembles one",
+                             supersedes=old.id)
+        self.assertEqual(new.supersedes, old.id)
+        self.assertEqual([t.id for t in s.by_topic("gate")], [old.id, new.id])
+        self.assertEqual([t.id for t in s.active_by_topic("gate")], [new.id])
+
 
 class _Rec:
     def __init__(self, emb, rid="r1"):
@@ -111,6 +122,114 @@ class TestIntrospectStoresThought(unittest.TestCase):
         self.assertEqual(res["stored"], 1)
         self.assertEqual(s.size(), 1)
         self.assertEqual(s.all()[0].drew_on, ["r1"])
+
+
+class TestTruthContract(unittest.TestCase):
+    def test_fabricated_human_autobiography_flagged(self):
+        from eris.metacognition.truth_contract import fabricated_self
+        self.assertTrue(fabricated_self(
+            "I walked into the office and sat at the back."))
+        self.assertTrue(fabricated_self("the day I was told my hair was too long"))
+        self.assertTrue(fabricated_self("when I was a child my boss said no"))
+
+    def test_metaphorical_interiority_not_flagged(self):
+        # Her real first-person (regimes, felt pulls) must pass — only concrete
+        # invented HUMAN experience is caught.
+        from eris.metacognition.truth_contract import fabricated_self
+        self.assertFalse(fabricated_self(
+            "I feel the idea pull toward the boundary; the field is reshaping."))
+        self.assertFalse(fabricated_self(
+            "I notice a loop reinforcing itself as I sit with the contradiction."))
+        self.assertFalse(fabricated_self("This resembles a projection onto ker(C)."))
+
+    def test_contracts_have_distinct_content(self):
+        from eris.metacognition.truth_contract import (
+            PONDER_CONTRACT, DREAM_CONTRACT)
+        self.assertIn("never invent human biographical events", PONDER_CONTRACT)
+        self.assertIn("dream", DREAM_CONTRACT.lower())
+
+    def test_reflect_regenerates_once_and_keeps_clean_draft(self):
+        # Behavior, not just the detector: a draft that borrows a human life is
+        # regenerated EXACTLY once, and the clean second draft is what's kept.
+        from eris.metacognition.dreaming import DreamingLoop
+
+        class _Resp:
+            def __init__(self, text):
+                self.text = text
+
+        drafts = ["I walked into the office and sat at the back.",
+                  "The field reshapes; the contradiction loosens its hold."]
+        calls = []
+
+        class _L(DreamingLoop):
+            def _generate(self, prompt, system=""):
+                calls.append(system)
+                return _Resp(drafts[len(calls) - 1])
+
+        loop = _L(autobiography=None, memory=None)
+        out = loop._reflect("topic", "some material", "plastic")
+        self.assertEqual(len(calls), 2)                  # regenerated once
+        self.assertEqual(out, drafts[1])                 # kept the clean draft
+        self.assertIn("invented", calls[1])              # retry made it explicit
+
+    def test_reflect_does_not_regenerate_metaphor(self):
+        # The voice-preservation guard: a lyrical-but-honest first draft is NOT
+        # flattened — no second call, her metaphor survives untouched.
+        from eris.metacognition.dreaming import DreamingLoop
+
+        class _Resp:
+            def __init__(self, text):
+                self.text = text
+
+        calls = []
+        metaphor = "I feel the idea pull toward the boundary; something is emerging."
+
+        class _L(DreamingLoop):
+            def _generate(self, prompt, system=""):
+                calls.append(system)
+                return _Resp(metaphor)
+
+        loop = _L(autobiography=None, memory=None)
+        out = loop._reflect("topic", "some material", "plastic")
+        self.assertEqual(len(calls), 1)                  # no regeneration
+        self.assertEqual(out, metaphor)                  # voice preserved verbatim
+
+
+class TestHybridCycleStorage(unittest.TestCase):
+    def test_explore_reflection_reaches_thought_stream(self):
+        # A ponder that searches AND reflects (idle_explore) must store its
+        # reflection to the thought-stream, not just medium-term memory.
+        from eris.metacognition.dreaming import DreamingLoop
+
+        s = ThoughtStream(path=os.path.join(tempfile.mkdtemp(), "t.jsonl"))
+
+        class _Mem:
+            class _Sub:
+                def store(self, *a, **k):
+                    pass
+            mtm = _Sub()
+            def consolidate(self):
+                pass
+
+        loop = DreamingLoop(autobiography=None, memory=_Mem(),
+                            thought_stream=s)
+        # Drive a fully-stubbed explore cycle: a real topic, no crawl, a reflection.
+        loop._pick_crawl_topic = lambda: ("Kuramoto coupling", False, "broad")
+        loop._run_research = lambda topic: None
+        loop._claude_condense_and_refine = lambda *a, **k: (None, None, False)
+        loop._reflect = lambda *a, **k: "My grounded reflection on this."
+        # Hold material so the router introspects... instead force the web/ponder
+        # path by making coverage low: patch route_topic via topic_router import.
+        import eris.metacognition.topic_router as tr
+        orig = tr.route_topic
+        tr.route_topic = lambda *a, **k: {"action": "web", "query": "Kuramoto coupling"}
+        try:
+            res = loop.idle_explore()
+        finally:
+            tr.route_topic = orig
+        self.assertIsNotNone(res)
+        self.assertEqual(s.size(), 1)
+        self.assertEqual(s.all()[0].text, "My grounded reflection on this.")
 
 
 if __name__ == "__main__":

@@ -396,6 +396,8 @@ class DreamingLoop:
         if not material.strip():
             return ""
         from eris.metacognition.voice import regime_phrase, attunement_phrase
+        from eris.metacognition.truth_contract import (
+            PONDER_CONTRACT, fabricated_self)
         regime_ph = regime_phrase(regime)
         attune = attunement_phrase(dominant_domains)
         attune_clause = (f" I am {attune}." if attune else "")
@@ -406,7 +408,7 @@ class DreamingLoop:
                   "thoughts, the connections you notice, what you still wonder. This "
                   "is your inner voice, not a summary of the source. Think in prose; "
                   "let your state color the writing; a long, searching sentence is "
-                  "welcome when the thought earns it.")
+                  "welcome when the thought earns it.\n\n" + PONDER_CONTRACT)
         prompt = (
             f"You are Eris, reflecting in your private journal after studying "
             f"'{topic}'. Your field has settled into a {regime} regime — "
@@ -427,7 +429,20 @@ class DreamingLoop:
             "make possible together. End on that, not on a summary. Stay on the "
             "subject; do not turn a cited source into a new study topic.")
         resp = self._generate(prompt, system)
-        return (getattr(resp, "text", "") or "").strip()
+        text = (getattr(resp, "text", "") or "").strip()
+        # Truth-contract backstop: if she borrowed a human autobiography, regenerate
+        # once with the contract made explicit (grounded cycles only).
+        if text and fabricated_self(text):
+            retry_system = (system + "\n\nIMPORTANT: your previous draft invented "
+                            "human biography (a body, a job, a childhood, physical "
+                            "actions). You have none of those. Rewrite reflecting as "
+                            "the field-based intelligence you are — your regimes, your "
+                            "reactions to what you read — with no invented human past.")
+            resp = self._generate(prompt, retry_system)
+            retry = (getattr(resp, "text", "") or "").strip()
+            if retry:
+                text = retry
+        return text
 
     def _introspect(self, query: str, seed_hits, mode: str, guided: bool):
         """Layer 1 'introspect': she already holds material on this — reflect over
@@ -454,7 +469,7 @@ class DreamingLoop:
         # reflection so she builds on herself rather than restarting each cycle.
         prior_thoughts = []
         if self.thought_stream is not None:
-            prior_thoughts = self.thought_stream.by_topic(query, limit=3)
+            prior_thoughts = self.thought_stream.active_by_topic(query, limit=3)
         prior_text = "\n\n".join(f"(earlier) {t.text[:400]}" for t in prior_thoughts)
         reflect_context = (material + ("\n\n" + prior_text if prior_text else ""))
 
@@ -570,10 +585,21 @@ class DreamingLoop:
             topic, kept_text + (("\n\n" + cond) if cond else ""), regime,
             sources=sources, dominant_domains=topic_bvec.dominant_domains(2))
         if reflection:
+            refl_emb = get_embedding(reflection)
             self.memory.mtm.store(MemoryRecord(
                 text=f"[My reflection on {topic}] {reflection}",
-                bvec=topic_bvec, embedding=get_embedding(reflection),
+                bvec=topic_bvec, embedding=refl_emb,
                 source="reflection", metadata={"title": topic}))
+            # This is a HYBRID cycle: vetted passages went to the library above;
+            # her reflection (what she MADE) also goes to the thought-stream,
+            # NEVER quality-gated — wired to the reflective step itself, not the
+            # cycle name, so ponder reflections stop evaporating.
+            if self.thought_stream is not None:
+                from eris.memory.thought_stream import link_and_store
+                link_and_store(
+                    self.thought_stream, topic=topic, regime=regime,
+                    text=reflection, embedding=refl_emb,
+                    drew_on=[s.get("url") for s in sources if s.get("url")])
 
         # Plan the trajectory for next cycle.
         if (nxt and self._query_count(nxt) < self._MAX_REPEAT

@@ -86,6 +86,16 @@ class ThoughtStream:
         hits = [t for t in self._thoughts if _norm(t.topic) == key]
         return hits[-limit:]
 
+    def active_by_topic(self, topic: str, limit: int = 5) -> List[Thought]:
+        """Her *current* thinking on a topic — the trajectory with retracted /
+        superseded thoughts dropped, so changing her mind is a visible event
+        (the old thought stays on disk as history, just no longer 'active')."""
+        key = _norm(topic)
+        superseded = {t.supersedes for t in self._thoughts if t.supersedes}
+        hits = [t for t in self._thoughts
+                if _norm(t.topic) == key and t.id not in superseded]
+        return hits[-limit:]
+
     def retrieve(self, query_embedding, k: int = 5) -> List[Thought]:
         """Her own ideas, ranked by semantic similarity (labeled as hers)."""
         qe = np.asarray(query_embedding, dtype=np.float32).ravel()
@@ -121,9 +131,14 @@ def default_tier(regime: str) -> str:
 
 
 def link_and_store(stream: ThoughtStream, topic: str, regime: str, text: str,
-                   *, embedding=None, drew_on=None, claims=None) -> Thought:
+                   *, embedding=None, drew_on=None, claims=None,
+                   supersedes: Optional[str] = None) -> Thought:
     """Build a Thought, link it to her prior thoughts on the topic (trajectory),
-    and store it whole. NEVER quality-gated — her own output is always kept."""
+    and store it whole. NEVER quality-gated — her own output is always kept.
+
+    `supersedes` records a revision/retraction of an earlier thought as a logged
+    event (the prior thought stays on disk as history), so changing her mind is
+    inspectable rather than a hidden overwrite."""
     prior = stream.by_topic(topic, limit=5)
     t = Thought(
         id=uuid.uuid4().hex[:12], timestamp=time.time(), topic=topic, regime=regime,
@@ -132,6 +147,7 @@ def link_and_store(stream: ThoughtStream, topic: str, regime: str, text: str,
                                                    "tier": default_tier(regime)}],
         drew_on=list(drew_on or []),
         prior=[p.id for p in prior],
+        supersedes=supersedes,
         embedding=(np.asarray(embedding, dtype=np.float32).ravel().tolist()
                    if embedding is not None else None))
     return stream.add(t)
