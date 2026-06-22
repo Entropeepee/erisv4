@@ -71,3 +71,14 @@ Every change is its own commit, so nothing is entangled:
   recall of names/IDs/values). `get_durable_memory()` selects backend via
   `ERIS_MEMORY_BACKEND`; mem0/Letta are documented seams (**Q2**). Standalone —
   not wired into `process()` yet. 6 tests. **Total suite: 176 green.**
+- **2.1 distillation trace harness** — `eris/training/trace_gen.py`:
+  backend-agnostic, **resumable** JSONL trace collection from any teacher
+  (re-runs skip done prompts), lean Alpaca-style schema. Foundation for the
+  machine-side Unsloth QLoRA distill (2.2). 4 tests. **Total suite: 180 green.**
+
+## Status: all buildable `[code]` items done
+Everything that can be built without your Alienware is on this branch. What
+remains is genuinely machine-side (CUDA/vLLM/NPU/model downloads/QLoRA fine-tune)
+or one of the three open questions above (Q1 RAG wiring, Q2 memory backend, Q3
+VLM). Merge `orchestration-cip` when you're ready; nothing changes behavior until
+you flip an env flag.

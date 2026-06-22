@@ -39,7 +39,7 @@ it, with an acceptance check and a live status box. Update the boxes as we go.
 
 | # | Item | Who | Depends on | Acceptance | Status |
 |---|---|---|---|---|---|
-| 2.1 | Generate reasoning/agent traces on Eris's own tasks (cloud or local-32B teacher); parallelize with Ray across spare boxes | `[code]` + `[machine]` | 0.2 | a clean trace set (s1-style, small + high quality) | `[ ]` |
+| 2.1 | Generate reasoning/agent traces on Eris's own tasks (cloud or local-32B teacher); parallelize with Ray across spare boxes | `[code]` + `[machine]` | 0.2 | a clean trace set (s1-style, small + high quality) | `[~]` resumable harness built + tested; you supply the teacher model + (optional) Ray |
 | 2.2 | QLoRA-distill an 8–14B student in Unsloth; export GGUF; A/B vs stock | `[machine]` | 2.1 | student ≥ stock on your eval at lower latency | `[ ]` |
 
 ## Stage 3 — Autonomy & self-improvement (experimental)
