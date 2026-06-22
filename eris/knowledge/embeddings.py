@@ -96,12 +96,9 @@ def _hashed_embedding(text: str, dim: int = EMBED_DIM) -> np.ndarray:
     return vec / n if n > 1e-9 else vec
 
 
-def get_embedding(text: str) -> np.ndarray:
-    """Return a normalized float32 embedding for `text`.
-
-    Uses the semantic model when enabled+available, else the deterministic
-    fallback. Always returns a 1-D float32 array.
-    """
+def _in_process_embedding(text: str) -> np.ndarray:
+    """The local embedding: semantic model when enabled+available, else the
+    deterministic hashed fallback. Always a 1-D float32 array."""
     if _use_real_model():
         m = _model()
         if m is not None:
@@ -113,6 +110,143 @@ def get_embedding(text: str) -> np.ndarray:
     return _hashed_embedding(text)
 
 
+# ── Provider seam (Phase 1): optional external embeddings service ──────────
+# If CONFIG.embed_base_url is set, embeddings are computed by a local
+# OpenAI-compatible service (e.g. an NPU/iGPU OpenArc/OVMS endpoint). Eris adds
+# NO dependency and falls back to the in-process path on any error or dim
+# mismatch. A small text-hash cache avoids re-embedding repeats.
+from collections import OrderedDict
+
+_CACHE: "OrderedDict[str, np.ndarray]" = OrderedDict()
+_CACHE_MAX = int(os.environ.get("ERIS_EMBED_CACHE", "8192"))
+_PROVIDER_WARNED = False
+
+
+def _warn_once(msg: str) -> None:
+    global _PROVIDER_WARNED
+    if not _PROVIDER_WARNED:
+        print(msg)
+        _PROVIDER_WARNED = True
+
+
+def _cache_key(text: str) -> str:
+    return hashlib.md5((text or "").encode("utf-8")).hexdigest()
+
+
+def _cache_get(text: str):
+    k = _cache_key(text)
+    v = _CACHE.get(k)
+    if v is not None:
+        _CACHE.move_to_end(k)
+    return v
+
+
+def _cache_put(text: str, vec: np.ndarray) -> None:
+    k = _cache_key(text)
+    _CACHE[k] = vec
+    _CACHE.move_to_end(k)
+    while len(_CACHE) > _CACHE_MAX:
+        _CACHE.popitem(last=False)
+
+
+def _post_json(url: str, payload: dict, timeout: float) -> dict:
+    """Thin HTTP seam (so tests can monkeypatch it). Synchronous; the embed
+    service is local so latency is small, and batching keeps call count low."""
+    import httpx
+    with httpx.Client(timeout=timeout) as client:
+        r = client.post(url, json=payload)
+        r.raise_for_status()
+        return r.json()
+
+
+def _provider_embeddings(texts):
+    """POST many texts to the configured /embeddings service (OpenAI shape).
+    Returns a list of float32 vectors, or None to signal 'fall back'."""
+    from eris.config import CONFIG
+    base = (CONFIG.embed_base_url or "").rstrip("/")
+    if not base:
+        return None
+    try:
+        data = _post_json(
+            f"{base}/embeddings",
+            {"model": CONFIG.embed_model or "embedding", "input": list(texts)},
+            CONFIG.accel_timeout_s)
+        rows = data.get("data", [])
+        vecs = [np.asarray(d["embedding"], dtype=np.float32).ravel() for d in rows]
+        if len(vecs) != len(texts):
+            _warn_once(f"[embeddings] provider returned {len(vecs)} of {len(texts)} "
+                       f"vectors; falling back to in-process.")
+            return None
+        # Dimension guard: a different-dim model would corrupt retrieval.
+        if vecs and vecs[0].shape[0] != EMBED_DIM:
+            _warn_once(
+                f"[embeddings] provider dim {vecs[0].shape[0]} != EMBED_DIM {EMBED_DIM}. "
+                f"Falling back. Set ERIS_EMBED_DIM to match the served model AND run "
+                f"reembed_memory() once — stored vectors were made by another model.")
+            return None
+        return vecs
+    except Exception as e:
+        _warn_once(f"[embeddings] provider error ({e}); falling back to in-process. "
+                   "(logged once)")
+        return None
+
+
+def get_embeddings(texts):
+    """Batch embedding. Uses the external provider when configured (one HTTP call
+    for all cache-misses), else the in-process path. Order-preserving."""
+    texts = list(texts)
+    out = [None] * len(texts)
+    miss_i, miss_t = [], []
+    for i, t in enumerate(texts):
+        c = _cache_get(t)
+        if c is not None:
+            out[i] = c
+        else:
+            miss_i.append(i)
+            miss_t.append(t)
+    if miss_t:
+        provided = _provider_embeddings(miss_t)
+        if provided is None:
+            provided = [_in_process_embedding(t) for t in miss_t]
+        for j, i in enumerate(miss_i):
+            out[i] = provided[j]
+            _cache_put(miss_t[j], provided[j])
+    return out
+
+
+def get_embedding(text: str) -> np.ndarray:
+    """Return a normalized float32 embedding for `text` (provider or in-process)."""
+    return get_embeddings([text])[0]
+
+
 def is_semantic() -> bool:
-    """True if the real semantic model is active (vs the deterministic fallback)."""
+    """True if a real semantic source is active (external provider or local model)."""
+    from eris.config import CONFIG
+    if CONFIG.embed_base_url:
+        return True
     return _use_real_model() and _model() is not None
+
+
+def reembed_memory(memory) -> int:
+    """Maintenance: re-embed every stored memory record with the ACTIVE embedding
+    source. Run once after switching embedding providers/models, since old vectors
+    were produced by a different model and would otherwise mix meanings/dims.
+    Returns the number of records re-embedded."""
+    n = 0
+    for tier in (memory.stm, memory.mtm, memory.ltm):
+        recs = list(getattr(tier, "_buffer", None) or getattr(tier, "_records", []))
+        if not recs:
+            continue
+        new = get_embeddings([r.text for r in recs])
+        for rec, vec in zip(recs, new):
+            rec.embedding = vec
+            n += 1
+        # Persist and invalidate any cached vector index so it rebuilds.
+        if hasattr(tier, "_save"):
+            try:
+                tier._save()
+            except Exception:
+                pass
+        if hasattr(tier, "_faiss"):
+            tier._faiss = None
+    return n

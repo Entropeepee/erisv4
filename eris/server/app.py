@@ -44,7 +44,7 @@ from eris.server.system_stats import get_system_stats
 from eris.memory.conversations import ConversationStore
 from eris.knowledge.study import StudyEngine
 from eris.knowledge.documents import DocumentLibrary, library_dir
-from fastapi import Response, UploadFile, File
+from fastapi import Response, UploadFile, File, Request
 
 
 class ChatRequest(BaseModel if HAS_FASTAPI else object):
@@ -656,6 +656,31 @@ def create_app(
         if not wav_bytes:
             return JSONResponse({"error": "TTS generation failed."}, status_code=500)
         return Response(content=wav_bytes, media_type="audio/wav")
+
+    @app.get("/api/accelerators")
+    async def api_accelerators():
+        """Which optional accelerator services (embed/rerank/tts/stt) are live vs
+        falling back to in-process. Probed off the loop so it never blocks."""
+        from eris.interface.accelerators import accelerator_status
+        status = await asyncio.to_thread(accelerator_status, True, 2.0)
+        return {"accelerators": status}
+
+    @app.post("/api/stt")
+    async def api_stt(request: Request):
+        """Transcribe audio via the configured STT service (Phase 4). The audio is
+        the raw POST body (the cockpit mic sends the recorded blob), avoiding a
+        multipart dependency. Returns {text}; 503 if no STT service is configured."""
+        from eris.interface import stt
+        if not stt.is_configured():
+            return JSONResponse({"error": "no STT service configured"}, status_code=503)
+        audio = await request.body()
+        ctype = request.headers.get("content-type", "audio/wav")
+        try:
+            text = await asyncio.to_thread(
+                stt.transcribe, audio, filename="audio.wav", content_type=ctype)
+            return {"text": text}
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=502)
 
     @app.get("/api/status")
     async def get_status():

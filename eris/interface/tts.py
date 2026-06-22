@@ -6,6 +6,28 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _post_speech(url: str, payload: dict, timeout: float) -> bytes:
+    """Thin HTTP seam (so tests can monkeypatch). OpenAI /audio/speech shape."""
+    import httpx
+    with httpx.Client(timeout=timeout) as client:
+        r = client.post(url, json=payload)
+        r.raise_for_status()
+        return r.content
+
+
+def _provider_speech(text: str, voice_id: str, CONFIG) -> Optional[bytes]:
+    """Synthesize via the configured local TTS service (iGPU). Returns audio bytes
+    or None to fall back to edge-tts."""
+    base = (CONFIG.tts_base_url or "").rstrip("/")
+    if not base:
+        return None
+    payload = {"model": CONFIG.tts_model or "tts", "input": text,
+               "voice": voice_id or "default", "response_format": "wav"}
+    data = _post_speech(f"{base}/audio/speech", payload, CONFIG.accel_timeout_s)
+    return data or None
+
+
 class TTSEngine:
     def __init__(self):
         self.voices = [
@@ -25,8 +47,21 @@ class TTSEngine:
         return asyncio.run(self._generate_audio_async(text, voice_id))
 
     async def _generate_audio_async(self, text: str, voice_id: str) -> Optional[bytes]:
+        # Phase 3b: optional local TTS provider (iGPU Kokoro, etc.) via
+        # ERIS_TTS_BASE_URL — for fully-offline/private synthesis. Never the NPU
+        # (dynamic STFT shapes). Falls back to edge-tts on any error/unset.
+        from eris.config import CONFIG
+        if CONFIG.tts_base_url:
+            try:
+                audio = await asyncio.to_thread(
+                    _provider_speech, text, voice_id, CONFIG)
+                if audio:
+                    return audio
+            except Exception as e:
+                logger.warning(f"TTS provider failed ({e}); falling back to edge-tts")
+
         import edge_tts
-        
+
         if not voice_id:
             voice_id = "en-IE-EmilyNeural"
         
