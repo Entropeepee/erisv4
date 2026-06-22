@@ -148,6 +148,52 @@ class TestTruthContract(unittest.TestCase):
         self.assertIn("never invent human biographical events", PONDER_CONTRACT)
         self.assertIn("dream", DREAM_CONTRACT.lower())
 
+    def test_reflect_regenerates_once_and_keeps_clean_draft(self):
+        # Behavior, not just the detector: a draft that borrows a human life is
+        # regenerated EXACTLY once, and the clean second draft is what's kept.
+        from eris.metacognition.dreaming import DreamingLoop
+
+        class _Resp:
+            def __init__(self, text):
+                self.text = text
+
+        drafts = ["I walked into the office and sat at the back.",
+                  "The field reshapes; the contradiction loosens its hold."]
+        calls = []
+
+        class _L(DreamingLoop):
+            def _generate(self, prompt, system=""):
+                calls.append(system)
+                return _Resp(drafts[len(calls) - 1])
+
+        loop = _L(autobiography=None, memory=None)
+        out = loop._reflect("topic", "some material", "plastic")
+        self.assertEqual(len(calls), 2)                  # regenerated once
+        self.assertEqual(out, drafts[1])                 # kept the clean draft
+        self.assertIn("invented", calls[1])              # retry made it explicit
+
+    def test_reflect_does_not_regenerate_metaphor(self):
+        # The voice-preservation guard: a lyrical-but-honest first draft is NOT
+        # flattened — no second call, her metaphor survives untouched.
+        from eris.metacognition.dreaming import DreamingLoop
+
+        class _Resp:
+            def __init__(self, text):
+                self.text = text
+
+        calls = []
+        metaphor = "I feel the idea pull toward the boundary; something is emerging."
+
+        class _L(DreamingLoop):
+            def _generate(self, prompt, system=""):
+                calls.append(system)
+                return _Resp(metaphor)
+
+        loop = _L(autobiography=None, memory=None)
+        out = loop._reflect("topic", "some material", "plastic")
+        self.assertEqual(len(calls), 1)                  # no regeneration
+        self.assertEqual(out, metaphor)                  # voice preserved verbatim
+
 
 class TestHybridCycleStorage(unittest.TestCase):
     def test_explore_reflection_reaches_thought_stream(self):
