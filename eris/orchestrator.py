@@ -79,7 +79,7 @@ from eris.executive.workspace import (
 )
 
 # Layer 6: Interface
-from eris.interface.mediator import LLMMediator, LLMBackend
+from eris.interface.mediator import LLMMediator, LLMBackend, _DEFAULT_MAX_TOKENS
 
 # Layer 4: Metacognition
 from eris.metacognition.dreaming import DreamingLoop
@@ -147,6 +147,7 @@ class ErisOrchestrator:
         self.field_seed = field_seed
         self.use_frt_seeding = use_frt_seeding
         self._durable_memory = None  # lazily created by the agent's memory tools
+        self._profile_mediators: Dict[tuple, LLMMediator] = {}  # (model,url)->mediator
 
         # Layer 1: Persistent field state
         self.field = FractalField(size=field_size, seed=field_seed)
@@ -278,27 +279,69 @@ class ErisOrchestrator:
         """Add an LLM backend (Ollama, Claude, OpenAI, etc.)."""
         self.mediator.add_backend(backend)
 
+    def _ambient_profile(self):
+        """The profile that reproduces current global behavior — used when a turn
+        passes no explicit profile, so existing callers/tests are unchanged."""
+        from eris.interface.profiles import Profile
+        from eris.interface.mediator import _DEFAULT_MAX_TOKENS
+        return Profile(
+            id="ambient", label="ambient", model="", base_url="",
+            max_tokens=_DEFAULT_MAX_TOKENS, temperature=0.7,
+            ttc=CONFIG.ttc_self_consistency, ttc_max_samples=CONFIG.ttc_max_samples,
+            orchestration=(CONFIG.orchestration_enabled and CONFIG.gate_router),
+            field_steps=CONFIG.pde_steps_per_input)
+
+    def _resolve_mediator(self, prof):
+        """Return the LLMMediator to use for this turn's LOCAL generation. Default
+        profiles (empty/same model) reuse the resident mediator — no reload. A
+        profile naming a different model/base_url gets a cached mediator pointed at
+        it (Ollama loads it on demand on first use)."""
+        model = prof.model or self._local_model
+        base_url = prof.base_url or self._llm_base_url
+        if model == self._local_model and base_url == self._llm_base_url:
+            return self.mediator
+        key = (model, base_url)
+        m = self._profile_mediators.get(key)
+        if m is None:
+            from eris.interface.mediator import LLMMediator, OllamaBackend, OpenAIBackend
+            m = LLMMediator()
+            if base_url:
+                m.add_backend(OpenAIBackend(
+                    model=model, api_key=os.environ.get("ERIS_LLM_API_KEY", "local"),
+                    base_url=base_url))
+            else:
+                m.add_backend(OllamaBackend(model=model))
+            self._profile_mediators[key] = m
+        return m
+
     async def process(self, user_message: str,
-                      system_context: str = "") -> ProcessingResult:
+                      system_context: str = "",
+                      profile=None) -> ProcessingResult:
         """Process one user message through the full cognitive pipeline.
 
-        This is the main loop — everything happens here.
+        `profile` (an eris.interface.profiles.Profile) selects the per-turn
+        latency knobs — token budget, test-time compute, reasoning depth,
+        orchestration, field depth, and the model. None => ambient (current
+        global behavior), so existing callers are unaffected.
         """
         t0 = time.time()
         result = ProcessingResult()
         self.counters.reset()  # Tier 0: counters reflect exactly this turn.
+        prof = profile if profile is not None else self._ambient_profile()
+        steps = prof.field_steps or CONFIG.pde_steps_per_input
+        result.metadata["profile"] = prof.id
 
         # ── Layer 1: Seed and evolve the FRACTAL field ────────────────
         self.field.seed_from_text(user_message, use_frt=self.use_frt_seeding)
         if CONFIG.orchestration_enabled and CONFIG.gate_field_depth:
             # Tier 2: evolve only as deep as needed — suspend once settled.
             executed = self.field.run_gated(
-                self._field_depth_monitor, CONFIG.pde_steps_per_input,
+                self._field_depth_monitor, steps,
                 min_steps=CONFIG.orch_min_field_steps)
             self.counters.pde_steps += executed
         else:
-            self.field.run(CONFIG.pde_steps_per_input)
-            self.counters.pde_steps += CONFIG.pde_steps_per_input
+            self.field.run(steps)
+            self.counters.pde_steps += steps
 
         # ── Layer 0: Compute BFECDS + global observables ──────────────
         input_bvec = self.field.compute_bvec()
@@ -374,7 +417,7 @@ class ErisOrchestrator:
 
         # Tier 1+: feed whole-field agitation to the shared estimator so a
         # turbulent field raises EVERY gate's threshold in lockstep next turn.
-        if CONFIG.orchestration_enabled:
+        if prof.orchestration:
             self._noise_floor.observe_global(tau_rms)
 
         winner = self.moe_gate.select_winner(
@@ -404,7 +447,8 @@ class ErisOrchestrator:
         )
 
         system = system_context or self._default_system_prompt()
-        if CONFIG.orchestration_enabled and CONFIG.gate_router:
+        mediator = self._resolve_mediator(prof)
+        if prof.orchestration:
             # Tier 4: the FORMALIZED router. The shared CriticalityMonitor widens
             # the old binary local-vs-ensemble gate into four decisions on the
             # |dC/dX| anomaly. A MODERATE outlier now takes ONE cloud expert
@@ -419,14 +463,14 @@ class ErisOrchestrator:
             if decision is Decision.ESCALATE and self._cloud_experts >= 1:
                 self.counters.cloud_calls += self._cloud_experts
                 print(f"[ROUTER] ESCALATE -> full {self._cloud_experts}-expert ensemble.")
-                llm_response = await self._deep_ensemble(prompt, system)
+                llm_response = await self._deep_ensemble(prompt, system, prof)
             elif decision is Decision.SWITCH and self._cloud_experts >= 1:
                 self.counters.cloud_calls += 1
                 print("[ROUTER] SWITCH -> single cloud expert (cheaper than ensemble).")
-                llm_response = await self._single_cloud_expert(prompt, system)
+                llm_response = await self._single_cloud_expert(prompt, system, prof)
             else:
                 # CONTINUE (in-band) or SUSPEND-with-no-cloud -> fast local path.
-                llm_response = await self._local_generate(prompt, system)
+                llm_response = await self._local_generate(prompt, system, mediator, prof)
         else:
             # Baseline router (Remediation Tier 0.2), unchanged: default to ONE
             # fast local call; escalate to the full cloud ensemble only on a
@@ -437,9 +481,9 @@ class ErisOrchestrator:
                 self.counters.cloud_calls += self._cloud_experts
                 print(f"[ROUTER] dC/dX outlier (z={dcdx_z:.2f}) + {self._cloud_experts} "
                       f"cloud expert(s) available -> deep MoE synthesis.")
-                llm_response = await self._deep_ensemble(prompt, system)
+                llm_response = await self._deep_ensemble(prompt, system, prof)
             else:
-                llm_response = await self._local_generate(prompt, system)
+                llm_response = await self._local_generate(prompt, system, mediator, prof)
 
         # Lever 2: don't let a stale-training contradiction reach the user
         # uncorrected. Only pays for a web check + re-gen on contradiction turns.
@@ -448,6 +492,7 @@ class ErisOrchestrator:
             (llm_response.text if llm_response else ""),
             system_context,
             prompt,
+            prof,
         )
 
         if llm_response:
@@ -473,7 +518,7 @@ class ErisOrchestrator:
             rf = self._response_field
             rf.warm_reseed(result.response_text, blend=CONFIG.orch_resp_blend)
             executed = rf.run_gated_response(
-                self._resp_monitor, CONFIG.pde_steps_per_input // 2,
+                self._resp_monitor, steps // 2,
                 min_steps=CONFIG.orch_min_field_steps)
             self.counters.resp_field_steps += executed
             response_bvec = rf.compute_bvec()
@@ -485,8 +530,8 @@ class ErisOrchestrator:
             # seed=42 this is byte-identical to the old fixed-seed construction.
             response_field = FractalField(size=self.field_size, seed=self.field_seed)
             response_field.seed_from_text(result.response_text, use_frt=self.use_frt_seeding)
-            response_field.run(CONFIG.pde_steps_per_input // 2)
-            self.counters.resp_field_steps += CONFIG.pde_steps_per_input // 2
+            response_field.run(steps // 2)
+            self.counters.resp_field_steps += steps // 2
             response_bvec = response_field.compute_bvec()
         result.response_bvec = response_bvec
         result.archetype = response_bvec.archetype()
@@ -570,10 +615,12 @@ class ErisOrchestrator:
              f"{report.recommended_action}. Was the premise sound?")
         self.dreaming_loop.pending_questions.append(q)
 
-    async def _deep_ensemble(self, prompt: str, system: str):
+    async def _deep_ensemble(self, prompt: str, system: str, prof=None):
         """ESCALATE path: fire the full cloud MoE ensemble and synthesize. Shared
         by the baseline router and the Tier 4 router so the behavior is identical."""
-        expert_responses = await self.deep_mediator.ensemble(prompt=prompt, system=system)
+        mt = prof.max_tokens if prof is not None else _DEFAULT_MAX_TOKENS
+        expert_responses = await self.deep_mediator.ensemble(
+            prompt=prompt, system=system, max_tokens=mt)
         if len(expert_responses) > 1:
             print(f"[MoE] Synthesizing {len(expert_responses)} expert responses...")
             synthesis_prompt = (
@@ -584,39 +631,45 @@ class ErisOrchestrator:
                 synthesis_prompt += f"--- EXPERT {idx+1} ({r.provider}) ---\n{r.text}\n\n"
             synthesis_prompt += "\nNow provide the final synthesized response directly:"
             return await self.deep_mediator.generate(
-                prompt=synthesis_prompt,
+                prompt=synthesis_prompt, max_tokens=mt,
                 system="You are Eris. Synthesize the expert opinions.")
         if len(expert_responses) == 1:
             return expert_responses[0]
         # Ensemble came back empty -> fall back to the fast local path.
-        return await self.mediator.generate(prompt=prompt, system=system)
+        return await self.mediator.generate(prompt=prompt, system=system, max_tokens=mt)
 
-    async def _single_cloud_expert(self, prompt: str, system: str):
+    async def _single_cloud_expert(self, prompt: str, system: str, prof=None):
         """SWITCH path: ONE cloud expert (cheaper than the full ensemble). Uses
         the first available deep backend; falls back to local if none answers."""
+        mt = prof.max_tokens if prof is not None else _DEFAULT_MAX_TOKENS
         for backend in self.deep_mediator._backends:
             if backend.name == "ollama":
                 continue  # skip the local fallback — we want a cloud expert here
             if not backend.is_available():
                 continue
             try:
-                return await backend.generate(prompt, system)
+                return await backend.generate(prompt, system, max_tokens=mt)
             except Exception as e:
                 print(f"[ROUTER] single expert {backend.name} failed: {e}")
                 break
-        return await self.mediator.generate(prompt=prompt, system=system)
+        return await self.mediator.generate(prompt=prompt, system=system, max_tokens=mt)
 
-    async def _local_generate(self, prompt: str, system: str):
-        """The default fast LOCAL generation. With test-time compute on (roadmap
-        0.3) this samples several responses and returns the consensus, stopping
-        early once it converges; otherwise it's one call. Records the sample
-        count for the benchmark."""
-        if CONFIG.ttc_self_consistency:
+    async def _local_generate(self, prompt: str, system: str, mediator, prof):
+        """The default fast LOCAL generation, honoring the per-turn profile's token
+        budget, temperature, and test-time-compute setting. With TTC on it samples
+        several responses and returns the consensus (stopping early once it
+        converges); otherwise it's one call."""
+        if prof.ttc:
             from eris.interface.test_time import self_consistent_generate
-            resp, n = await self_consistent_generate(self.mediator, prompt, system=system)
+            resp, n = await self_consistent_generate(
+                mediator, prompt, system=system,
+                max_samples=prof.ttc_max_samples, temperature=prof.temperature,
+                max_tokens=prof.max_tokens)
             self.counters.llm_samples = n
             return resp
-        return await self.mediator.generate(prompt=prompt, system=system)
+        return await mediator.generate(prompt=prompt, system=system,
+                                       max_tokens=prof.max_tokens,
+                                       temperature=prof.temperature)
 
     async def run_agent(self, goal: str, tools=None, *, max_steps: int = 6) -> dict:
         """Run a grounded ReAct loop (roadmap 3.1) over `tools`, using Eris's
@@ -747,7 +800,8 @@ class ErisOrchestrator:
     )
 
     async def _ground_if_contradicting(self, user_message: str, response_text: str,
-                                       system_context: str, prompt: str) -> str:
+                                       system_context: str, prompt: str,
+                                       prof=None) -> str:
         """If Eris is about to CORRECT/CONTRADICT the user on a factual point,
         verify the user's claim on the web first -- a confident "that doesn't
         exist" is often just a stale-training artifact. Returns the (possibly
@@ -783,6 +837,7 @@ class ErisOrchestrator:
             revised = await self.mediator.generate(
                 prompt=grounded_prompt,
                 system=system_context or self._default_system_prompt(),
+                max_tokens=(prof.max_tokens if prof is not None else _DEFAULT_MAX_TOKENS),
             )
             return revised.text if revised else response_text
         except Exception as e:

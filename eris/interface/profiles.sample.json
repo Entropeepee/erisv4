@@ -1,0 +1,29 @@
+[
+  {
+    "id": "fast", "label": "Fast", "default": true,
+    "model": "gpt-oss:20b", "max_tokens": 1024, "temperature": 0.7,
+    "ttc": false, "reasoning": "low", "orchestration": false, "field_steps": 30,
+    "desc": "Quick, responsive chat. One call, short answers."
+  },
+  {
+    "id": "deep", "label": "Deep reasoning",
+    "model": "gpt-oss:20b", "max_tokens": 4096, "temperature": 0.7,
+    "ttc": true, "ttc_max_samples": 3, "reasoning": "high", "orchestration": true,
+    "field_steps": 50,
+    "desc": "Slow, thorough. Multi-sample + full reasoning. For hard work."
+  },
+
+  "_NOTE: copy this file to <data_dir>/profiles.json (default eris_data/profiles.json) and edit. The two below are examples for when you pull those models.",
+
+  {
+    "id": "coder", "label": "Coder", "model": "qwen2.5-coder:14b",
+    "max_tokens": 2048, "ttc": false, "reasoning": "medium", "field_steps": 40,
+    "desc": "Code-focused model. Loads on first use."
+  },
+  {
+    "id": "maxbrain", "label": "Max-brain (35B)", "model": "qwen3.6-35b-a3b",
+    "base_url": "http://localhost:8080", "max_tokens": 2048, "ttc": false,
+    "field_steps": 50,
+    "desc": "Smartest, slowest. Served via llama-server/vLLM; loads on first use."
+  }
+]

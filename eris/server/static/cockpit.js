@@ -7,7 +7,7 @@ let audioCtx=null, analyser=null, curAudio=null, curGain=null, emotion='neutral'
 
 /* ---------------- boot ---------------- */
 window.addEventListener('load', () => {
-  loadVoices(); loadConvs(); loadDreams(); loadStudy(); loadLibrary(); loadSandboxInfo(); loadAgents();
+  loadProfiles(); loadVoices(); loadConvs(); loadDreams(); loadStudy(); loadLibrary(); loadSandboxInfo(); loadAgents();
   connectVitals(); connectField(); pollSystem(); pollLLM();
   initLive2D();
   $('#in').addEventListener('keydown', e => {
@@ -78,26 +78,39 @@ function addMsg(role, text, meta){
   $('#chat').appendChild(d); $('#chat').scrollTop=$('#chat').scrollHeight; return d;
 }
 function chatNode(){ const s=$('#chat-node'); return (s&&s.value)||'eris'; }
+function chatProfile(){ const s=$('#chat-profile'); return (s&&s.value)||''; }
+async function loadProfiles(){
+  try{
+    const d=await (await fetch('/api/profiles')).json();
+    const sel=$('#chat-profile'); if(!sel) return; sel.innerHTML='';
+    (d.profiles||[]).forEach(p=>{
+      const o=document.createElement('option'); o.value=p.id;
+      o.textContent=p.label; if(p.desc) o.title=p.desc;
+      if(p.id===(d.default||'fast')) o.selected=true;
+      sel.appendChild(o);
+    });
+  }catch(e){}
+}
 async function send(){
   const t=$('#in').value.trim(); if(!t) return;
   $('#in').value=''; addMsg('user',t);
   const thinking=addMsg('eris','…');
-  const node=chatNode();
+  const node=chatNode(), profile=chatProfile();
   try{
     if(node && node!=='eris'){
       // talk to a specific node via the OpenAI-shaped, model-routed endpoint
       const r=await fetch('/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:node, messages:[{role:'user',content:t}]})});
+        body:JSON.stringify({model:node, profile:profile, messages:[{role:'user',content:t}]})});
       const d=await r.json();
       const reply=(((d.choices||[])[0]||{}).message||{}).content||'(no response)';
       thinking.firstChild.innerHTML=mdToHtml(reply);
       const mm=document.createElement('div'); mm.className='mm'; mm.textContent='node: '+node;
       thinking.appendChild(mm);
-      if($('#speak').checked) speak(reply);
+      if($('#speak').checked) speak(reply);   // off by default — Listen button is primary
       return;
     }
     const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:t, conversation_id:convId||''})});
+      body:JSON.stringify({message:t, conversation_id:convId||'', profile:profile})});
     const d=await r.json();
     convId=d.conversation_id||convId;
     thinking.firstChild.innerHTML=mdToHtml(d.response||'(no response)');
@@ -105,7 +118,7 @@ async function send(){
     mm.textContent=`${d.archetype||''} · ${d.regime||''} · dC/dX=${(d.dCdX||0).toFixed(3)} · ${(d.latency_ms||0).toFixed(0)}ms`;
     thinking.appendChild(mm);
     setEmotionFromReply(d);
-    if($('#speak').checked) speak(d.response);
+    if($('#speak').checked) speak(d.response);   // off by default — Listen button is primary
     loadConvs();
   }catch(e){ thinking.firstChild.textContent='Error: '+e; }
 }

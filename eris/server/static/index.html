@@ -127,8 +127,9 @@ aside.right{background:var(--panel);overflow-y:auto;padding:12px;display:flex;fl
       <input type="file" id="fileinput" accept=".txt,.md,.pdf,.docx,.json" style="display:none" onchange="uploadFile(this)">
     </div>
     <div class="voicebar">
+      <span>mode</span><select id="chat-profile" title="Fast (quick) vs Deep (slow, thorough). Switches instantly, no reboot."></select>
       <span>to</span><select id="chat-node" title="Which node you're talking to"></select>
-      <label><input type="checkbox" id="speak" checked> Speak</label>
+      <label title="Off by default — use the Listen button per reply instead"><input type="checkbox" id="speak"> Auto-speak</label>
       <span>Voice</span><select id="voice"></select>
       <button class="btn" id="testvoice" onclick="testVoice()" title="Hear the selected voice">Test voice</button>
       <span>Vol</span><input type="range" id="vol" min="0" max="1" step="0.05" value="1">
