@@ -23,12 +23,14 @@ class OrchestrationCounters:
     resp_field_steps: int = 0   # response-field steps executed this turn
     field_rebuilds: int = 0     # cold FractalField builds for the response bvec
     cloud_calls: int = 0        # would-be cloud-expert calls (router escalations)
+    llm_samples: int = 1        # primary-generation LLM calls (TTC self-consistency)
 
     def reset(self) -> None:
         self.pde_steps = 0
         self.resp_field_steps = 0
         self.field_rebuilds = 0
         self.cloud_calls = 0
+        self.llm_samples = 1
 
     def as_dict(self) -> dict:
         return {
@@ -36,4 +38,5 @@ class OrchestrationCounters:
             "resp_field_steps": self.resp_field_steps,
             "field_rebuilds": self.field_rebuilds,
             "cloud_calls": self.cloud_calls,
+            "llm_samples": self.llm_samples,
         }

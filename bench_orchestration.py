@@ -58,7 +58,11 @@ from eris.orchestrator import ErisOrchestrator
 from eris.interface.mediator import LLMBackend, LLMResponse
 from eris.computation.activations import bvec_distance
 
-FIELD_SIZE = 64  # overridden by --field-size in __main__
+FIELD_SIZE = 64       # overridden by --field-size in __main__
+# Which gates the orchestrated arm turns on (per-gate isolation; --gates).
+# Default = the gate that earns its place (router). Use --gates all to combine.
+ALL_GATES = ("field_depth", "response_field", "router", "failure_reports", "beta_star")
+ENABLED_GATES = {"router"}
 
 
 # ── The deterministic stub LLM ────────────────────────────────────────────
@@ -113,10 +117,16 @@ CORPUS = {
 def _build(enabled: bool, field_seed: int, tmpdir: str) -> ErisOrchestrator:
     """Construct an orchestrator wired to deterministic fake backends.
 
-    `enabled` flips CONFIG.orchestration_enabled (the master switch). In Tier 0
-    nothing reads it, so the arm is identical to baseline — that's the point.
+    `enabled` flips CONFIG.orchestration_enabled plus every implemented gate, so
+    the orchestrated arm exercises the gates and the baseline arm is the old path.
+    (Tier 6's β-star is isolated — see GATE_BETA_STAR — and stays off here.)
     """
     CONFIG.orchestration_enabled = enabled
+    CONFIG.gate_field_depth = enabled and "field_depth" in ENABLED_GATES      # Tier 2
+    CONFIG.gate_response_field = enabled and "response_field" in ENABLED_GATES  # Tier 3
+    CONFIG.gate_router = enabled and "router" in ENABLED_GATES                # Tier 4
+    CONFIG.gate_failure_reports = enabled and "failure_reports" in ENABLED_GATES  # Tier 5
+    CONFIG.use_beta_star = enabled and "beta_star" in ENABLED_GATES           # Tier 6
     orch = ErisOrchestrator(data_dir=tmpdir, field_size=FIELD_SIZE,
                             field_seed=field_seed)
     # Swap every backend for the offline stub. The "deep" mediator gets two fake
@@ -151,6 +161,7 @@ async def _run_session(enabled: bool, field_seed: int) -> list[dict]:
                     "bvec": res.response_bvec,
                     "coherence": res.coherence,
                     "dCdX": res.dCdX,
+                    "dissonance": res.dissonance,
                 })
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -176,6 +187,7 @@ async def main(seeds: int) -> int:
           f"corpus: A(easy)={len(CORPUS['A'])}  B(hard)={len(CORPUS['B'])}")
     print(f"  offline: ERIS_GPU={os.environ['ERIS_GPU']}  "
           f"ERIS_EMBEDDINGS={os.environ['ERIS_EMBEDDINGS']}  LLM=FakeBackend")
+    print(f"  gates ON in orchestrated arm: {sorted(ENABLED_GATES) or '(none)'}")
     print("=" * 78)
 
     # Collect baseline and orchestrated records across M seeds, keyed by message.
@@ -186,15 +198,15 @@ async def main(seeds: int) -> int:
         base_runs.append(await _run_session(enabled=False, field_seed=seed))
         orch_runs.append(await _run_session(enabled=True, field_seed=seed))
 
-    metrics = ("pde_steps", "resp_field_steps", "field_rebuilds", "cloud_calls", "wall_ms")
-    worst_counter_delta = 0
-    worst_answer_delta = 0.0
+    metrics = ("pde_steps", "resp_field_steps", "cloud_calls", "wall_ms")
+    summary: dict[str, dict] = {}
 
     for cls in ("A", "B"):
         # Gather per-(seed, message) values for this class.
         agg = {m: {"base": [], "orch": []} for m in metrics}
         answer_deltas: list[float] = []
         coh_deltas: list[float] = []
+        diss_deltas: list[float] = []
         n_msgs = len(CORPUS[cls])
         for run_b, run_o in zip(base_runs, orch_runs):
             rb = [r for r in run_b if r["class"] == cls]
@@ -206,57 +218,72 @@ async def main(seeds: int) -> int:
                 d = bvec_distance(o["bvec"], b["bvec"]) if (o["bvec"] and b["bvec"]) else 0.0
                 answer_deltas.append(d)
                 coh_deltas.append(abs(o["coherence"] - b["coherence"]))
-                worst_counter_delta = max(
-                    worst_counter_delta,
-                    *(abs(int(o[m]) - int(b[m])) for m in
-                      ("pde_steps", "resp_field_steps", "field_rebuilds", "cloud_calls"))
-                )
-        worst_answer_delta = max(worst_answer_delta, max(answer_deltas, default=0.0))
+                diss_deltas.append(abs(o["dissonance"] - b["dissonance"]))
 
-        # Baseline absolute means (the ruler's reading of current behavior).
-        bmean = {m: _mean_std(agg[m]["base"])[0] for m in metrics}
-        # Savings, orchestrated vs baseline.
-        sav = {m: _pct_saved(*_mean_std_pair(agg[m])) for m in metrics}
         maxd = max(answer_deltas, default=0.0)
-        verdict = "PASS" if maxd < CONFIG.orch_answer_tol else "FAIL"
+        max_diss = max(diss_deltas, default=0.0)
+        fidelity_pass = maxd < CONFIG.orch_answer_tol
+        # Savings (mean over messages×seeds). Max over the resource metrics that
+        # gates actually reduce, used by the overall verdict.
+        sav = {m: _pct_saved(_mean_std(agg[m]["base"])[0],
+                              _mean_std(agg[m]["orch"])[0]) for m in metrics}
+        best_saving = max(sav["pde_steps"], sav["resp_field_steps"], sav["cloud_calls"])
+        summary[cls] = {"fidelity_pass": fidelity_pass, "maxd": maxd,
+                        "best_saving": best_saving}
 
         label = "easy" if cls == "A" else "hard"
-        print(f"\nCLASS {cls} ({label}, n={n_msgs}, seeds={seeds})")
-        print(f"  baseline/turn : PDE {bmean['pde_steps']:.0f} | resp-field "
-              f"{bmean['resp_field_steps']:.0f} | rebuilds {bmean['field_rebuilds']:.0f} "
-              f"| cloud {bmean['cloud_calls']:.1f} | wall {bmean['wall_ms']:.1f} ms")
-        print(f"  orch savings  : PDE {sav['pde_steps']:+.0f}% | resp-field "
-              f"{sav['resp_field_steps']:+.0f}% | rebuilds {sav['field_rebuilds']:+.0f}% "
-              f"| cloud {sav['cloud_calls']:+.0f}% | wall {sav['wall_ms']:+.0f}%")
-        print(f"  fidelity      : max answer Δ {maxd:.3f} (tol {CONFIG.orch_answer_tol}) "
-              f"| max coherence Δ {max(coh_deltas, default=0.0):.3f}  -> {verdict}")
+        print(f"\nCLASS {cls} ({label}, n={n_msgs}, seeds={seeds})  "
+              f"[baseline -> orchestrated, mean ± std]")
+        for m, name in (("pde_steps", "PDE steps  "),
+                        ("resp_field_steps", "resp-field "),
+                        ("cloud_calls", "cloud calls"),
+                        ("wall_ms", "wall (ms)  ")):
+            bm, bs = _mean_std(agg[m]["base"])
+            om, os_ = _mean_std(agg[m]["orch"])
+            fmt = "{:.1f}" if m == "wall_ms" else "{:.1f}"
+            print(f"  {name}: {fmt.format(bm)}±{fmt.format(bs)} -> "
+                  f"{fmt.format(om)}±{fmt.format(os_)}  ({sav[m]:+.0f}%)")
+        print(f"  fidelity   : max answer Δ {maxd:.3f} (tol {CONFIG.orch_answer_tol}) "
+              f"| max dissonance Δ {max_diss:.3f} | max coherence Δ "
+              f"{max(coh_deltas, default=0.0):.3f}  -> {'PASS' if fidelity_pass else 'FAIL'}")
 
     print("\n" + "-" * 78)
     print("NOTE: with the LLM stubbed, wall-clock UNDERSTATES real value — the "
           "router's\n      payoff is skipped CLOUD CALLS (see the cloud counter), "
           "not wall-clock.")
     print("-" * 78)
-    if worst_counter_delta == 0 and worst_answer_delta < 1e-9:
-        print("TIER 0 VERDICT: ruler calibrated. No gates wired; the orchestrated "
-              "arm\n  reproduces baseline EXACTLY (max counter Δ = 0, max answer "
-              "Δ = 0.000).\n  Baseline reproduces current behavior. Add gates in Tier 2+.")
+
+    a, b = summary["A"], summary["B"]
+    both_pass = a["fidelity_pass"] and b["fidelity_pass"]
+    a_saves = a["best_saving"] > 5.0          # meaningful savings on easy inputs
+    b_breakeven = b["maxd"] < CONFIG.orch_answer_tol  # no regression on hard inputs
+    if both_pass and a_saves and b_breakeven:
+        print(f"VERDICT: orchestration ADDS VALUE — {a['best_saving']:.0f}% savings on "
+              f"easy (A),\n  break-even with no regression on hard (B), both within "
+              f"answer tolerance.")
         return 0
-    print(f"TIER 0 WARNING: orchestrated arm diverged from baseline with no gates "
-          f"wired\n  (max counter Δ = {worst_counter_delta}, max answer Δ = "
-          f"{worst_answer_delta:.4f}). The ruler must read zero here — investigate "
-          f"before adding gates.")
+    if both_pass:
+        print("VERDICT: NEUTRAL — fidelity holds on both classes, but easy-class "
+              "savings\n  are marginal here. Safe to keep flagged; tune k / min_steps "
+              "to claim more.")
+        return 0
+    # A fidelity failure: per spec, the offending gate stays flagged OFF.
+    bad = [c for c in ("A", "B") if not summary[c]["fidelity_pass"]]
+    print(f"VERDICT: FIDELITY REGRESSION on class {','.join(bad)} "
+          f"(answer Δ ≥ {CONFIG.orch_answer_tol}).\n  Per the spec, the responsible "
+          f"gate must stay OFF by default until it passes. Investigate before merge-on.")
     return 1
 
 
-def _mean_std_pair(d: dict) -> tuple[float, float]:
-    """(baseline_mean, orchestrated_mean) for _pct_saved."""
-    return _mean_std(d["base"])[0], _mean_std(d["orch"])[0]
-
-
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Eris orchestration A/B ruler (Tier 0)")
+    ap = argparse.ArgumentParser(description="Eris orchestration A/B ruler")
     ap.add_argument("--seeds", type=int, default=5, help="repeat over M field seeds")
     ap.add_argument("--field-size", type=int, default=64, help="PDE grid size")
+    ap.add_argument("--gates", default="router",
+                    help="comma-separated gates ON in the orchestrated arm, or "
+                         "'all'. Options: " + ", ".join(ALL_GATES))
     args = ap.parse_args()
-    FIELD_SIZE = args.field_size  # noqa: F811 — intentional global override
+    FIELD_SIZE = args.field_size           # noqa: F811 — intentional global override
+    ENABLED_GATES = (set(ALL_GATES) if args.gates.strip().lower() == "all"
+                     else {g.strip() for g in args.gates.split(",") if g.strip()})
     raise SystemExit(asyncio.run(main(args.seeds)))

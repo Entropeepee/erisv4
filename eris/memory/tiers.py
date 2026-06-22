@@ -375,6 +375,14 @@ class MemorySystem:
         self._stm_to_mtm_gate = SGTGate(threshold_sigma=1.5, ema_alpha=0.1)
         self._mtm_to_ltm_gate = SGTGate(threshold_sigma=2.0, ema_alpha=0.05)
 
+    def all_records(self, limit: Optional[int] = None) -> List[MemoryRecord]:
+        """Read-only union of records across all three tiers (newest tier last).
+        Used by the agent's factual-lookup tool to build a candidate pool for
+        hybrid retrieval without disturbing the resonant path."""
+        recs = (self.stm.get_all()
+                + list(self.mtm._records) + list(self.ltm._records))
+        return recs[-limit:] if limit else recs
+
     def store_turn(self, text: str, bvec: BVec,
                    embedding: Optional[np.ndarray] = None,
                    source: str = "conversation",

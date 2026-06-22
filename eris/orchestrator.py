@@ -53,6 +53,8 @@ from eris.config import CONFIG, to_numpy
 from eris.computation.activations import BVec, bvec_distance
 from eris.computation.sgt import SGTGate
 from eris.computation.orch_counters import OrchestrationCounters
+from eris.computation.noise_floor import NoiseFloorEstimator
+from eris.computation.criticality import CriticalityMonitor, Decision, FailureModeReport
 
 # Layer 1: Field
 from eris.field.pde import FractalField
@@ -140,8 +142,11 @@ class ErisOrchestrator:
             orchestration benchmark varies this to report mean ± std over seeds.
         """
         os.makedirs(data_dir, exist_ok=True)
+        self.data_dir = data_dir
         self.field_size = field_size
+        self.field_seed = field_seed
         self.use_frt_seeding = use_frt_seeding
+        self._durable_memory = None  # lazily created by the agent's memory tools
 
         # Layer 1: Persistent field state
         self.field = FractalField(size=field_size, seed=field_seed)
@@ -198,8 +203,27 @@ class ErisOrchestrator:
         )
         self._local_model = os.environ.get("ERIS_LOCAL_MODEL", "gpt-oss:20b")
 
+        # Serving route (roadmap 1.1): the local "Broca's area" backend is either
+        # Ollama (default, dev) or any OpenAI-compatible server — set
+        # ERIS_LLM_BASE_URL to point at a vLLM/TensorRT-LLM endpoint (NVFP4 etc.)
+        # without touching code. vLLM needs no real key; a dummy satisfies the
+        # availability check.
+        self._llm_base_url = os.environ.get("ERIS_LLM_BASE_URL", "").strip()
+
+        def _make_local_backend():
+            if self._llm_base_url:
+                return OpenAIBackend(
+                    model=self._local_model,
+                    api_key=os.environ.get("ERIS_LLM_API_KEY", "local"),
+                    base_url=self._llm_base_url)
+            return OllamaBackend(model=self._local_model)
+
+        if self._llm_base_url:
+            print(f"[Eris LLM] primary backend -> OpenAI-compatible server at "
+                  f"{self._llm_base_url} (model {self._local_model})")
+
         # Fast path: one resident local model (Broca's area).
-        self.mediator.add_backend(OllamaBackend(model=self._local_model))
+        self.mediator.add_backend(_make_local_backend())
 
         # Deep path: cloud experts ONLY if keyed, plus a local fallback so the
         # ensemble is never empty. Dormant (keyless) cloud backends are skipped.
@@ -209,7 +233,7 @@ class ErisOrchestrator:
             _key = os.environ.get(_env, "")
             if _key:
                 self.deep_mediator.add_backend(_backend_cls(api_key=_key))
-        self.deep_mediator.add_backend(OllamaBackend(model=self._local_model))
+        self.deep_mediator.add_backend(_make_local_backend())
 
         # Number of genuine (cloud) experts wired for deep synthesis.
         self._cloud_experts = len(self.deep_mediator._backends) - 1
@@ -221,11 +245,34 @@ class ErisOrchestrator:
         # Turn counter + last-turn dissonance (surfaced separately in vitals).
         self.turn_count: int = 0
         self._last_dissonance: float = 0.0
+        # Tier 4/5: the most recent router FailureModeReport (SWITCH/ESCALATE),
+        # routed to the dream queue by Tier 5 when gate_failure_reports is on.
+        self._last_router_report: Optional[FailureModeReport] = None
 
         # Tier 0: per-turn resource counters for the orchestration benchmark.
         # Pure instrumentation — incremented at the expensive boundaries below,
         # read by bench_orchestration.py. Does not affect any decision.
         self.counters = OrchestrationCounters()
+
+        # Tier 1+: ONE shared noise-floor estimator feeds every gate (per-signal
+        # local scale + one global agitation multiplier). The gates that draw
+        # from it stay inert unless their CONFIG flag is on (default OFF).
+        self._noise_floor = NoiseFloorEstimator(
+            k=CONFIG.orch_k, warmup=10)
+        # Tier 2: the field-evolution depth gate (early-terminate a settled run).
+        self._field_depth_monitor = CriticalityMonitor(
+            "field_depth", self._noise_floor, "field_depth",
+            k=CONFIG.orch_k, protected_steps=0)
+        # Tier 3: the response-field warm-start. A persistent field reused across
+        # turns (warm φ/θ prior) + a settle monitor on the response bvec.
+        self._response_field: Optional[FractalField] = None
+        self._resp_monitor = CriticalityMonitor(
+            "response_field", self._noise_floor, "response_field",
+            k=CONFIG.orch_k, protected_steps=0)
+        # Tier 4: the formalized local↔cloud router (built here, wired below).
+        self._router_monitor = CriticalityMonitor(
+            "router", self._noise_floor, "router",
+            k=CONFIG.orch_k, protected_steps=0)
 
     def add_llm_backend(self, backend: LLMBackend) -> None:
         """Add an LLM backend (Ollama, Claude, OpenAI, etc.)."""
@@ -243,8 +290,15 @@ class ErisOrchestrator:
 
         # ── Layer 1: Seed and evolve the FRACTAL field ────────────────
         self.field.seed_from_text(user_message, use_frt=self.use_frt_seeding)
-        self.field.run(CONFIG.pde_steps_per_input)
-        self.counters.pde_steps += CONFIG.pde_steps_per_input
+        if CONFIG.orchestration_enabled and CONFIG.gate_field_depth:
+            # Tier 2: evolve only as deep as needed — suspend once settled.
+            executed = self.field.run_gated(
+                self._field_depth_monitor, CONFIG.pde_steps_per_input,
+                min_steps=CONFIG.orch_min_field_steps)
+            self.counters.pde_steps += executed
+        else:
+            self.field.run(CONFIG.pde_steps_per_input)
+            self.counters.pde_steps += CONFIG.pde_steps_per_input
 
         # ── Layer 0: Compute BFECDS + global observables ──────────────
         input_bvec = self.field.compute_bvec()
@@ -318,6 +372,11 @@ class ErisOrchestrator:
             np.sqrt(np.mean(to_numpy(self.field.tau) ** 2))
         )) if hasattr(self.field, 'tau') else 0.0
 
+        # Tier 1+: feed whole-field agitation to the shared estimator so a
+        # turbulent field raises EVERY gate's threshold in lockstep next turn.
+        if CONFIG.orchestration_enabled:
+            self._noise_floor.observe_global(tau_rms)
+
         winner = self.moe_gate.select_winner(
             findings,
             coherence=result.coherence,
@@ -344,49 +403,43 @@ class ErisOrchestrator:
             user_message, winner, memory_text, input_bvec, result.regime
         )
 
-        # LLM ROUTER (Remediation Tier 0.2): default to ONE fast local call.
-        # Escalate to the cloud MoE ensemble ONLY when |dC/dX| is a genuine SGT
-        # outlier for THIS engine AND at least one real cloud expert is wired.
-        deep_signal, dcdx_z = self._router_gate.update(abs(result.dCdX))
-        use_deep = deep_signal and self._cloud_experts >= 1
-
-        if use_deep:
-            # Tier 0: count the would-be cloud-expert calls. With the LLM stubbed
-            # the harness can't time real cloud latency, so the router's payoff
-            # (Tier 4) is read from THIS counter, not from wall-clock.
-            self.counters.cloud_calls += self._cloud_experts
-            print(f"[ROUTER] dC/dX outlier (z={dcdx_z:.2f}) + {self._cloud_experts} "
-                  f"cloud expert(s) available -> deep MoE synthesis.")
-            expert_responses = await self.deep_mediator.ensemble(
-                prompt=prompt,
-                system=system_context or self._default_system_prompt(),
-            )
-            if len(expert_responses) > 1:
-                print(f"[MoE] Synthesizing {len(expert_responses)} expert responses...")
-                synthesis_prompt = (
-                    "Multiple experts answered the same prompt. Synthesize their "
-                    "insights into one strongest response:\n\n"
-                )
-                for idx, r in enumerate(expert_responses):
-                    synthesis_prompt += f"--- EXPERT {idx+1} ({r.provider}) ---\n{r.text}\n\n"
-                synthesis_prompt += "\nNow provide the final synthesized response directly:"
-                llm_response = await self.deep_mediator.generate(
-                    prompt=synthesis_prompt,
-                    system="You are Eris. Synthesize the expert opinions.",
-                )
-            elif len(expert_responses) == 1:
-                llm_response = expert_responses[0]
+        system = system_context or self._default_system_prompt()
+        if CONFIG.orchestration_enabled and CONFIG.gate_router:
+            # Tier 4: the FORMALIZED router. The shared CriticalityMonitor widens
+            # the old binary local-vs-ensemble gate into four decisions on the
+            # |dC/dX| anomaly. A MODERATE outlier now takes ONE cloud expert
+            # (SWITCH) instead of the full ensemble (ESCALATE) — the genuine
+            # cloud-call saving. Easy turns stay local (CONTINUE).
+            decision, report = self._router_monitor.observe(
+                "dcdx", abs(result.dCdX), {"mode": "anomaly"})
+            if report is not None:
+                self._last_router_report = report   # Tier 5 picks this up
+                if CONFIG.gate_failure_reports:
+                    self._route_failure_report(report)
+            if decision is Decision.ESCALATE and self._cloud_experts >= 1:
+                self.counters.cloud_calls += self._cloud_experts
+                print(f"[ROUTER] ESCALATE -> full {self._cloud_experts}-expert ensemble.")
+                llm_response = await self._deep_ensemble(prompt, system)
+            elif decision is Decision.SWITCH and self._cloud_experts >= 1:
+                self.counters.cloud_calls += 1
+                print("[ROUTER] SWITCH -> single cloud expert (cheaper than ensemble).")
+                llm_response = await self._single_cloud_expert(prompt, system)
             else:
-                # Ensemble came back empty -> fall back to the fast local path.
-                llm_response = await self.mediator.generate(
-                    prompt=prompt,
-                    system=system_context or self._default_system_prompt(),
-                )
+                # CONTINUE (in-band) or SUSPEND-with-no-cloud -> fast local path.
+                llm_response = await self._local_generate(prompt, system)
         else:
-            llm_response = await self.mediator.generate(
-                prompt=prompt,
-                system=system_context or self._default_system_prompt(),
-            )
+            # Baseline router (Remediation Tier 0.2), unchanged: default to ONE
+            # fast local call; escalate to the full cloud ensemble only on a
+            # genuine SGT |dC/dX| outlier with a real cloud expert wired.
+            deep_signal, dcdx_z = self._router_gate.update(abs(result.dCdX))
+            use_deep = deep_signal and self._cloud_experts >= 1
+            if use_deep:
+                self.counters.cloud_calls += self._cloud_experts
+                print(f"[ROUTER] dC/dX outlier (z={dcdx_z:.2f}) + {self._cloud_experts} "
+                      f"cloud expert(s) available -> deep MoE synthesis.")
+                llm_response = await self._deep_ensemble(prompt, system)
+            else:
+                llm_response = await self._local_generate(prompt, system)
 
         # Lever 2: don't let a stale-training contradiction reach the user
         # uncorrected. Only pays for a web check + re-gen on contradiction turns.
@@ -409,12 +462,32 @@ class ErisOrchestrator:
         # Tier 0: a FULL second field is built cold and re-run every turn just
         # to get a response bvec (~2× per-turn field cost). Counted here; the
         # Tier 3 warm-start gate is what later shrinks it.
-        self.counters.field_rebuilds += 1
-        response_field = FractalField(size=self.field_size)
-        response_field.seed_from_text(result.response_text, use_frt=self.use_frt_seeding)
-        response_field.run(CONFIG.pde_steps_per_input // 2)
-        self.counters.resp_field_steps += CONFIG.pde_steps_per_input // 2
-        response_bvec = response_field.compute_bvec()
+        if CONFIG.orchestration_enabled and CONFIG.gate_response_field:
+            # Tier 3 warm-start: reuse a PERSISTENT field (no cold rebuild), blend
+            # the new response text into its warm φ/θ prior, and suspend once the
+            # response bvec stabilizes. Isolated + fidelity-gated — this bvec
+            # feeds dissonance, so the bench reports the dissonance delta.
+            if self._response_field is None:
+                self._response_field = FractalField(
+                    size=self.field_size, seed=self.field_seed)
+            rf = self._response_field
+            rf.warm_reseed(result.response_text, blend=CONFIG.orch_resp_blend)
+            executed = rf.run_gated_response(
+                self._resp_monitor, CONFIG.pde_steps_per_input // 2,
+                min_steps=CONFIG.orch_min_field_steps)
+            self.counters.resp_field_steps += executed
+            response_bvec = rf.compute_bvec()
+        else:
+            self.counters.field_rebuilds += 1
+            # Seed the response field from the SAME field_seed as the main field, so
+            # the benchmark's M-seed repeats actually vary the response-field noise
+            # (an honest fidelity A/B for the Tier 3 warm-start). At the default
+            # seed=42 this is byte-identical to the old fixed-seed construction.
+            response_field = FractalField(size=self.field_size, seed=self.field_seed)
+            response_field.seed_from_text(result.response_text, use_frt=self.use_frt_seeding)
+            response_field.run(CONFIG.pde_steps_per_input // 2)
+            self.counters.resp_field_steps += CONFIG.pde_steps_per_input // 2
+            response_bvec = response_field.compute_bvec()
         result.response_bvec = response_bvec
         result.archetype = response_bvec.archetype()
 
@@ -486,6 +559,88 @@ class ErisOrchestrator:
 
         result.latency_ms = (time.time() - t0) * 1000
         return result
+
+    def _route_failure_report(self, report: FailureModeReport) -> None:
+        """Tier 5 (CIP §0111 — never silently proceed on a possibly-wrong answer).
+        Turn a mechanism-changing decision (SWITCH/ESCALATE) into a metacognitive
+        question in the dream queue. The orchestrator mediates, so gates stay
+        decoupled from the dream loop."""
+        q = (f"Gate '{report.specialization}' chose {report.decision.name} "
+             f"({report.reason}, z={report.z_score:.2f}) on turn {self.turn_count}. "
+             f"{report.recommended_action}. Was the premise sound?")
+        self.dreaming_loop.pending_questions.append(q)
+
+    async def _deep_ensemble(self, prompt: str, system: str):
+        """ESCALATE path: fire the full cloud MoE ensemble and synthesize. Shared
+        by the baseline router and the Tier 4 router so the behavior is identical."""
+        expert_responses = await self.deep_mediator.ensemble(prompt=prompt, system=system)
+        if len(expert_responses) > 1:
+            print(f"[MoE] Synthesizing {len(expert_responses)} expert responses...")
+            synthesis_prompt = (
+                "Multiple experts answered the same prompt. Synthesize their "
+                "insights into one strongest response:\n\n"
+            )
+            for idx, r in enumerate(expert_responses):
+                synthesis_prompt += f"--- EXPERT {idx+1} ({r.provider}) ---\n{r.text}\n\n"
+            synthesis_prompt += "\nNow provide the final synthesized response directly:"
+            return await self.deep_mediator.generate(
+                prompt=synthesis_prompt,
+                system="You are Eris. Synthesize the expert opinions.")
+        if len(expert_responses) == 1:
+            return expert_responses[0]
+        # Ensemble came back empty -> fall back to the fast local path.
+        return await self.mediator.generate(prompt=prompt, system=system)
+
+    async def _single_cloud_expert(self, prompt: str, system: str):
+        """SWITCH path: ONE cloud expert (cheaper than the full ensemble). Uses
+        the first available deep backend; falls back to local if none answers."""
+        for backend in self.deep_mediator._backends:
+            if backend.name == "ollama":
+                continue  # skip the local fallback — we want a cloud expert here
+            if not backend.is_available():
+                continue
+            try:
+                return await backend.generate(prompt, system)
+            except Exception as e:
+                print(f"[ROUTER] single expert {backend.name} failed: {e}")
+                break
+        return await self.mediator.generate(prompt=prompt, system=system)
+
+    async def _local_generate(self, prompt: str, system: str):
+        """The default fast LOCAL generation. With test-time compute on (roadmap
+        0.3) this samples several responses and returns the consensus, stopping
+        early once it converges; otherwise it's one call. Records the sample
+        count for the benchmark."""
+        if CONFIG.ttc_self_consistency:
+            from eris.interface.test_time import self_consistent_generate
+            resp, n = await self_consistent_generate(self.mediator, prompt, system=system)
+            self.counters.llm_samples = n
+            return resp
+        return await self.mediator.generate(prompt=prompt, system=system)
+
+    async def run_agent(self, goal: str, tools=None, *, max_steps: int = 6) -> dict:
+        """Run a grounded ReAct loop (roadmap 3.1) over `tools`, using Eris's
+        mediator and LIVE field state as the grounding signal. Opt-in: nothing
+        calls this automatically, so default behavior is unchanged.
+
+        If `tools` is None, the enabled default tools are used (factual_lookup,
+        durable memory — gated by CONFIG.agent_tool_*, default OFF)."""
+        from eris.executive.agent_loop import ReActAgent
+        if tools is None:
+            from eris.executive.agent_tools import default_tools
+            tools = default_tools(self)
+
+        def _field_state() -> dict:
+            return {
+                "coherence": self.field.coherence,
+                "regime": self.field.detect_regime(),
+                "archetype": self.field.compute_bvec().archetype(),
+                "dCdX": self.field.dCdX,
+            }
+
+        agent = ReActAgent(self.mediator, tools,
+                           field_state_fn=_field_state, max_steps=max_steps)
+        return await agent.run(goal)
 
     def _assemble_prompt(self, user_message: str,
                          winner: Optional[SpecialistFinding],

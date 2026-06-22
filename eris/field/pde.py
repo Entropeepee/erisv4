@@ -15,7 +15,7 @@ import re
 import numpy as np
 
 from eris.config import xp, to_numpy, to_gpu, CONFIG
-from eris.computation.activations import BVec, compute_bvec_from_field
+from eris.computation.activations import BVec, compute_bvec_from_field, bvec_distance
 
 # BGE-M3 ONNX integration (Placeholder / Hooks ready)
 def get_bge_m3_embedding(text: str, dim: int = 256) -> np.ndarray:
@@ -196,6 +196,28 @@ class FractalField:
     def seed_from_fingerprint(self, fingerprint: str) -> None:
         self.seed_from_text(f"IDENTITY:{fingerprint}")
 
+    def warm_reseed(self, text: str, blend: float = 0.7, amp: float = 0.6) -> None:
+        """Tier 3 warm-start (CIP amortization, §0053): blend a new text seed INTO
+        the current (warm) field state instead of overwriting it, so an apt prior
+        from a previous turn carries over. `blend` is the weight of the new text:
+        blend=1.0 reproduces a cold `seed_from_text`; smaller keeps more prior.
+        Phase is blended on the circle (via unit vectors), amplitude linearly."""
+        phi_seed, theta_seed = encode_text(text, self.size, amp=amp, B_max=self.p.B_max)
+        b = float(blend)
+        self.phi = (1.0 - b) * self.phi + b * phi_seed
+        mixed = (1.0 - b) * xp.exp(1j * self.theta) + b * xp.exp(1j * theta_seed)
+        self.theta = xp.angle(mixed) % (2 * np.pi)
+        self.regime = xp.zeros((self.size, self.size), dtype=xp.float32)
+        self._lc = local_coherence(self.theta)
+        self.phi_prev = xp.copy(self.phi)
+        self.theta_prev = xp.copy(self.theta)
+        self._flux_phi = xp.zeros((self.size, self.size), dtype=xp.float32)
+        self._flux_theta = xp.zeros((self.size, self.size), dtype=xp.float32)
+        self.step_count = 0
+        _enforce_dirichlet(self.phi)
+        _enforce_dirichlet(self.phi_prev)
+        self.tau = _lap(self.phi)
+
     def _base_ops(self):
         p, phi, Bm = self.p, self.phi, self.p.B_max
         gate = lambda s, dlt: hill_power(s, p.hp_alpha, self._hp_beta, p.hp_gamma, dlt)
@@ -300,6 +322,63 @@ class FractalField:
     def run(self, n_steps: int) -> None:
         for _ in range(n_steps):
             self.step()
+
+    def run_gated(self, monitor, max_steps: int, check_every: int = 4,
+                  min_steps: int = 8) -> int:
+        """Tier 2 (CIP early-termination for iterative solvers, §0069F).
+
+        Evolve up to `max_steps`, but SUSPEND early once the trajectory has
+        SETTLED — the change in global coherence over a `check_every` window
+        drops to a low outlier below its own noise floor (judged by the shared
+        CriticalityMonitor in "settle" mode). Returns the number of steps
+        actually executed (the benchmark counts this).
+
+        Safety (this signal is tiny — coherence sits ~0.04):
+          • `min_steps` is a hard floor — never suspend before the field has
+            done real work. Defaults to 8; callers pass CONFIG.orch_min_field_steps.
+          • During the monitor's warmup the gate returns CONTINUE, so the first
+            turns run the full `max_steps` exactly like `run()`.
+        `run()` itself is untouched; this is an additive variant.
+        """
+        from eris.computation.criticality import Decision
+        min_steps = max(1, min_steps)
+        last_c = self.coherence
+        executed = 0
+        for _ in range(max_steps):
+            self.step()
+            executed += 1
+            if executed < min_steps or executed % check_every != 0:
+                continue
+            c = self.coherence
+            delta = abs(c - last_c)
+            last_c = c
+            decision, _ = monitor.observe("field_settle", delta, {"mode": "settle"})
+            if decision == Decision.SUSPEND:
+                break
+        return executed
+
+    def run_gated_response(self, monitor, max_steps: int, check_every: int = 4,
+                           min_steps: int = 8) -> int:
+        """Tier 3: evolve the response field but SUSPEND once the response bvec
+        stabilizes — the windowed bvec change drops to a low outlier below its
+        floor (settle mode). Returns steps executed. Like run_gated but the
+        settling signal is the bvec change, which is what feeds dissonance."""
+        from eris.computation.criticality import Decision
+        min_steps = max(1, min_steps)
+        last_bvec = self.compute_bvec()
+        executed = 0
+        for _ in range(max_steps):
+            self.step()
+            executed += 1
+            if executed < min_steps or executed % check_every != 0:
+                continue
+            cur = self.compute_bvec()
+            change = bvec_distance(cur, last_bvec)
+            last_bvec = cur
+            decision, _ = monitor.observe("resp_settle", change, {"mode": "settle"})
+            if decision == Decision.SUSPEND:
+                break
+        return executed
             
     def compute_bvec(self) -> BVec:
         return compute_bvec_from_field(self.phi, self.theta, self.tau, self.phi_prev)
