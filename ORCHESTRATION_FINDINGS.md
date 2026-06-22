@@ -14,7 +14,7 @@ Run the ruler yourself: `python bench_orchestration.py` (offline, deterministic)
 | 3 | response-field warm-start | `gate_response_field` | **flagged OFF** — regresses dissonance, no savings | implemented, measured |
 | 4 | formalized router | `gate_router` | **fidelity-safe** — enabled by `ERIS_ORCHESTRATION=on` | implemented, measured |
 | 5 | failure reports → dreams | `gate_failure_reports` | **safe** — metacognition feature, no perf cost | implemented, tested |
-| 6 | β-star bridge | `use_beta_star` | (pending) | |
+| 6 | β-star bridge | `use_beta_star` | **flagged OFF** — neutral, but consumer is dormant | implemented, tested |
 
 ---
 
@@ -105,3 +105,46 @@ Behind `gate_failure_reports`.
 ways: a forced ESCALATE adds exactly one dream question when the flag is on, and
 none when off. Safe to enable alongside the router; it makes the router's
 escalations *observable* in Eris's metacognition rather than invisible.
+
+## Tier 6 — β-star bridge → **neutral, but inert; leave OFF**
+
+**What it does.** Self-tunes the Davidian β threshold from the sample-size ratio
+ψ via `beta_star(ψ)` instead of the hand-set ψ baseline, in `params_from_bvec`.
+Behind `use_beta_star`.
+
+**Measured.**
+- *Neutral on winner selection.* Toggling β-star changes β (0.62 → 0.75 on the
+  test bvec) but the dominant eigenvalue/winner is unchanged; only near-mean
+  components (shrunk to ~equal, irrelevant to selection) reshuffle. Unit-tested.
+- *Inert at runtime.* The feared "highest blast radius" doesn't materialize here:
+  `params_from_bvec`/`shrink_eigenvalues` are **not called anywhere in the live
+  pipeline** (only `davidian_weight` is consumed). So the bridge has zero runtime
+  effect today — the benchmark with `--gates beta_star` reads Δ 0.000.
+
+**Conclusion.** Neutral by the spec's bar, but it delivers no benefit because its
+consumer is dormant. Per "merge only if neutral-or-**better**," it stays **OFF**.
+Wired and verified, ready if a future caller routes `params_from_bvec` into
+MoEGate/CSBA scoring.
+
+---
+
+# Summary — what to enable
+
+The Tier 0 discipline ("don't trust guesses; measure") delivered a clear,
+honest result on this engine + offline corpus:
+
+- **Enable (fidelity-safe, structurally better):** the **router** (Tier 4) +
+  **failure-reports → dreams** (Tier 5). This is exactly what
+  `ERIS_ORCHESTRATION=on` turns on. Easy turns are provably untouched (Δ 0);
+  hard turns engage cloud within tolerance; moderate outliers take the cheaper
+  single-expert SWITCH instead of the full ensemble (a real production saving).
+- **Leave OFF (don't earn their place here):** the **field-depth** (Tier 2) and
+  **response-field** (Tier 3) gates regress the answer because the field bvec is
+  still converging at the step budget — early termination costs 0.2–0.65 / 0.15
+  in answer Δ for no real savings. The **β-star** bridge (Tier 6) is neutral but
+  inert (dormant consumer).
+
+Net: the orchestration machinery (shared noise floor, criticality monitors, the
+four-decision interface, the A/B ruler) is built, tested (148 green), and
+measured. The one change that helps in production is on; everything that would
+trade the answer for speed is off — by measurement, not by guess.

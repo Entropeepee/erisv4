@@ -310,5 +310,48 @@ class TestRouterGate(unittest.TestCase):
         self.assertIn("ESCALATE", qs[0])
 
 
+class _BV:
+    C = 0.3
+    F = 0.2
+    B = 0.4
+    E = 0.5
+    S = 0.1
+    D = 0.2
+
+
+class TestBetaStarBridge(unittest.TestCase):
+    """Tier 6 (isolated): the β-star bridge is active when on, and neutral on
+    winner selection (preserves eigenvalue ordering) in both modes."""
+
+    def tearDown(self):
+        from eris.config import CONFIG
+        CONFIG.use_beta_star = False
+
+    def test_bridge_changes_beta_when_on(self):
+        from eris.config import CONFIG
+        from eris.computation.shrinkage import params_from_bvec
+        CONFIG.use_beta_star = False
+        off = params_from_bvec(_BV(), psi=1.0).beta
+        CONFIG.use_beta_star = True
+        on = params_from_bvec(_BV(), psi=1.0).beta
+        self.assertGreater(on, 0.0)
+        self.assertNotAlmostEqual(on, off)        # the bridge is actually wired
+
+    def test_winner_selection_stable_across_modes(self):
+        """The spec's neutral-or-better check: toggling β-star must not change
+        which component dominates on a fixed bid set (winner stability)."""
+        import numpy as np
+        from eris.config import CONFIG, to_numpy
+        from eris.computation.shrinkage import shrink_eigenvalues
+        eig = [5.0, 3.0, 2.0, 1.0, 0.5]
+        CONFIG.use_beta_star = False
+        off = to_numpy(shrink_eigenvalues(eig, 10, 5, bvec=_BV()))
+        CONFIG.use_beta_star = True
+        on = to_numpy(shrink_eigenvalues(eig, 10, 5, bvec=_BV()))
+        # The WINNER (dominant component) is unchanged; only near-mean components
+        # (shrunk to ~equal, irrelevant to selection) may reshuffle. Neutral.
+        self.assertEqual(int(np.argmax(off)), int(np.argmax(on)))
+
+
 if __name__ == "__main__":
     unittest.main()

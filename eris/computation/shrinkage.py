@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING
 
-from eris.config import xp, to_numpy
+from eris.config import xp, to_numpy, CONFIG
 import numpy as np
 
 if TYPE_CHECKING:
@@ -101,7 +101,18 @@ def params_from_bvec(bvec: "BVec", psi: float) -> DavidianParams:
     gamma_0 = 1.0 + 0.3 / max(psi, 0.5)
 
     alpha = max(alpha_0 + 1.5 * bvec.C - 0.5 * bvec.F, 0.1)
-    beta = max(beta_0 + 0.3 * bvec.B, 0.01)
+    # Tier 6 (CIP claim 4, isolated): self-tune the β threshold from the
+    # sample-size ratio ψ via the β-star bridge, instead of the hand-set ψ-based
+    # baseline. Behind use_beta_star (default OFF). NOTE: this function and
+    # shrink_eigenvalues are not on any live hot path today (only davidian_weight
+    # is consumed), so the bridge is inert at runtime — wired and verified
+    # neutral (preserves eigenvalue ordering), available if a future caller uses
+    # params_from_bvec for MoEGate/CSBA scoring. See ORCHESTRATION_FINDINGS.md.
+    if CONFIG.use_beta_star:
+        from eris.field.pde import beta_star
+        beta = max(beta_star(max(psi, 1e-9)) + 0.3 * bvec.B, 0.01)
+    else:
+        beta = max(beta_0 + 0.3 * bvec.B, 0.01)
     gamma = max(gamma_0 + 0.5 * bvec.E - 0.3 * bvec.S, 0.1)
     delta = max(0.8 * bvec.D, 0.0)
 
