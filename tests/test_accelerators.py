@@ -117,5 +117,75 @@ class TestRerankProvider(unittest.TestCase):
         self.assertEqual(len(out), 2)                   # no error; fused order kept
 
 
+class TestAcceleratorStatus(unittest.TestCase):
+    def setUp(self):
+        self._e = CONFIG.embed_base_url
+
+    def tearDown(self):
+        CONFIG.embed_base_url = self._e
+
+    def test_unset_is_off_in_process(self):
+        from eris.interface.accelerators import accelerator_status
+        CONFIG.embed_base_url = ""
+        st = accelerator_status(probe=False)
+        self.assertFalse(st["embeddings"]["configured"])
+        self.assertIn("in-process", st["embeddings"]["status"])
+
+    def test_configured_is_reported(self):
+        from eris.interface.accelerators import accelerator_status
+        CONFIG.embed_base_url = "http://localhost:9/v1"
+        st = accelerator_status(probe=False)
+        self.assertTrue(st["embeddings"]["configured"])
+        self.assertEqual(st["embeddings"]["base_url"], "http://localhost:9/v1")
+
+
+class TestSTTSeam(unittest.TestCase):
+    def setUp(self):
+        self._b = CONFIG.stt_base_url
+
+    def tearDown(self):
+        CONFIG.stt_base_url = self._b
+
+    def test_unconfigured(self):
+        from eris.interface import stt
+        CONFIG.stt_base_url = ""
+        self.assertFalse(stt.is_configured())
+        with self.assertRaises(RuntimeError):
+            stt.transcribe(b"x")
+
+    def test_transcribe_via_mock(self):
+        from eris.interface import stt
+        CONFIG.stt_base_url = "http://localhost:9/v1"
+        orig = stt._post_audio
+        stt._post_audio = lambda *a, **k: {"text": "hello world"}
+        try:
+            self.assertEqual(stt.transcribe(b"audio"), "hello world")
+        finally:
+            stt._post_audio = orig
+
+
+class TestTTSProvider(unittest.TestCase):
+    def setUp(self):
+        self._b = CONFIG.tts_base_url
+
+    def tearDown(self):
+        CONFIG.tts_base_url = self._b
+
+    def test_provider_unset_returns_none(self):
+        from eris.interface import tts
+        CONFIG.tts_base_url = ""
+        self.assertIsNone(tts._provider_speech("hi", "v", CONFIG))
+
+    def test_provider_returns_bytes(self):
+        from eris.interface import tts
+        CONFIG.tts_base_url = "http://localhost:9/v1"
+        orig = tts._post_speech
+        tts._post_speech = lambda url, payload, timeout: b"RIFF....wav"
+        try:
+            self.assertEqual(tts._provider_speech("hi", "v", CONFIG), b"RIFF....wav")
+        finally:
+            tts._post_speech = orig
+
+
 if __name__ == "__main__":
     unittest.main()
