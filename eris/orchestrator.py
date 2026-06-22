@@ -404,8 +404,8 @@ class ErisOrchestrator:
                 print("[ROUTER] SWITCH -> single cloud expert (cheaper than ensemble).")
                 llm_response = await self._single_cloud_expert(prompt, system)
             else:
-                # CONTINUE (in-band) or SUSPEND-with-no-cloud -> one fast local call.
-                llm_response = await self.mediator.generate(prompt=prompt, system=system)
+                # CONTINUE (in-band) or SUSPEND-with-no-cloud -> fast local path.
+                llm_response = await self._local_generate(prompt, system)
         else:
             # Baseline router (Remediation Tier 0.2), unchanged: default to ONE
             # fast local call; escalate to the full cloud ensemble only on a
@@ -418,7 +418,7 @@ class ErisOrchestrator:
                       f"cloud expert(s) available -> deep MoE synthesis.")
                 llm_response = await self._deep_ensemble(prompt, system)
             else:
-                llm_response = await self.mediator.generate(prompt=prompt, system=system)
+                llm_response = await self._local_generate(prompt, system)
 
         # Lever 2: don't let a stale-training contradiction reach the user
         # uncorrected. Only pays for a web check + re-gen on contradiction turns.
@@ -583,6 +583,18 @@ class ErisOrchestrator:
             except Exception as e:
                 print(f"[ROUTER] single expert {backend.name} failed: {e}")
                 break
+        return await self.mediator.generate(prompt=prompt, system=system)
+
+    async def _local_generate(self, prompt: str, system: str):
+        """The default fast LOCAL generation. With test-time compute on (roadmap
+        0.3) this samples several responses and returns the consensus, stopping
+        early once it converges; otherwise it's one call. Records the sample
+        count for the benchmark."""
+        if CONFIG.ttc_self_consistency:
+            from eris.interface.test_time import self_consistent_generate
+            resp, n = await self_consistent_generate(self.mediator, prompt, system=system)
+            self.counters.llm_samples = n
+            return resp
         return await self.mediator.generate(prompt=prompt, system=system)
 
     def _assemble_prompt(self, user_message: str,

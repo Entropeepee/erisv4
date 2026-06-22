@@ -138,6 +138,21 @@ class ErisConfig:
     orch_k: float = 2.5                   # shared gate threshold (σ)
     orch_min_field_steps: int = 8         # protected floor for the field gate
     orch_answer_tol: float = 0.05         # bvec-distance fidelity tolerance
+
+    # ── Test-time compute (TTC) — DEFAULT OFF ────────────────────────
+    # "Smarter without a bigger model": sample several responses and return the
+    # consensus (medoid), with the shared criticality monitor stopping early once
+    # the answer has CONVERGED (more samples won't change it). This is the patent's
+    # discipline applied where a convergent signal genuinely exists — vote-stability
+    # across samples — unlike the field gates. Costs N× LLM calls when on, so it's
+    # OFF by default and meant for hard/important turns.
+    ttc_self_consistency: bool = False    # sample N + return consensus
+    ttc_min_samples: int = 3              # never fewer than this when on
+    ttc_max_samples: int = 8              # never more than this
+    ttc_temperature: float = 0.7          # sampling temperature for diversity
+    ttc_budget_forcing: bool = False      # force a min reasoning budget (needs a
+    ttc_min_thinking_tokens: int = 0      #   thinking-capable model)
+    ttc_max_extensions: int = 2           # how many "Wait" continuations to allow
     orch_resp_blend: float = 0.7          # Tier 3 warm-reseed: new-text weight (1.0 = cold)
 
 
@@ -155,3 +170,10 @@ _orch_env = os.environ.get("ERIS_ORCHESTRATION", "off").strip().lower()
 if _orch_env in ("on", "1", "true", "yes"):
     CONFIG.orchestration_enabled = True
     CONFIG.gate_router = True
+
+# ERIS_TTC = "off" (default) | "on". Enables self-consistency with the adaptive
+# criticality early-stop. Independent of ERIS_ORCHESTRATION (it only needs the
+# criticality monitor, which is always available).
+_ttc_env = os.environ.get("ERIS_TTC", "off").strip().lower()
+if _ttc_env in ("on", "1", "true", "yes"):
+    CONFIG.ttc_self_consistency = True
