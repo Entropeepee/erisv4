@@ -275,11 +275,21 @@ async function openDream(id){
   $('#modal').classList.add('on');
 }
 async function steerTopic(){
-  const t=prompt('Point Eris at a topic to study next (she keeps choosing on her own too):'); if(!t)return;
+  const t=prompt('Point Eris at a topic to study (she keeps choosing on her own too):'); if(!t)return;
+  const now=confirm(`Study "${t}" now?\n\nOK = study immediately (may take a moment)\nCancel = queue it for her next dream cycle`);
   try{
-    const d=await (await fetch('/api/study-topic',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:t})})).json();
-    toast(d.error?('Error: '+d.error):`Queued "${d.queued}" — she'll study it on her next cycle.`);
-  }catch(e){ toast('could not queue topic: '+e); }
+    if(now){
+      toast(`Studying "${t}" now…`);
+      const d=await (await fetch('/api/study-now',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:t})})).json();
+      if(d.error){ toast('Error: '+d.error); return; }
+      loadDreams(); loadStudy();
+      toast(d.stored!=null ? `Studied "${d.topic}": kept ${d.stored} passage(s) — feeling ${d.regime}.`
+                           : (d.message||`Studied "${t}".`));
+    } else {
+      const d=await (await fetch('/api/study-topic',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:t})})).json();
+      toast(d.error?('Error: '+d.error):(d.message||`Queued "${d.queued}" — she'll study it on her next cycle.`));
+    }
+  }catch(e){ toast('topic action failed: '+e); }
 }
 async function dreamPrompt(){
   const q=prompt('Give Eris something to dream on / ponder:'); if(!q)return;

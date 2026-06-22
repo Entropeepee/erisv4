@@ -35,8 +35,13 @@ from urllib.request import Request, urlopen
 
 from eris.knowledge.extractor import KnowledgeExtractor
 from eris.computation.activations import BVec
+# Share the browser headers + clean extractor with the dream path so both look
+# like a real browser (fixes 403s) and both store clean body text (Fix A).
+from eris.retrieval.web_search import (
+    _BROWSER_HEADERS, _decode_body, _extract_text_from_html,
+)
 
-_UA = {"User-Agent": "ErisEcho/4 (autonomous research)"}
+_UA = _BROWSER_HEADERS
 
 
 # ----------------------------------------------------------------------------- fetch
@@ -57,14 +62,13 @@ def fetch_wikipedia(title: str, lang: str = "en") -> str:
 
 
 def fetch_url(url: str) -> str:
-    """Crude HTML -> text for arbitrary pages (stdlib only). For cleaner
-    extraction the dream loop uses eris.retrieval.web_search.fetch_content."""
-    req = Request(url, headers=_UA)
+    """HTML -> clean article text for arbitrary pages (stdlib only). Uses the
+    shared boilerplate-stripping extractor so stored text has no nav/footer/
+    "Jump to content" chrome — same cleanliness as the dream path."""
+    req = Request(url, headers=_BROWSER_HEADERS)
     with urlopen(req, timeout=30) as resp:
-        html = resp.read(2_000_000).decode("utf-8", errors="replace")
-    html = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.S | re.I)
-    text = re.sub(r"<[^>]+>", " ", html)
-    return re.sub(r"\s+", " ", text).strip()
+        html = _decode_body(resp, cap=2_000_000)
+    return _extract_text_from_html(html)
 
 
 # ----------------------------------------------------------------------------- chunk

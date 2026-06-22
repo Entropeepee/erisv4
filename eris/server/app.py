@@ -237,7 +237,23 @@ def create_app(
         if not topic:
             return JSONResponse({"error": "topic required"}, status_code=400)
         orchestrator.dreaming_loop.topic_queue.append(topic)
-        return {"queued": topic, "queue_len": len(orchestrator.dreaming_loop.topic_queue)}
+        return {"queued": topic, "queue_len": len(orchestrator.dreaming_loop.topic_queue),
+                "message": f"Queued: {topic} — Eris will study this on her next cycle."}
+
+    @app.post("/api/study-now")
+    async def api_study_now(req: PonderRequest):
+        """Study a topic RIGHT NOW instead of waiting for the dream-loop timer
+        (Fix B). Runs the crawl off the event loop so the /ws keepalive isn't
+        starved; returns what Eris studied and kept."""
+        topic = req.question.strip()
+        if not topic:
+            return JSONResponse({"error": "topic required"}, status_code=400)
+        # Jump the queue so idle_explore picks THIS topic first.
+        orchestrator.dreaming_loop.topic_queue.insert(0, topic)
+        result = await asyncio.to_thread(orchestrator.dreaming_loop.idle_explore)
+        if not result:
+            return {"studied": topic, "message": f"Nothing new found for '{topic}'."}
+        return result
 
     @app.get("/api/study/topics")
     async def api_get_topics():
@@ -648,12 +664,20 @@ def create_app(
         ws_connections.append(websocket)
         try:
             while True:
-                # Send vitals every 2 seconds
-                await websocket.send_json(orchestrator.get_vitals())
+                # Compute vitals defensively — a transient error here must never
+                # kill the stream (Fix B). The blocking field math is already
+                # cheap; if get_vitals ever raises, skip this tick, don't drop.
+                try:
+                    vitals = orchestrator.get_vitals()
+                except Exception as e:
+                    vitals = {"error": f"vitals unavailable: {e}"}
+                await websocket.send_json(vitals)
                 await asyncio.sleep(2)
         except WebSocketDisconnect:
-            ws_connections.remove(websocket)
+            pass
         except Exception:
+            pass  # client vanished mid-send — swallow, don't bubble
+        finally:
             if websocket in ws_connections:
                 ws_connections.remove(websocket)
 

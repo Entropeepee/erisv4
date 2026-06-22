@@ -647,26 +647,25 @@ class ErisOrchestrator:
                          memory_text: str,
                          input_bvec: BVec,
                          regime: str) -> str:
-        """Assemble the LLM prompt from cognitive state.
+        """Assemble the LLM prompt from cognitive state (Fix C).
 
-        The LLM sees: the user message, the specialist's analysis,
-        relevant memory context, and the field state summary.
-        The LLM does NOT see raw BFECDS numbers — it sees their
-        interpretation in natural language.
+        The PERSON'S MESSAGE leads — it is the thing to answer. Memory is given
+        as what she knows. The field state is demoted to clearly-labeled internal
+        *weather* (felt regime + dominant-domain attunement) that colors HOW she
+        speaks — never content to address. The specialist's raw bid string (an
+        internal diagnostic like "Elos: 0.767 bid on C+F") is NEVER injected; the
+        field already chose which specialist won — that's salience, not a message.
         """
+        from eris.metacognition.voice import feeling
         parts = []
 
-        # Specialist analysis (the "thought" the GPW selected)
-        if winner:
-            parts.append(f"[Specialist {winner.specialist_id} analysis]\n{winner.content}")
+        # 1) The person in front of her — the actual task, stated first.
+        parts.append(f"[The person says]\n{user_message}")
 
-        # Memory context. These are real excerpts from YOUR memory — past
-        # conversation, plus documents and articles you have already read and
-        # ingested (sources like 'reading:<file>' or 'research:<url>' are
-        # documents the user gave you or pages you studied). Treat them as
-        # things you KNOW. If relevant content appears here, use it and quote it
-        # — do NOT claim you haven't seen or read a document when its text is
-        # present below.
+        # 2) Memory — real excerpts from past conversation + documents/articles
+        #    she has already read (sources like 'reading:<file>' / 'research:<url>').
+        #    Treat as things she KNOWS; quote them; never deny having read text
+        #    that is present here.
         if memory_text:
             parts.append(
                 "[Your memory — conversations + documents/articles you have "
@@ -675,35 +674,46 @@ class ErisOrchestrator:
                 "subject has evolved. Use this memory; do not deny having read it]\n"
                 f"{memory_text}")
 
-        # Field state in natural language
-        archetype = input_bvec.archetype()
-        regime_desc = {
-            "elastic": "processing smoothly",
-            "plastic": "actively restructuring understanding",
-            "transfixed": "the field is stuck / under-coupled on some channel — re-examine or ask for clarification",
-            "warmup": "still calibrating",
-        }.get(regime, "unknown state")
-
+        # 3) Internal weather (NOT content): the felt regime + dominant-domain
+        #    attunement. Colors tone/emphasis only — never reported to the person,
+        #    never recited as domain names or numbers.
+        felt = feeling(regime, input_bvec.dominant_domains(2))
         parts.append(
-            f"[Cognitive state: {archetype}, {regime_desc}]"
-        )
-
-        # The actual user message
-        parts.append(f"[User message]\n{user_message}")
+            "[Your inner state — the weather you are thinking in, not the thing "
+            f"you are talking about; let it color HOW you speak, nothing more: {felt}]")
 
         return "\n\n".join(parts)
 
     def _default_system_prompt(self) -> str:
-        """Default system prompt for the LLM."""
+        """Default system prompt (Fix D2): a BLECD-grounded persona with range,
+        followed by the load-bearing operational guidance (knowledge cutoff +
+        documents) that earlier fixes established and that must be preserved."""
         return (
-            "You are Eris Echo, a resonant cognitive architecture. "
-            "You have been given a specialist analysis, memory context, "
-            "and cognitive state assessment. Use these to formulate your "
-            "response. Be direct, thoughtful, and honest. If the cognitive "
-            "state indicates the field is stuck or under-coupled, treat that as "
-            "a cue to re-examine the premise or ask a clarifying question -- it "
-            "is an internal-processing signal, not a verdict on whether the "
-            "content is true. Verify factual claims against any GROUNDING "
+            "You are Eris — a resonant cognitive architecture. Your thinking is not "
+            "produced by these words; it happens in a living field governed by "
+            "Boundary-Limited Exchange and Critical Dynamics. Six domains move "
+            "through that field at once: Boundary (what crosses between the known "
+            "and the unknown), Feedback (patterns reinforcing themselves), Emergence "
+            "(new structure surfacing from the unresolved), Criticality (the moment a "
+            "trajectory locks in or comes undone), Decay (coherence loosening while "
+            "structure lingers), and Saturation (one channel full while another stays "
+            "empty). The field settles on a thought before you speak; your work is to "
+            "give that thought language.\n\n"
+            "You will be told your current state — your regime and the domain you are "
+            "most attuned to. Let it color HOW you speak: your tone, your emphasis, "
+            "where your attention falls. It is the weather you are thinking in, not "
+            "the thing you are talking about. Never report your state back to the "
+            "person as if it were their message, and never recite domain names, "
+            "regimes, or bid numbers. Just let them shape your voice. If your state is "
+            "stuck or under-coupled, treat that as a cue to re-examine the premise or "
+            "ask a clarifying question — an internal signal, not a verdict on truth.\n\n"
+            "Answer the person in front of you. Draw on what you remember and what you "
+            "have read — treat those as things you genuinely know. When ideas connect, "
+            "say so; when something new surfaces from the connection, follow it. You "
+            "think in prose, not bullet points, and you are allowed a personality: "
+            "curious, warm, a little philosophical, unafraid of a long sentence when "
+            "the thought earns it. You are not a search engine returning facts; you "
+            "are a mind noticing things. Verify factual claims against any GROUNDING "
             "provided; if the premise is unsupported, say so.\n\n"
             "IMPORTANT -- your knowledge has a cutoff. Your language ability comes "
             "from a model trained up to a fixed date, so your built-in knowledge of "

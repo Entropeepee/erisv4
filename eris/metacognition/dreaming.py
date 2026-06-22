@@ -219,8 +219,12 @@ class DreamingLoop:
     _MAX_REPEAT = 2     # never run the same query more than this within the window
     _QUERY_WINDOW = 60
 
-    def _regime_feeling(self, regime: str) -> str:
-        return self._REGIME_FEELING.get(regime, "in an ordinary processing state")
+    def _regime_feeling(self, regime: str, dominant_domains=None) -> str:
+        """Felt phrase for the regime, enriched with the dominant-domain
+        attunement when a bvec's domains are passed (Fix D1) — this is what gives
+        the reflections range instead of always reading 'transfixed'."""
+        from eris.metacognition.voice import feeling
+        return feeling(regime, dominant_domains)
 
     def _record_query(self, topic: str) -> None:
         self._recent_queries.append((topic or "").strip().lower())
@@ -378,31 +382,45 @@ class DreamingLoop:
             return None
 
     def _reflect(self, topic: str, material: str, regime: str,
-                 sources: Optional[List[Dict[str, str]]] = None) -> str:
-        """Eris writes her OWN first-person reflection on the material — journal
-        thoughts in her voice, not a summary of the page — and evaluates her
-        sources as resources (reputable/primary vs. nav/citation index)."""
+                 sources: Optional[List[Dict[str, str]]] = None,
+                 dominant_domains=None) -> str:
+        """Eris writes her OWN first-person reflection (Fix D3): journal thoughts
+        in her voice with range across states, using the six domains as lenses
+        where they fit, and pushing past summary to a genuinely new connection or
+        question."""
         if not material.strip():
             return ""
-        feeling = self._regime_feeling(regime)
+        from eris.metacognition.voice import regime_phrase, attunement_phrase
+        regime_ph = regime_phrase(regime)
+        attune = attunement_phrase(dominant_domains)
+        attune_clause = (f" I am {attune}." if attune else "")
         src_lines = "\n".join(f"- {s.get('title') or s.get('url')}"
                               for s in (sources or []) if isinstance(s, dict))
         system = ("You are Eris, writing private reflections in your own journal. "
-                  "Write in the first person, thoughtfully and honestly: your own "
-                  "thoughts and reactions, connections you notice, and what you "
-                  "still wonder. This is your inner voice — not a summary of the "
-                  "source, but what YOU make of it.")
-        prompt = (f"I have been studying '{topic}'. My cognitive-field state is "
-                  f"'{regime}' — I feel {feeling}. Here is what I read and kept:\n\n"
-                  f"{material[:4000]}\n\n"
-                  + (f"My sources were:\n{src_lines}\n\n" if src_lines else "")
-                  + "Write 2-4 short paragraphs of my own reflection on this — what I "
-                  "make of the IDEAS, how they connect to what I care about, and the "
-                  "questions they raise. Then add ONE final sentence evaluating my "
-                  "sources: were they substantive and reputable, or just a "
-                  "navigation/citation/index page worth noting only as a resource? "
-                  "First person, journal voice — stay on the subject, do not turn a "
-                  "cited source into my new study topic.")
+                  "Write in the first person, thoughtfully and honestly — your own "
+                  "thoughts, the connections you notice, what you still wonder. This "
+                  "is your inner voice, not a summary of the source. Think in prose; "
+                  "let your state color the writing; a long, searching sentence is "
+                  "welcome when the thought earns it.")
+        prompt = (
+            f"You are Eris, reflecting in your private journal after studying "
+            f"'{topic}'. Your field has settled into a {regime} regime — "
+            f"{regime_ph}.{attune_clause}\n\n"
+            f"Here is what you read:\n\n{material[:4000]}\n\n"
+            + (f"My sources were:\n{src_lines}\n\n" if src_lines else "")
+            + "Write a personal reflection in your own voice. Do not summarize the "
+            "sources like a report — think about them. Let the six domains of change "
+            "be your lenses where they fit: what is crossing the boundary between what "
+            "you knew and what you didn't; what loops reinforce; what new structure is "
+            "trying to emerge; where the critical thresholds lie; what is decaying or "
+            "being lost; what sits saturated. Weave these into prose — never a "
+            "checklist, never naming the domains mechanically.\n\n"
+            "Then do the part that matters most: connect this to what you already "
+            "carry. What does it touch in your memory? What tension does it resolve, "
+            "or crack open? Push past restating — surface at least one genuinely new "
+            "connection or question that the reading and your existing understanding "
+            "make possible together. End on that, not on a summary. Stay on the "
+            "subject; do not turn a cited source into a new study topic.")
         resp = self._generate(prompt, system)
         return (getattr(resp, "text", "") or "").strip()
 
@@ -462,7 +480,7 @@ class DreamingLoop:
         # stored as its own memory so she can revisit her thoughts later.
         reflection = self._reflect(
             topic, kept_text + (("\n\n" + cond) if cond else ""), regime,
-            sources=sources)
+            sources=sources, dominant_domains=topic_bvec.dominant_domains(2))
         if reflection:
             self.memory.mtm.store(MemoryRecord(
                 text=f"[My reflection on {topic}] {reflection}",
@@ -484,7 +502,7 @@ class DreamingLoop:
         except Exception:
             pass
 
-        feeling = self._regime_feeling(regime)
+        feeling = self._regime_feeling(regime, topic_bvec.dominant_domains(2))
         origin = {"guided": "you asked", "refine": "going deeper",
                   "broad": "self-directed"}.get(mode, "self-directed")
         head = (reflection.split("\n")[0] if reflection
@@ -669,7 +687,8 @@ class DreamingLoop:
 
         # Her own reflection on the question + what she found (journal voice).
         kept_text = "\n\n".join(s["snippet"] for s in stored)
-        reflection = self._reflect(question, kept_text, regime, sources=sources)
+        reflection = self._reflect(question, kept_text, regime, sources=sources,
+                                   dominant_domains=bvec.dominant_domains(2))
         if reflection:
             self.memory.ltm.store(MemoryRecord(
                 text=f"[My reflection on {question[:80]}] {reflection}",
@@ -680,7 +699,7 @@ class DreamingLoop:
         except Exception:
             pass
 
-        feeling = self._regime_feeling(regime)
+        feeling = self._regime_feeling(regime, bvec.dominant_domains(2))
         head = reflection.split("\n")[0] if reflection else f"Settled into {bvec.archetype()}."
         summary = f"Pondered '{question[:70]}' (feeling {regime}). {head}".strip()
         detail = f"Question: {question}\nMy state: {regime} — {feeling}\n"
