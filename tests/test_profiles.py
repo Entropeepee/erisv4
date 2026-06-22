@@ -60,6 +60,19 @@ class TestProfileStore(unittest.TestCase):
         s = ProfileStore(tempfile.mkdtemp())
         self.assertEqual(s.get("nope").id, "fast")
 
+    def test_fast_budget_is_generous_not_truncating(self):
+        from eris.interface.profiles import builtin_profiles
+        fast = next(p for p in builtin_profiles() if p.id == "fast")
+        self.assertGreaterEqual(fast.max_tokens, 4096)   # no mid-sentence cut-offs
+        self.assertEqual(fast.reasoning, "low")          # speed via short thinking
+
+    def test_reasoning_system_hint(self):
+        from eris.interface.profiles import reasoning_system
+        self.assertEqual(reasoning_system("X", "low"), "Reasoning: low\n\nX")
+        self.assertEqual(reasoning_system("X", "high"), "Reasoning: high\n\nX")
+        self.assertEqual(reasoning_system("X", ""), "X")          # no hint
+        self.assertEqual(reasoning_system("X", "bogus"), "X")     # ignored
+
     def test_first_becomes_default_if_none_marked(self):
         d = tempfile.mkdtemp()
         json.dump([{"id": "a"}, {"id": "b"}],
@@ -92,7 +105,7 @@ class TestProcessHonorsProfile(unittest.TestCase):
         self.assertEqual(orch.counters.pde_steps, 50)        # deep field_steps
         self.assertGreater(orch.counters.llm_samples, 1)     # TTC sampled
         self.assertLessEqual(orch.counters.llm_samples, deep.ttc_max_samples)
-        self.assertTrue(all(c["max_tokens"] == 4096 for c in rec.calls))
+        self.assertTrue(all(c["max_tokens"] == deep.max_tokens for c in rec.calls))
 
     def test_no_profile_is_ambient_unchanged(self):
         # process() with no profile reproduces current global defaults.
