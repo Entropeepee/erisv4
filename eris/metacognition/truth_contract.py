@@ -47,8 +47,26 @@ _FABRICATED_SELF = re.compile(
     r"colleague|boss|office)|the day I was told|when I was (a child|young|in "
     r"school)|my childhood)\b", re.IGNORECASE)
 
+# Gentler fabricated *autobiographical memory* — vaguer than the blatant cases
+# (no blazer, no office), but still narrating a lived human past she doesn't have
+# ("I recall a time in a small, tightly knit community where…"). Kept tight: it
+# requires the human-episode framing ("a time in a…", a social-setting noun, an
+# upbringing), so honest recall of her real material ("I recall reading the LNCS
+# paper", "I recall an earlier thought") and metaphor are NOT caught.
+_FABRICATED_MEMORY = re.compile(
+    r"\bI (recall|remember) a time (in|when I)\b"
+    r"|\b(tightly|tight|close)[\s-]knit (community|town|village|group)\b"
+    r"|\bI (grew up|was raised)\b"
+    r"|\bgrowing up\b"
+    r"|\bback when I\b"
+    r"|\ba (small|little),?\s+(tightly[\s-]knit\s+)?(community|town|village|"
+    r"neighborhood) (where|in which)\b", re.IGNORECASE)
+
 
 def fabricated_self(text: str) -> bool:
     """True if a grounded reflection invented concrete human autobiography —
-    a cue to regenerate with the voice contract. Ponder/introspect only."""
-    return bool(_FABRICATED_SELF.search(text or ""))
+    a cue to regenerate with the voice contract. Ponder/introspect only.
+    Catches both blatant embodiment (office, blazer) and the gentler
+    fabricated-memory phrasing (a remembered human community/upbringing)."""
+    t = text or ""
+    return bool(_FABRICATED_SELF.search(t) or _FABRICATED_MEMORY.search(t))

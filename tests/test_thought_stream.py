@@ -132,6 +132,16 @@ class TestTruthContract(unittest.TestCase):
         self.assertTrue(fabricated_self("the day I was told my hair was too long"))
         self.assertTrue(fabricated_self("when I was a child my boss said no"))
 
+    def test_gentle_fabricated_memory_flagged(self):
+        # The phrasing the narrow regex first missed (6:03 ponder): a vague but
+        # still-fabricated human autobiographical memory.
+        from eris.metacognition.truth_contract import fabricated_self
+        self.assertTrue(fabricated_self(
+            "When I think of my own memory, I recall a time in a small, tightly "
+            "knit community where the social norms were so clear."))
+        self.assertTrue(fabricated_self("a tight-knit community where I grew up"))
+        self.assertTrue(fabricated_self("Growing up, the rules were strict."))
+
     def test_metaphorical_interiority_not_flagged(self):
         # Her real first-person (regimes, felt pulls) must pass — only concrete
         # invented HUMAN experience is caught.
@@ -141,6 +151,16 @@ class TestTruthContract(unittest.TestCase):
         self.assertFalse(fabricated_self(
             "I notice a loop reinforcing itself as I sit with the contradiction."))
         self.assertFalse(fabricated_self("This resembles a projection onto ker(C)."))
+
+    def test_honest_recall_not_flagged(self):
+        # Recall of her REAL material (texts, prior thoughts) must pass — the
+        # widening must not gag legitimate "I recall…" / "I remember…".
+        from eris.metacognition.truth_contract import fabricated_self
+        self.assertFalse(fabricated_self("I recall reading the LNCS paper earlier."))
+        self.assertFalse(fabricated_self(
+            "I recall an earlier thought of mine about Kuramoto coupling."))
+        self.assertFalse(fabricated_self(
+            "I remember the contradiction that surfaced last cycle."))
 
     def test_contracts_have_distinct_content(self):
         from eris.metacognition.truth_contract import (

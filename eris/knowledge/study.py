@@ -107,6 +107,17 @@ class StudyEngine:
         head = (f"Studied {len(ok)} of {len(topics)} topics "
                 f"({total_chunks} passages ingested): "
                 f"{', '.join(r['topic'] for r in ok) or 'none reachable'}.")
+        # Nothing ingested → don't ask the LLM to summarize an empty set (that
+        # produced the confusing "I'm not sure which topics you'd like..." reply).
+        # Surface WHY instead, so a network/proxy/block issue is diagnosable.
+        if not ok:
+            errs = [f"{r['topic']}: {r['error']}" for r in read if r.get("error")]
+            why = ("\n\nCouldn't reach any sources. Likely a network, DNS, proxy, "
+                   "or firewall issue (Wikipedia was unreachable from this machine "
+                   "just now), not the topics themselves.")
+            if errs:
+                why += "\n\nWhat failed:\n- " + "\n- ".join(errs[:5])
+            return head + why
         # Optional richer summary via the local LLM if one is wired and reachable.
         if self.mediator is not None:
             try:
