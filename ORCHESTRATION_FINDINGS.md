@@ -12,7 +12,7 @@ Run the ruler yourself: `python bench_orchestration.py` (offline, deterministic)
 |---|---|---|---|---|
 | 2 | field-evolution depth | `gate_field_depth` | **flagged OFF** — no safe savings on this engine | implemented, measured |
 | 3 | response-field warm-start | `gate_response_field` | **flagged OFF** — regresses dissonance, no savings | implemented, measured |
-| 4 | formalized router | `gate_router` | (pending) | |
+| 4 | formalized router | `gate_router` | **fidelity-safe** — enabled by `ERIS_ORCHESTRATION=on` | implemented, measured |
 | 5 | failure reports → dreams | `gate_failure_reports` | (pending) | |
 | 6 | β-star bridge | `use_beta_star` | (pending) | |
 
@@ -64,3 +64,31 @@ This is exactly the drift the spec anticipated in marking Tier 3 isolated and
 fidelity-gated. It stays **OFF by default**. (A fidelity-safe variant would need
 to reset the RNG per turn and use blend≈1.0 — at which point it's just instance
 reuse saving a cheap allocation, not a real amortization win.)
+
+## Tier 4 — formalized router → **fidelity-safe; the one to enable**
+
+**What it does.** Replaces the binary local-vs-ensemble `_router_gate` with the
+shared `CriticalityMonitor` on the |dC/dX| anomaly, widened to four decisions:
+CONTINUE → one local call (default); SWITCH → a **single** cloud expert (cheaper);
+ESCALATE → the full cloud ensemble; SUSPEND → specialist finding, no LLM. The
+transfixion override in `workspace.py` is unified under the same SWITCH
+vocabulary (kept on its richer reactivity probe; not rewired, to preserve winner
+selection). Behind `gate_router`; baseline path unchanged when off.
+
+**Measured (router-only A/B, `--gates router`).**
+- *Easy (A): provably untouched* — cloud 0→0, **answer Δ 0.000**. Easy turns
+  stay local, byte-for-byte the baseline answer.
+- *Hard (B): engages cloud within tolerance* — it takes a cloud path on genuine
+  outliers (cloud 0→0.2 mean) with **answer Δ 0.028 < 0.05** and dissonance Δ
+  0.027. No regression.
+- *The saving is structural, not corpus-visible.* The local-first baseline
+  escalates ~never on this offline corpus, so there's no "both escalate" turn to
+  show SWITCH (1 call) beating the old full ensemble (N calls). That saving is
+  proven by unit tests (`test_escalate_counts_full_ensemble` = N,
+  `test_switch_counts_single_expert` = 1) and pays off in production where real
+  cloud experts and real outlier patterns exist.
+
+**Conclusion.** The only gate that is **fidelity-safe** (Δ ≤ 0.028 on hard, 0 on
+easy) and structurally better than the old binary router. It is what
+`ERIS_ORCHESTRATION=on` enables. Emits `FailureModeReport`s on SWITCH/ESCALATE
+for Tier 5.

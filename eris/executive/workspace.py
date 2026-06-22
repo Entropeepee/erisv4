@@ -259,6 +259,13 @@ class MoEGate:
         Normal: highest interference score wins.
         Transfixed: force highest-Emergence bid to break the loop.
         Hallucinating: force highest-Emergence bid AND flag for review.
+
+        In CIP terms the transfixion override IS a `SWITCH` decision — when the
+        field is stuck, switch the selection mechanism (interference score ->
+        highest-Emergence) to break the loop. It deliberately keeps its own
+        physical reactivity probe (richer than a dC/dX z-score) rather than being
+        rewired through CriticalityMonitor, so winner selection stays behavior-
+        preserving; the two share the SWITCH vocabulary, not duplicated logic.
         """
         if not findings:
             return None

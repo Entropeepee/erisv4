@@ -54,7 +54,7 @@ from eris.computation.activations import BVec, bvec_distance
 from eris.computation.sgt import SGTGate
 from eris.computation.orch_counters import OrchestrationCounters
 from eris.computation.noise_floor import NoiseFloorEstimator
-from eris.computation.criticality import CriticalityMonitor
+from eris.computation.criticality import CriticalityMonitor, Decision, FailureModeReport
 
 # Layer 1: Field
 from eris.field.pde import FractalField
@@ -224,6 +224,9 @@ class ErisOrchestrator:
         # Turn counter + last-turn dissonance (surfaced separately in vitals).
         self.turn_count: int = 0
         self._last_dissonance: float = 0.0
+        # Tier 4/5: the most recent router FailureModeReport (SWITCH/ESCALATE),
+        # routed to the dream queue by Tier 5 when gate_failure_reports is on.
+        self._last_router_report: Optional[FailureModeReport] = None
 
         # Tier 0: per-turn resource counters for the orchestration benchmark.
         # Pure instrumentation — incremented at the expensive boundaries below,
@@ -379,49 +382,41 @@ class ErisOrchestrator:
             user_message, winner, memory_text, input_bvec, result.regime
         )
 
-        # LLM ROUTER (Remediation Tier 0.2): default to ONE fast local call.
-        # Escalate to the cloud MoE ensemble ONLY when |dC/dX| is a genuine SGT
-        # outlier for THIS engine AND at least one real cloud expert is wired.
-        deep_signal, dcdx_z = self._router_gate.update(abs(result.dCdX))
-        use_deep = deep_signal and self._cloud_experts >= 1
-
-        if use_deep:
-            # Tier 0: count the would-be cloud-expert calls. With the LLM stubbed
-            # the harness can't time real cloud latency, so the router's payoff
-            # (Tier 4) is read from THIS counter, not from wall-clock.
-            self.counters.cloud_calls += self._cloud_experts
-            print(f"[ROUTER] dC/dX outlier (z={dcdx_z:.2f}) + {self._cloud_experts} "
-                  f"cloud expert(s) available -> deep MoE synthesis.")
-            expert_responses = await self.deep_mediator.ensemble(
-                prompt=prompt,
-                system=system_context or self._default_system_prompt(),
-            )
-            if len(expert_responses) > 1:
-                print(f"[MoE] Synthesizing {len(expert_responses)} expert responses...")
-                synthesis_prompt = (
-                    "Multiple experts answered the same prompt. Synthesize their "
-                    "insights into one strongest response:\n\n"
-                )
-                for idx, r in enumerate(expert_responses):
-                    synthesis_prompt += f"--- EXPERT {idx+1} ({r.provider}) ---\n{r.text}\n\n"
-                synthesis_prompt += "\nNow provide the final synthesized response directly:"
-                llm_response = await self.deep_mediator.generate(
-                    prompt=synthesis_prompt,
-                    system="You are Eris. Synthesize the expert opinions.",
-                )
-            elif len(expert_responses) == 1:
-                llm_response = expert_responses[0]
+        system = system_context or self._default_system_prompt()
+        if CONFIG.orchestration_enabled and CONFIG.gate_router:
+            # Tier 4: the FORMALIZED router. The shared CriticalityMonitor widens
+            # the old binary local-vs-ensemble gate into four decisions on the
+            # |dC/dX| anomaly. A MODERATE outlier now takes ONE cloud expert
+            # (SWITCH) instead of the full ensemble (ESCALATE) — the genuine
+            # cloud-call saving. Easy turns stay local (CONTINUE).
+            decision, report = self._router_monitor.observe(
+                "dcdx", abs(result.dCdX), {"mode": "anomaly"})
+            if report is not None:
+                self._last_router_report = report   # Tier 5 picks this up
+            if decision is Decision.ESCALATE and self._cloud_experts >= 1:
+                self.counters.cloud_calls += self._cloud_experts
+                print(f"[ROUTER] ESCALATE -> full {self._cloud_experts}-expert ensemble.")
+                llm_response = await self._deep_ensemble(prompt, system)
+            elif decision is Decision.SWITCH and self._cloud_experts >= 1:
+                self.counters.cloud_calls += 1
+                print("[ROUTER] SWITCH -> single cloud expert (cheaper than ensemble).")
+                llm_response = await self._single_cloud_expert(prompt, system)
             else:
-                # Ensemble came back empty -> fall back to the fast local path.
-                llm_response = await self.mediator.generate(
-                    prompt=prompt,
-                    system=system_context or self._default_system_prompt(),
-                )
+                # CONTINUE (in-band) or SUSPEND-with-no-cloud -> one fast local call.
+                llm_response = await self.mediator.generate(prompt=prompt, system=system)
         else:
-            llm_response = await self.mediator.generate(
-                prompt=prompt,
-                system=system_context or self._default_system_prompt(),
-            )
+            # Baseline router (Remediation Tier 0.2), unchanged: default to ONE
+            # fast local call; escalate to the full cloud ensemble only on a
+            # genuine SGT |dC/dX| outlier with a real cloud expert wired.
+            deep_signal, dcdx_z = self._router_gate.update(abs(result.dCdX))
+            use_deep = deep_signal and self._cloud_experts >= 1
+            if use_deep:
+                self.counters.cloud_calls += self._cloud_experts
+                print(f"[ROUTER] dC/dX outlier (z={dcdx_z:.2f}) + {self._cloud_experts} "
+                      f"cloud expert(s) available -> deep MoE synthesis.")
+                llm_response = await self._deep_ensemble(prompt, system)
+            else:
+                llm_response = await self.mediator.generate(prompt=prompt, system=system)
 
         # Lever 2: don't let a stale-training contradiction reach the user
         # uncorrected. Only pays for a web check + re-gen on contradiction turns.
@@ -541,6 +536,42 @@ class ErisOrchestrator:
 
         result.latency_ms = (time.time() - t0) * 1000
         return result
+
+    async def _deep_ensemble(self, prompt: str, system: str):
+        """ESCALATE path: fire the full cloud MoE ensemble and synthesize. Shared
+        by the baseline router and the Tier 4 router so the behavior is identical."""
+        expert_responses = await self.deep_mediator.ensemble(prompt=prompt, system=system)
+        if len(expert_responses) > 1:
+            print(f"[MoE] Synthesizing {len(expert_responses)} expert responses...")
+            synthesis_prompt = (
+                "Multiple experts answered the same prompt. Synthesize their "
+                "insights into one strongest response:\n\n"
+            )
+            for idx, r in enumerate(expert_responses):
+                synthesis_prompt += f"--- EXPERT {idx+1} ({r.provider}) ---\n{r.text}\n\n"
+            synthesis_prompt += "\nNow provide the final synthesized response directly:"
+            return await self.deep_mediator.generate(
+                prompt=synthesis_prompt,
+                system="You are Eris. Synthesize the expert opinions.")
+        if len(expert_responses) == 1:
+            return expert_responses[0]
+        # Ensemble came back empty -> fall back to the fast local path.
+        return await self.mediator.generate(prompt=prompt, system=system)
+
+    async def _single_cloud_expert(self, prompt: str, system: str):
+        """SWITCH path: ONE cloud expert (cheaper than the full ensemble). Uses
+        the first available deep backend; falls back to local if none answers."""
+        for backend in self.deep_mediator._backends:
+            if backend.name == "ollama":
+                continue  # skip the local fallback — we want a cloud expert here
+            if not backend.is_available():
+                continue
+            try:
+                return await backend.generate(prompt, system)
+            except Exception as e:
+                print(f"[ROUTER] single expert {backend.name} failed: {e}")
+                break
+        return await self.mediator.generate(prompt=prompt, system=system)
 
     def _assemble_prompt(self, user_message: str,
                          winner: Optional[SpecialistFinding],

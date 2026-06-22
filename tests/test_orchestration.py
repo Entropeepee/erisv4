@@ -9,6 +9,8 @@ import os
 os.environ.setdefault("ERIS_GPU", "0")
 os.environ.setdefault("ERIS_EMBEDDINGS", "off")
 
+import asyncio
+import tempfile
 import unittest
 
 from eris.computation.sgt import SGTGate
@@ -226,6 +228,68 @@ class TestResponseFieldGate(unittest.TestCase):
         full = f2.run_gated_response(_AlwaysContinue(), max_steps=25,
                                      check_every=4, min_steps=8)
         self.assertEqual(full, 25)
+
+
+class TestRouterGate(unittest.TestCase):
+    """Tier 4: the four-decision router maps to the right cloud-call cost, and
+    is behavior-preserving when the flag is off."""
+
+    def tearDown(self):
+        from eris.config import CONFIG
+        for f in ("orchestration_enabled", "gate_field_depth", "gate_response_field",
+                  "gate_router", "gate_failure_reports", "use_beta_star"):
+            setattr(CONFIG, f, False)
+
+    def _orch(self):
+        from eris.config import CONFIG
+        from eris.orchestrator import ErisOrchestrator
+        from eris.interface.mediator import LLMResponse, LLMBackend
+
+        class FB(LLMBackend):
+            def __init__(self, name):
+                self.name = name
+                self.model = "m"
+
+            def is_available(self):
+                return True
+
+            async def generate(self, prompt, system="", max_tokens=8192, temperature=0.7):
+                return LLMResponse(text="ok " + self.name, provider=self.name,
+                                   model="m", latency_ms=0.0)
+
+        CONFIG.orchestration_enabled = True
+        CONFIG.gate_router = True
+        CONFIG.gate_field_depth = False
+        CONFIG.gate_response_field = False
+        o = ErisOrchestrator(data_dir=tempfile.mkdtemp(), field_size=16)
+        o.mediator._backends = [FB("ollama")]
+        o.deep_mediator._backends = [FB("cloud-a"), FB("cloud-b"), FB("ollama")]
+        o._cloud_experts = 2
+        return o
+
+    def test_escalate_counts_full_ensemble(self):
+        o = self._orch()
+        o._router_monitor.observe = lambda *a, **k: (
+            Decision.ESCALATE,
+            FailureModeReport("router", "router", Decision.ESCALATE, "outlier", 9.0))
+        asyncio.run(o.process("hello"))
+        self.assertEqual(o.counters.cloud_calls, 2)        # full ensemble
+        self.assertIsNotNone(o._last_router_report)
+
+    def test_switch_counts_single_expert(self):
+        o = self._orch()
+        o._router_monitor.observe = lambda *a, **k: (
+            Decision.SWITCH,
+            FailureModeReport("router", "router", Decision.SWITCH, "outlier", 3.0))
+        asyncio.run(o.process("hello"))
+        self.assertEqual(o.counters.cloud_calls, 1)        # cheaper single expert
+        self.assertIsNotNone(o._last_router_report)
+
+    def test_continue_stays_local(self):
+        o = self._orch()
+        o._router_monitor.observe = lambda *a, **k: (Decision.CONTINUE, None)
+        asyncio.run(o.process("hello"))
+        self.assertEqual(o.counters.cloud_calls, 0)        # local only
 
 
 if __name__ == "__main__":

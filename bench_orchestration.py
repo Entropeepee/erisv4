@@ -59,7 +59,10 @@ from eris.interface.mediator import LLMBackend, LLMResponse
 from eris.computation.activations import bvec_distance
 
 FIELD_SIZE = 64       # overridden by --field-size in __main__
-GATE_BETA_STAR = False  # Tier 6 is isolated; enable with --beta-star
+# Which gates the orchestrated arm turns on (per-gate isolation; --gates).
+# Default = the gate that earns its place (router). Use --gates all to combine.
+ALL_GATES = ("field_depth", "response_field", "router", "failure_reports", "beta_star")
+ENABLED_GATES = {"router"}
 
 
 # ── The deterministic stub LLM ────────────────────────────────────────────
@@ -119,11 +122,11 @@ def _build(enabled: bool, field_seed: int, tmpdir: str) -> ErisOrchestrator:
     (Tier 6's β-star is isolated — see GATE_BETA_STAR — and stays off here.)
     """
     CONFIG.orchestration_enabled = enabled
-    CONFIG.gate_field_depth = enabled      # Tier 2
-    CONFIG.gate_response_field = enabled    # Tier 3
-    CONFIG.gate_router = enabled            # Tier 4
-    CONFIG.gate_failure_reports = enabled   # Tier 5
-    CONFIG.use_beta_star = enabled and GATE_BETA_STAR   # Tier 6 (isolated, opt-in)
+    CONFIG.gate_field_depth = enabled and "field_depth" in ENABLED_GATES      # Tier 2
+    CONFIG.gate_response_field = enabled and "response_field" in ENABLED_GATES  # Tier 3
+    CONFIG.gate_router = enabled and "router" in ENABLED_GATES                # Tier 4
+    CONFIG.gate_failure_reports = enabled and "failure_reports" in ENABLED_GATES  # Tier 5
+    CONFIG.use_beta_star = enabled and "beta_star" in ENABLED_GATES           # Tier 6
     orch = ErisOrchestrator(data_dir=tmpdir, field_size=FIELD_SIZE,
                             field_seed=field_seed)
     # Swap every backend for the offline stub. The "deep" mediator gets two fake
@@ -184,6 +187,7 @@ async def main(seeds: int) -> int:
           f"corpus: A(easy)={len(CORPUS['A'])}  B(hard)={len(CORPUS['B'])}")
     print(f"  offline: ERIS_GPU={os.environ['ERIS_GPU']}  "
           f"ERIS_EMBEDDINGS={os.environ['ERIS_EMBEDDINGS']}  LLM=FakeBackend")
+    print(f"  gates ON in orchestrated arm: {sorted(ENABLED_GATES) or '(none)'}")
     print("=" * 78)
 
     # Collect baseline and orchestrated records across M seeds, keyed by message.
@@ -272,9 +276,14 @@ async def main(seeds: int) -> int:
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Eris orchestration A/B ruler (Tier 0)")
+    ap = argparse.ArgumentParser(description="Eris orchestration A/B ruler")
     ap.add_argument("--seeds", type=int, default=5, help="repeat over M field seeds")
     ap.add_argument("--field-size", type=int, default=64, help="PDE grid size")
+    ap.add_argument("--gates", default="router",
+                    help="comma-separated gates ON in the orchestrated arm, or "
+                         "'all'. Options: " + ", ".join(ALL_GATES))
     args = ap.parse_args()
-    FIELD_SIZE = args.field_size  # noqa: F811 — intentional global override
+    FIELD_SIZE = args.field_size           # noqa: F811 — intentional global override
+    ENABLED_GATES = (set(ALL_GATES) if args.gates.strip().lower() == "all"
+                     else {g.strip() for g in args.gates.split(",") if g.strip()})
     raise SystemExit(asyncio.run(main(args.seeds)))
