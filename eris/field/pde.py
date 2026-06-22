@@ -300,6 +300,40 @@ class FractalField:
     def run(self, n_steps: int) -> None:
         for _ in range(n_steps):
             self.step()
+
+    def run_gated(self, monitor, max_steps: int, check_every: int = 4,
+                  min_steps: int = 8) -> int:
+        """Tier 2 (CIP early-termination for iterative solvers, §0069F).
+
+        Evolve up to `max_steps`, but SUSPEND early once the trajectory has
+        SETTLED — the change in global coherence over a `check_every` window
+        drops to a low outlier below its own noise floor (judged by the shared
+        CriticalityMonitor in "settle" mode). Returns the number of steps
+        actually executed (the benchmark counts this).
+
+        Safety (this signal is tiny — coherence sits ~0.04):
+          • `min_steps` is a hard floor — never suspend before the field has
+            done real work. Defaults to 8; callers pass CONFIG.orch_min_field_steps.
+          • During the monitor's warmup the gate returns CONTINUE, so the first
+            turns run the full `max_steps` exactly like `run()`.
+        `run()` itself is untouched; this is an additive variant.
+        """
+        from eris.computation.criticality import Decision
+        min_steps = max(1, min_steps)
+        last_c = self.coherence
+        executed = 0
+        for _ in range(max_steps):
+            self.step()
+            executed += 1
+            if executed < min_steps or executed % check_every != 0:
+                continue
+            c = self.coherence
+            delta = abs(c - last_c)
+            last_c = c
+            decision, _ = monitor.observe("field_settle", delta, {"mode": "settle"})
+            if decision == Decision.SUSPEND:
+                break
+        return executed
             
     def compute_bvec(self) -> BVec:
         return compute_bvec_from_field(self.phi, self.theta, self.tau, self.phi_prev)

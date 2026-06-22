@@ -53,6 +53,8 @@ from eris.config import CONFIG, to_numpy
 from eris.computation.activations import BVec, bvec_distance
 from eris.computation.sgt import SGTGate
 from eris.computation.orch_counters import OrchestrationCounters
+from eris.computation.noise_floor import NoiseFloorEstimator
+from eris.computation.criticality import CriticalityMonitor
 
 # Layer 1: Field
 from eris.field.pde import FractalField
@@ -228,6 +230,20 @@ class ErisOrchestrator:
         # read by bench_orchestration.py. Does not affect any decision.
         self.counters = OrchestrationCounters()
 
+        # Tier 1+: ONE shared noise-floor estimator feeds every gate (per-signal
+        # local scale + one global agitation multiplier). The gates that draw
+        # from it stay inert unless their CONFIG flag is on (default OFF).
+        self._noise_floor = NoiseFloorEstimator(
+            k=CONFIG.orch_k, warmup=10)
+        # Tier 2: the field-evolution depth gate (early-terminate a settled run).
+        self._field_depth_monitor = CriticalityMonitor(
+            "field_depth", self._noise_floor, "field_depth",
+            k=CONFIG.orch_k, protected_steps=0)
+        # Tier 4: the formalized local↔cloud router (built here, wired below).
+        self._router_monitor = CriticalityMonitor(
+            "router", self._noise_floor, "router",
+            k=CONFIG.orch_k, protected_steps=0)
+
     def add_llm_backend(self, backend: LLMBackend) -> None:
         """Add an LLM backend (Ollama, Claude, OpenAI, etc.)."""
         self.mediator.add_backend(backend)
@@ -244,8 +260,15 @@ class ErisOrchestrator:
 
         # ── Layer 1: Seed and evolve the FRACTAL field ────────────────
         self.field.seed_from_text(user_message, use_frt=self.use_frt_seeding)
-        self.field.run(CONFIG.pde_steps_per_input)
-        self.counters.pde_steps += CONFIG.pde_steps_per_input
+        if CONFIG.orchestration_enabled and CONFIG.gate_field_depth:
+            # Tier 2: evolve only as deep as needed — suspend once settled.
+            executed = self.field.run_gated(
+                self._field_depth_monitor, CONFIG.pde_steps_per_input,
+                min_steps=CONFIG.orch_min_field_steps)
+            self.counters.pde_steps += executed
+        else:
+            self.field.run(CONFIG.pde_steps_per_input)
+            self.counters.pde_steps += CONFIG.pde_steps_per_input
 
         # ── Layer 0: Compute BFECDS + global observables ──────────────
         input_bvec = self.field.compute_bvec()
@@ -318,6 +341,11 @@ class ErisOrchestrator:
         tau_rms = float(to_numpy(
             np.sqrt(np.mean(to_numpy(self.field.tau) ** 2))
         )) if hasattr(self.field, 'tau') else 0.0
+
+        # Tier 1+: feed whole-field agitation to the shared estimator so a
+        # turbulent field raises EVERY gate's threshold in lockstep next turn.
+        if CONFIG.orchestration_enabled:
+            self._noise_floor.observe_global(tau_rms)
 
         winner = self.moe_gate.select_winner(
             findings,

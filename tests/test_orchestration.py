@@ -16,6 +16,7 @@ from eris.computation.noise_floor import NoiseFloorEstimator
 from eris.computation.criticality import (
     CriticalityMonitor, Decision, FailureModeReport,
 )
+from eris.field.pde import FractalField
 
 
 class _GStub:
@@ -157,6 +158,48 @@ class TestSGTGateBackCompat(unittest.TestCase):
         self.assertLess(z_plain, 4.0)                        # below the raised 4σ threshold
         self.assertTrue(fired_plain)                         # plain (2σ) opens
         self.assertFalse(fired_gated)                        # gated (2σ×2) stays shut
+
+
+class _SuspendAfter:
+    """Stub monitor that SUSPENDs on its k-th observation (deterministic)."""
+    def __init__(self, k):
+        self.k = k
+        self.calls = 0
+
+    def observe(self, name, value, context=None):
+        self.calls += 1
+        return (Decision.SUSPEND if self.calls >= self.k else Decision.CONTINUE), None
+
+
+class _AlwaysContinue:
+    def observe(self, name, value, context=None):
+        return Decision.CONTINUE, None
+
+
+class TestFieldDepthGate(unittest.TestCase):
+    def test_run_gated_suspends_early_respecting_min_steps(self):
+        f = FractalField(size=16, seed=1)
+        f.seed_from_text("hello world")
+        executed = f.run_gated(_SuspendAfter(1), max_steps=50,
+                               check_every=4, min_steps=8)
+        self.assertEqual(executed, 8)          # min_steps floor; suspend at 1st check
+        self.assertLess(executed, 50)
+
+    def test_run_gated_runs_full_when_never_suspends(self):
+        f = FractalField(size=16, seed=1)
+        f.seed_from_text("hello world")
+        executed = f.run_gated(_AlwaysContinue(), max_steps=30,
+                               check_every=4, min_steps=8)
+        self.assertEqual(executed, 30)         # turbulent: full depth, no early stop
+
+    def test_run_gated_never_suspends_before_min_steps(self):
+        f = FractalField(size=16, seed=1)
+        f.seed_from_text("hello world")
+        # Suspend would fire on the very first observation, but min_steps=12 with
+        # check_every=4 means the first check is at step 12, not earlier.
+        executed = f.run_gated(_SuspendAfter(1), max_steps=50,
+                               check_every=4, min_steps=12)
+        self.assertEqual(executed, 12)
 
 
 if __name__ == "__main__":
