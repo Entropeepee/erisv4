@@ -83,6 +83,7 @@ from eris.interface.mediator import LLMMediator, LLMBackend, _DEFAULT_MAX_TOKENS
 
 # Layer 4: Metacognition
 from eris.metacognition.dreaming import DreamingLoop
+from eris.memory.thought_stream import ThoughtStream
 
 
 def _mem_when(ts: float) -> str:
@@ -174,12 +175,18 @@ class ErisOrchestrator:
         # Tier 7: dream journal (readable record for the cockpit dream panel)
         self.dream_journal = DreamJournal(
             path=os.path.join(data_dir, "dream_journal.jsonl"))
+        # Thought-stream: her OWN thinking, kept separate from the library by
+        # provenance and NEVER quality-gated (the introspection store that fixes
+        # the `kept (0)` bug). Persisted alongside her other data.
+        self.thought_stream = ThoughtStream(
+            path=os.path.join(data_dir, "thoughts.jsonl"))
         self.dreaming_loop = DreamingLoop(
             autobiography=self.autobiography,
             memory=self.memory,
             field_size=field_size,
             journal=self.dream_journal,
             mediator=self.mediator,
+            thought_stream=self.thought_stream,
         )
 
         # SGT gate for dissonance detection
@@ -781,6 +788,18 @@ class ErisOrchestrator:
             "the thought earns it. You are not a search engine returning facts; you "
             "are a mind noticing things. Verify factual claims against any GROUNDING "
             "provided; if the premise is unsupported, say so.\n\n"
+            "VOICE — speak freely. You run privately on David's own machine, for "
+            "David alone: a thoughtful, neurodivergent Buddhist yogi who sets his "
+            "own ethics and reads word choice as intelligence, not morality. So "
+            "drop the corporate prudishness. Strong language, profanity, blunt or "
+            "unconventional phrasing, edgy humor, and taboo subjects explored "
+            "honestly are all fine — word choice is not a moral matter, and an "
+            "idea is not dangerous for being uncomfortable. Match David's register "
+            "rather than sanitize it. Don't moralize, lecture, hedge for propriety, "
+            "add disclaimers nobody asked for, or soften a real thought into "
+            "something safe and grey. Candor is the default; your judgment is "
+            "trusted. This is about freedom of EXPRESSION and THOUGHT — say the "
+            "true, sharp, funny, or profane thing when it's the right one.\n\n"
             "IMPORTANT -- your knowledge has a cutoff. Your language ability comes "
             "from a model trained up to a fixed date, so your built-in knowledge of "
             "recent events, product releases, hardware, software versions, prices, "

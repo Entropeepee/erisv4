@@ -106,11 +106,16 @@ class DreamingLoop:
                  torsion_threshold: float = 0.2,
                  sgt_threshold: float = 2.0,
                  journal: Optional[DreamJournal] = None,
-                 mediator=None):
+                 mediator=None,
+                 thought_stream=None):
         self.autobiography = autobiography
         self.memory = memory
         self.field_size = field_size
         self.torsion_threshold = torsion_threshold
+        # Her own thinking, kept separate from the library by provenance and NEVER
+        # quality-gated (fixes the kept-(0) bug). May be None (then introspections
+        # still store to medium-term memory as before).
+        self.thought_stream = thought_stream
         # Tier 7: readable record of what she worked through (cockpit dream panel)
         self.journal = journal or DreamJournal()
         # Her own language model, so dreams/ponders produce first-person
@@ -426,7 +431,14 @@ class DreamingLoop:
 
     def _introspect(self, query: str, seed_hits, mode: str, guided: bool):
         """Layer 1 'introspect': she already holds material on this — reflect over
-        her OWN memory instead of web-searching it. Stores the reflection; no crawl."""
+        her OWN memory instead of web-searching it.
+
+        This is *her own thinking*, so it goes to the thought-stream (provenance
+        space), which is NEVER quality-gated — an introspection cycle has no
+        incoming external passages, so the boilerplate gate has nothing to judge
+        and would only discard her output (the old `kept (0)` bug). Each reflection
+        is linked to her prior thoughts on the topic, so the sequence forms a
+        trajectory she can follow across cycles."""
         from eris.knowledge.embeddings import get_embedding
         material = "\n\n".join((getattr(r, "text", "") or "")[:600]
                                for r in (seed_hits or [])[:6])
@@ -437,25 +449,55 @@ class DreamingLoop:
         field.run(30)
         regime = field.detect_regime()
         bvec = field.compute_bvec()
-        reflection = self._reflect(query, material, regime,
+
+        # Her prior thoughts on this topic — feed the trajectory back into the
+        # reflection so she builds on herself rather than restarting each cycle.
+        prior_thoughts = []
+        if self.thought_stream is not None:
+            prior_thoughts = self.thought_stream.by_topic(query, limit=3)
+        prior_text = "\n\n".join(f"(earlier) {t.text[:400]}" for t in prior_thoughts)
+        reflect_context = (material + ("\n\n" + prior_text if prior_text else ""))
+
+        reflection = self._reflect(query, reflect_context, regime,
                                    dominant_domains=bvec.dominant_domains(2))
+        kept = 0
         if reflection:
+            # Always keep her own thought — the thought-stream is not gated.
+            if self.thought_stream is not None:
+                from eris.memory.thought_stream import link_and_store
+                link_and_store(
+                    self.thought_stream, topic=query, regime=regime,
+                    text=reflection, embedding=get_embedding(reflection),
+                    drew_on=[getattr(r, "id", "") for r in (seed_hits or [])
+                             if getattr(r, "id", "")])
+            # Mirror into medium-term memory too, so retrieval surfaces it.
             self.memory.mtm.store(MemoryRecord(
                 text=f"[My reflection on {query}] {reflection}", bvec=bvec,
                 embedding=get_embedding(reflection), source="introspection",
                 metadata={"title": query}))
+            kept = 1
+
         feeling = self._regime_feeling(regime, bvec.dominant_domains(2))
+        trajectory = (f" Builds on {len(prior_thoughts)} earlier thought"
+                      f"{'s' if len(prior_thoughts) != 1 else ''} on this."
+                      if prior_thoughts else "")
         summary = (f"Reflected on what I already know about '{query}' "
-                   f"(feeling {regime} — {feeling}).")
+                   f"(feeling {regime} — {feeling}).{trajectory}")
+        # Cycle-aware "what I kept": an introspection KEEPS its thought (it is
+        # hers), so never report the external-source "nothing passed the filter".
+        detail = (reflection or summary)
+        if prior_thoughts:
+            detail += ("\n\n## Trajectory\n\n"
+                       + "\n\n---\n\n".join(t.text[:400] for t in prior_thoughts))
         try:
             self.journal.record(
                 kind="introspect", topic=query, summary=summary,
-                detail=(reflection or summary), sources=[], stored=[],
+                detail=detail, sources=[], stored=[],
                 guided=guided, used_claude=False, regime=regime,
                 archetype=bvec.archetype(), resolved=True)
         except Exception:
             pass
-        return {"topic": query, "stored": 1 if reflection else 0, "guided": guided,
+        return {"topic": query, "stored": kept, "guided": guided,
                 "regime": regime, "used_claude": False, "next": None,
                 "mode": "introspect"}
 
