@@ -160,6 +160,13 @@ class ErisConfig:
     # on the resonant fast path. Q2: the durable store is the built-in local one.
     agent_tool_factual_lookup: bool = False   # hybrid BM25+dense lookup over memory
     agent_tool_durable_memory: bool = False   # remember_fact / recall_facts
+
+    # ── Web reading ──────────────────────────────────────────────────
+    # Opt-in reader-proxy fallback for sites that 403/429 a normal fetch even
+    # with browser headers. When ON, such URLs are re-fetched through
+    # r.jina.ai, which returns clean reader markdown. PRIVACY TRADEOFF: this
+    # sends the target URL to a third party. Default OFF — David's call.
+    web_reader_proxy: bool = False
     orch_resp_blend: float = 0.7          # Tier 3 warm-reseed: new-text weight (1.0 = cold)
 
 
@@ -191,3 +198,9 @@ _agent_env = os.environ.get("ERIS_AGENT_TOOLS", "off").strip().lower()
 if _agent_env in ("on", "1", "true", "yes"):
     CONFIG.agent_tool_factual_lookup = True
     CONFIG.agent_tool_durable_memory = True
+
+# ERIS_WEB_PROXY = "off" (default) | "on". Enables the r.jina.ai reader-proxy
+# fallback for bot-blocked pages (sends the URL to a third party — see config).
+_webproxy_env = os.environ.get("ERIS_WEB_PROXY", "off").strip().lower()
+if _webproxy_env in ("on", "1", "true", "yes"):
+    CONFIG.web_reader_proxy = True
