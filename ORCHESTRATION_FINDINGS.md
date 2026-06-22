@@ -6,12 +6,20 @@ benchmark + fidelity probes, whether each gate earned its place. The rule
 answer-Δ stays under `orch_answer_tol` (0.05). Otherwise it stays behind its
 flag — available for future tuning, off in production.
 
+> **Patent review (see `CIP_PATENT_REVIEW.md`).** A read of the source CIP v9
+> patent confirms the *root cause* behind Tiers 2–3 failing: the patent's gate
+> requires a **convergent residual marching to a user tolerance**. The Kuramoto
+> field has no such signal — its bvec, and even its discrete archetype, are still
+> changing at the step budget. So Tiers 2–3 are not "untuned," they are
+> **mis-placed** (a category error). Tier 4 (router) is the patent's own
+> speculative-decoding embodiment (§[0101]/claim 20) and is correctly placed.
+
 Run the ruler yourself: `python bench_orchestration.py` (offline, deterministic).
 
 | Tier | Gate | Flag | Verdict | Status |
 |---|---|---|---|---|
-| 2 | field-evolution depth | `gate_field_depth` | **flagged OFF** — no safe savings on this engine | implemented, measured |
-| 3 | response-field warm-start | `gate_response_field` | **flagged OFF** — regresses dissonance, no savings | implemented, measured |
+| 2 | field-evolution depth | `gate_field_depth` | **shelved (mis-placed)** — field is not a convergent solver | implemented, measured |
+| 3 | response-field warm-start | `gate_response_field` | **shelved (mis-placed)** — same; regresses dissonance | implemented, measured |
 | 4 | formalized router | `gate_router` | **fidelity-safe** — enabled by `ERIS_ORCHESTRATION=on` | implemented, measured |
 | 5 | failure reports → dreams | `gate_failure_reports` | **safe** — metacognition feature, no perf cost | implemented, tested |
 | 6 | β-star bridge | `use_beta_star` | **flagged OFF** — neutral, but consumer is dormant | implemented, tested |
@@ -41,8 +49,11 @@ mode), with a hard `min_steps` floor.
 **Conclusion.** The gate is implemented and its mechanism is unit-tested (a
 settled trajectory suspends, a turbulent one runs full, `min_steps` is honored),
 but on this Kuramoto engine early field termination is a fidelity regression, not
-a saving. It stays **OFF by default**. The real, safe wins live downstream (the
-router's skipped cloud calls — Tier 4).
+a saving. **Root cause (patent review):** the patent's gate needs a convergent
+residual; the field has none — its bvec *and* its discrete archetype are still
+changing at the step budget (the archetype flips between steps 30–50). This is a
+**mis-placed gate**, not an untuned one — shelved as a negative result, OFF by
+default. The real, safe wins live downstream (the router — Tier 4).
 
 ## Tier 3 — response-field warm-start → **leave OFF** (isolated, as flagged)
 
