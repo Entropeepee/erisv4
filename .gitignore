@@ -11,3 +11,4 @@ grok_experiment_results.json
 # Generated codebase review packs (regenerate with pack_codebase.py)
 eris_codebase_full.txt
 eris_codebase_skeleton.txt
+knowledge_base/
