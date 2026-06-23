@@ -33,14 +33,65 @@ DEFAULT_TOPICS = ["Cognitive science", "Complex systems", "Self-organization"]
 
 class StudyEngine:
     def __init__(self, extractor, memory, *, data_dir: str = "eris_data",
-                 journal=None, mediator=None):
+                 journal=None, mediator=None, thought_stream=None, field_size=32):
         self.extractor = extractor
         self.memory = memory
         self.journal = journal          # optional DreamJournal for cross-posting
         self.mediator = mediator        # optional LLMMediator for summaries
+        self.thought_stream = thought_stream   # her synthesis is HERS → thought-stream
+        self.field_size = field_size
         self.topics_path = os.path.join(data_dir, "study_topics.json")
         self.reports_path = os.path.join(data_dir, "study_reports.jsonl")
         os.makedirs(data_dir, exist_ok=True)
+
+    # ---- self-seeking topic selection (autonomous study) ----
+    def _recent_topics(self, limit: int = 12) -> set:
+        recent = set()
+        for r in self._all_reports()[-limit:]:
+            for t in (r.get("topics") or []):
+                recent.add(t)
+        return recent
+
+    def choose_topics(self, n: int = 1) -> List[str]:
+        """What to study when nobody clicked a button: bias toward her configured
+        interests, range across the curated cross-domain seeds, rotate away from
+        what she just studied."""
+        from eris.knowledge.curiosity import pick_topics
+        extra = list(self.get_topics())
+        return pick_topics(n, recent=self._recent_topics(), extra=extra)
+
+    def _gen(self, prompt: str, system: str = "") -> str:
+        """Best-effort local-model call (sync). Returns "" if no model wired."""
+        if self.mediator is None:
+            return ""
+        try:
+            import asyncio
+            resp = asyncio.run(self.mediator.generate(prompt=prompt, system=system))
+            return (getattr(resp, "text", "") or "")
+        except Exception:
+            return ""
+
+    def _comprehend(self, topic: str, text: str) -> int:
+        """Index-time elaboration: store self-Q&A units to the library so a later
+        question matches a stored question, not just a raw passage. Returns count."""
+        if not text or self.mediator is None or self.memory is None:
+            return 0
+        from eris.knowledge.comprehend import self_qa, qa_units
+        from eris.knowledge.embeddings import get_embedding
+        from eris.memory.tiers import MemoryRecord
+        from eris.computation.activations import BVec
+        qas = self_qa(text, topic, self._gen, n=3)
+        stored = 0
+        for unit in qa_units(qas):
+            try:
+                self.memory.mtm.store(MemoryRecord(
+                    text=f"[Study Q&A: {topic}] {unit}", bvec=BVec(),
+                    embedding=get_embedding(unit), source=f"study:qa:{topic}",
+                    metadata={"title": topic, "kind": "qa"}))
+                stored += 1
+            except Exception:
+                pass
+        return stored
 
     # ---- topic directive (user-controlled) ----
     def get_topics(self) -> List[str]:
@@ -67,10 +118,13 @@ class StudyEngine:
         read: List[Dict[str, Any]] = []
         for topic in topics:
             try:
-                chunks = web_reader.read_wikipedia(
-                    topic, extractor=self.extractor, memory=self.memory)
+                text = web_reader.fetch_wikipedia(topic)
+                chunks = web_reader.ingest_text(
+                    text, title=f"Wikipedia: {topic}",
+                    extractor=self.extractor, memory=self.memory)
+                qa = self._comprehend(topic, text)       # self-Q&A comprehension
                 read.append({"topic": topic, "source": f"Wikipedia: {topic}",
-                             "chunks": chunks})
+                             "chunks": chunks, "qa": qa})
             except Exception as e:
                 read.append({"topic": topic, "source": f"Wikipedia: {topic}",
                              "chunks": 0, "error": str(e)})
@@ -101,6 +155,85 @@ class StudyEngine:
                 sources=[r["source"] for r in read],
             )
         return report
+
+    # ---- autonomous variants (driven by the continuous-study scheduler) ----
+    def study_one(self, topic: Optional[str] = None) -> Dict[str, Any]:
+        """Single-article study on a self-chosen topic (the 15-minute cadence)."""
+        topic = topic or (self.choose_topics(1) or [None])[0]
+        if not topic:
+            return {"error": "no topic"}
+        return self.study([topic])
+
+    def deep_dive(self, topics: Optional[List[str]] = None, *,
+                  n: int = 3) -> Dict[str, Any]:
+        """Multi-reference deep dive (the twice-hourly cadence): study several
+        related sources, then synthesize ACROSS them through the calibration
+        discipline (bridges labeled, not stated flat) and store the synthesis to
+        the thought-stream — her synthesis is hers; the sources live in the
+        library."""
+        topics = topics or self.choose_topics(n)
+        report = self.study(topics)
+        report["kind"] = "deep_dive"
+        synthesis = self._synthesize_calibrated(topics, report)
+        if synthesis:
+            report["synthesis"] = synthesis
+        return report
+
+    def _synthesize_calibrated(self, topics, report) -> str:
+        """Cross-source synthesis run through the calibration critic + quote guard,
+        stored to the thought-stream. Returns the labeled synthesis text (or "")."""
+        ok = [r for r in report.get("read", []) if r.get("chunks", 0) > 0]
+        if len(ok) < 2 or self.mediator is None:
+            return ""
+        # Pull what was just stored back as the grounding material.
+        material = self._recall_material(topics)
+        if not material.strip():
+            return ""
+        try:
+            from eris.field.pde import FractalField
+            field = FractalField(size=self.field_size)
+            field.seed_from_text(" ".join(topics)); field.run(30)
+            regime = field.detect_regime()
+        except Exception:
+            regime = "plastic"
+        from eris.reasoning.calibration import calibration_system, verify_quotes
+        system = calibration_system(is_synthesis=True, regime=regime)
+        prompt = (f"Synthesize across these studied topics: {', '.join(topics)}.\n\n"
+                  f"Grounding material (cite it; do not add outside facts):\n\n"
+                  f"{material[:6000]}\n\nWrite the calibrated synthesis.")
+        draft = self._gen(prompt, system)
+        if not draft.strip():
+            return ""
+        draft, _ = verify_quotes(draft, material)        # strip fabricated quotes
+        if self.thought_stream is not None:
+            try:
+                from eris.knowledge.embeddings import get_embedding
+                from eris.memory.thought_stream import link_and_store
+                link_and_store(self.thought_stream, topic=", ".join(topics),
+                               regime=regime, text=draft,
+                               embedding=get_embedding(draft),
+                               drew_on=[f"study:{t}" for t in topics])
+            except Exception:
+                pass
+        return draft
+
+    def _recall_material(self, topics, per_topic: int = 3) -> str:
+        """Read back a few just-stored passages per topic to ground the synthesis."""
+        if self.memory is None:
+            return ""
+        from eris.knowledge.embeddings import get_embedding
+        seen, parts = set(), []
+        for t in topics:
+            try:
+                hits = self.memory.retrieve(query_embedding=get_embedding(t), top_k=per_topic)
+            except Exception:
+                hits = []
+            for h in hits:
+                txt = (getattr(h, "text", "") or "")
+                if txt and txt not in seen:
+                    seen.add(txt)
+                    parts.append(txt[:800])
+        return "\n\n".join(parts)
 
     def _summarize(self, topics, read, total_chunks) -> str:
         ok = [r for r in read if r.get("chunks", 0) > 0]

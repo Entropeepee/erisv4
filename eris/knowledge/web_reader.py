@@ -90,7 +90,11 @@ def fetch_url(url: str) -> str:
     req = Request(url, headers=_BROWSER_HEADERS)
     with urlopen(req, timeout=30) as resp:
         html = _decode_body(resp, cap=2_000_000)
-    return _extract_text_from_html(html)
+    from eris.knowledge.sanitize import sanitize_external_text
+    # Treat arbitrary web text as untrusted DATA — neutralize obvious prompt
+    # injection before it ever enters memory (autonomous open-web reader = attack
+    # surface; PoisonedRAG / OWASP LLM01).
+    return sanitize_external_text(_extract_text_from_html(html))
 
 
 # ----------------------------------------------------------------------------- chunk
