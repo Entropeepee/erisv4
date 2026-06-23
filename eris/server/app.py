@@ -212,6 +212,7 @@ def create_app(
             "latency_ms": result.latency_ms,
             "contradiction_compiled": result.contradiction_compiled,
             "research_triggered": result.research_triggered,
+            "citations": getattr(result, "citations", []),
             "conversation_id": cid,
         }
 
@@ -641,39 +642,47 @@ def create_app(
                     print(f"[Study Error] {e}")
             await asyncio.sleep(300)  # check every 5 min
 
-    async def _autonomous_study_loop():
-        """Continuous self-directed study, day and night — she actively seeks new
-        material instead of waiting for the button. Two cadences:
-          • single article every ERIS_STUDY_PERIOD_S (default 900s = 15 min)
-          • multi-reference DEEP DIVE every ERIS_DEEPDIVE_PERIOD_S (default 1800s
-            = twice/hour), synthesized across sources through the calibration critic.
-        Topics are self-chosen (curated cross-domain seeds + her own interests +
-        recent-topic rotation). ERIS_AUTONOMOUS_STUDY=0 disables."""
+    def _study_throttle() -> int:
+        return (int(os.environ.get("ERIS_GAMING_THROTTLE", "4"))
+                if os.environ.get("ERIS_GAMING_MODE", "0") not in ("0", "", "off", "false")
+                else 1)
+
+    async def _study_single_loop():
+        """Single-article cadence — she reads + comprehends one self-chosen article
+        every ERIS_STUDY_PERIOD_S (default 900s = 15 min). Fully independent of the
+        deep-dive loop and of the (subjective) dream loop."""
         import random
         if os.environ.get("ERIS_AUTONOMOUS_STUDY", "1") in ("0", "off", "false"):
             return
-        single = int(os.environ.get("ERIS_STUDY_PERIOD_S", "900"))
-        deep = int(os.environ.get("ERIS_DEEPDIVE_PERIOD_S", "1800"))
-        await asyncio.sleep(150)                     # let the server settle after boot
-        last_deep = 0.0
+        period = int(os.environ.get("ERIS_STUDY_PERIOD_S", "900"))
+        await asyncio.sleep(150)                     # settle after boot
         while True:
-            throttle = (int(os.environ.get("ERIS_GAMING_THROTTLE", "4"))
-                        if os.environ.get("ERIS_GAMING_MODE", "0") not in ("0", "", "off", "false")
-                        else 1)
             try:
-                if (asyncio.get_event_loop().time() - last_deep) >= deep * throttle:
-                    rep = await asyncio.to_thread(study.deep_dive)
-                    last_deep = asyncio.get_event_loop().time()
-                    print(f"[Study] deep dive on {rep.get('topics')}: "
-                          f"{rep.get('total_chunks', 0)} passages"
-                          + (" + synthesis" if rep.get("synthesis") else ""))
-                else:
-                    rep = await asyncio.to_thread(study.study_one)
-                    print(f"[Study] read {rep.get('topics')}: "
-                          f"{rep.get('total_chunks', 0)} passages")
+                rep = await asyncio.to_thread(study.study_one)
+                print(f"[Study:single] read {rep.get('topics')}: "
+                      f"{rep.get('total_chunks', 0)} passages")
             except Exception as e:
-                print(f"[Study Loop Error] {e}")
-            await asyncio.sleep(max(60, single * throttle + random.randint(-60, 60)))
+                print(f"[Study:single Error] {e}")
+            await asyncio.sleep(max(60, period * _study_throttle() + random.randint(-60, 60)))
+
+    async def _study_deepdive_loop():
+        """Deep-dive cadence — a multi-reference dive synthesized across sources
+        through the calibration critic every ERIS_DEEPDIVE_PERIOD_S (default 1800s
+        = twice/hour). Its own task, asynchronous to the single-article loop."""
+        import random
+        if os.environ.get("ERIS_AUTONOMOUS_STUDY", "1") in ("0", "off", "false"):
+            return
+        period = int(os.environ.get("ERIS_DEEPDIVE_PERIOD_S", "1800"))
+        await asyncio.sleep(450)                     # offset from the single loop's first run
+        while True:
+            try:
+                rep = await asyncio.to_thread(study.deep_dive)
+                print(f"[Study:deep] dive on {rep.get('topics')}: "
+                      f"{rep.get('total_chunks', 0)} passages"
+                      + (" + synthesis" if rep.get("synthesis") else ""))
+            except Exception as e:
+                print(f"[Study:deep Error] {e}")
+            await asyncio.sleep(max(120, period * _study_throttle() + random.randint(-90, 90)))
 
     @app.on_event("startup")
     async def startup_event():
@@ -686,7 +695,8 @@ def create_app(
               f"{'CONNECTED' if connected else 'dormant (no ANTHROPIC_API_KEY)'}")
         asyncio.create_task(_periodic_dream_loop())
         asyncio.create_task(_nightly_learning_loop())
-        asyncio.create_task(_autonomous_study_loop())
+        asyncio.create_task(_study_single_loop())     # 15-min single article
+        asyncio.create_task(_study_deepdive_loop())   # 30-min multi-ref deep dive
 
     @app.get("/api/tts/voices")
     async def get_tts_voices():

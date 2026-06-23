@@ -95,6 +95,37 @@ def _mem_when(ts: float) -> str:
         return "undated"
 
 
+# Sources that came from the LIBRARY (things she read/studied) — citable in chat.
+_LIBRARY_PREFIXES = ("reading:", "study:", "exploration:", "ponder:", "deepread",
+                     "research", "expert:")
+
+
+def _collect_citations(records, limit: int = 6) -> List[Dict[str, str]]:
+    """De-duplicated citations for the library-origin records that ground a turn.
+    Each is {title, source}; the UI surfaces them so studied material is traceable.
+    Her own reflections / conversation memory are NOT cited as external sources."""
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for r in records or []:
+        src = (getattr(r, "source", "") or "")
+        if not any(src.startswith(p) for p in _LIBRARY_PREFIXES):
+            continue
+        meta = getattr(r, "metadata", {}) or {}
+        title = (meta.get("title") or "").strip() or src
+        key = title.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cite = {"title": title, "source": src}
+        url = meta.get("url") or (src.split(":", 1)[1] if src.startswith("exploration:") else "")
+        if url:
+            cite["url"] = url
+        out.append(cite)
+        if len(out) >= limit:
+            break
+    return out
+
+
 @dataclass
 class ProcessingResult:
     """Full result of processing one user message."""
@@ -113,6 +144,7 @@ class ProcessingResult:
     latency_ms: float = 0.0
     contradiction_compiled: bool = False
     research_triggered: bool = False
+    citations: List[Dict[str, str]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -399,6 +431,11 @@ class ErisOrchestrator:
                 + doc_block
                 + (("\n\n" + memory_text) if memory_text else "")
             )
+
+        # §9a: surface CITATIONS for the library sources that ground this turn, so
+        # when she discusses a studied subject the user can trace it. Pure data on
+        # the result (the UI renders it); does not mutate her prose.
+        result.citations = _collect_citations(list(named_docs) + list(aligned))
 
         # ── Layer 5: Set active goal ──────────────────────────────────
         self.goal_network.set_goal(user_message, input_bvec)
