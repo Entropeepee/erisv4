@@ -71,26 +71,53 @@ class StudyEngine:
         except Exception:
             return ""
 
-    def _comprehend(self, topic: str, text: str) -> int:
-        """Index-time elaboration: store self-Q&A units to the library so a later
-        question matches a stored question, not just a raw passage. Returns count."""
-        if not text or self.mediator is None or self.memory is None:
-            return 0
-        from eris.knowledge.comprehend import self_qa, qa_units
+    def _get_kg(self):
+        """Lazily open the knowledge graph (Stage 2; ERIS_KG)."""
+        import os
+        if os.environ.get("ERIS_KG", "0").lower() in ("0", "", "off", "false"):
+            return None
+        if getattr(self, "_kg", None) is None:
+            from eris.knowledge.graph import KnowledgeGraph
+            self._kg = KnowledgeGraph(
+                path=os.path.join(os.path.dirname(self.reports_path),
+                                  "knowledge_graph.jsonl"))
+        return self._kg
+
+    def _store_unit(self, topic: str, text: str, kind: str, src: str) -> bool:
         from eris.knowledge.embeddings import get_embedding
         from eris.memory.tiers import MemoryRecord
         from eris.computation.activations import BVec
-        qas = self_qa(text, topic, self._gen, n=3)
+        try:
+            self.memory.mtm.store(MemoryRecord(
+                text=text, bvec=BVec(), embedding=get_embedding(text),
+                source=src, metadata={"title": topic, "kind": kind}))
+            return True
+        except Exception:
+            return False
+
+    def _comprehend(self, topic: str, text: str) -> int:
+        """Index-time elaboration → extra retrieval units so the library holds
+        UNDERSTANDING, not just passages. Always: self-Q&A. Optional (flagged):
+        propositions (ERIS_PROPOSITIONS) and knowledge-graph triples (ERIS_KG).
+        Returns the count of stored elaboration units."""
+        import os
+        if not text or self.mediator is None or self.memory is None:
+            return 0
+        from eris.knowledge.comprehend import self_qa, qa_units, propositions
         stored = 0
-        for unit in qa_units(qas):
-            try:
-                self.memory.mtm.store(MemoryRecord(
-                    text=f"[Study Q&A: {topic}] {unit}", bvec=BVec(),
-                    embedding=get_embedding(unit), source=f"study:qa:{topic}",
-                    metadata={"title": topic, "kind": "qa"}))
-                stored += 1
-            except Exception:
-                pass
+        for unit in qa_units(self_qa(text, topic, self._gen, n=3)):
+            stored += self._store_unit(topic, f"[Study Q&A: {topic}] {unit}",
+                                       "qa", f"study:qa:{topic}")
+        if os.environ.get("ERIS_PROPOSITIONS", "0").lower() not in ("0", "", "off", "false"):
+            for prop in propositions(text, self._gen, n=6):
+                stored += self._store_unit(topic, f"[Fact: {topic}] {prop}",
+                                           "proposition", f"study:prop:{topic}")
+        kg = self._get_kg()
+        if kg is not None:
+            from eris.knowledge.graph import extract_triples
+            trips = extract_triples(text, self._gen, n=8)
+            if trips:
+                kg.add_triples(trips, source=f"study:{topic}")
         return stored
 
     # ---- topic directive (user-controlled) ----
