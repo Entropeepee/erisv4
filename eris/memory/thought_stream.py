@@ -107,6 +107,17 @@ class ThoughtStream:
                 if _norm(t.topic) == key and t.id not in superseded]
         return hits[-limit:]
 
+    def since(self, ts: float) -> List[Thought]:
+        """Her thoughts from a time window onward (oldest→newest) — for the
+        time-scoped self-review variant of retrospection."""
+        return [t for t in self._thoughts if t.timestamp >= ts]
+
+    def get(self, thought_id: str) -> Optional[Thought]:
+        for t in self._thoughts:
+            if t.id == thought_id:
+                return t
+        return None
+
     def retrieve(self, query_embedding, k: int = 5) -> List[Thought]:
         """Her own ideas, ranked by semantic similarity (labeled as hers)."""
         qe = np.asarray(query_embedding, dtype=np.float32).ravel()
@@ -143,21 +154,25 @@ def default_tier(regime: str) -> str:
 
 def link_and_store(stream: ThoughtStream, topic: str, regime: str, text: str,
                    *, embedding=None, drew_on=None, claims=None,
-                   supersedes: Optional[str] = None) -> Thought:
+                   supersedes: Optional[str] = None,
+                   prior: Optional[list] = None) -> Thought:
     """Build a Thought, link it to her prior thoughts on the topic (trajectory),
     and store it whole. NEVER quality-gated — her own output is always kept.
 
     `supersedes` records a revision/retraction of an earlier thought as a logged
     event (the prior thought stays on disk as history), so changing her mind is
-    inspectable rather than a hidden overwrite."""
-    prior = stream.by_topic(topic, limit=5)
+    inspectable rather than a hidden overwrite. `prior` overrides the automatic
+    topic-linking (used by retrospection, which links to the exact ids it
+    reviewed rather than the most-recent-on-topic)."""
+    if prior is None:
+        prior = [p.id for p in stream.by_topic(topic, limit=5)]
     t = Thought(
         id=uuid.uuid4().hex[:12], timestamp=time.time(), topic=topic, regime=regime,
         text=text,
         claims=claims if claims is not None else [{"text": text[:500],
                                                    "tier": default_tier(regime)}],
         drew_on=list(drew_on or []),
-        prior=[p.id for p in prior],
+        prior=list(prior),
         supersedes=supersedes,
         embedding=(np.asarray(embedding, dtype=np.float32).ravel().tolist()
                    if embedding is not None else None))

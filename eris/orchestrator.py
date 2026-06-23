@@ -939,6 +939,56 @@ class ErisOrchestrator:
         (Tier 7). Offloaded so it never blocks the event loop."""
         return await asyncio.to_thread(self.dreaming_loop.ponder, question)
 
+    async def retrospect(self, topic: str) -> Dict[str, Any]:
+        """Look back over her OWN past thoughts on a topic and synthesize how her
+        thinking moved (retrospective metacognition). Offloaded off the loop."""
+        return await asyncio.to_thread(self._retrospect_sync, topic)
+
+    def _retrospect_sync(self, topic: str) -> Dict[str, Any]:
+        from eris.metacognition.retrospect import run_retrospective
+        from eris.knowledge.embeddings import get_embedding
+
+        def _gen(prompt: str) -> str:
+            resp = self.dreaming_loop._generate(
+                prompt, system=("You are Eris reviewing your own past thoughts. "
+                                "Return ONLY the requested JSON object."))
+            return (getattr(resp, "text", "") or "")
+
+        regime = self.field.detect_regime()
+        retro = run_retrospective(self.thought_stream, topic, _gen,
+                                  get_embedding, regime=regime)
+        if retro is None:
+            return {"error": "insufficient",
+                    "message": (f"I don't have enough past thoughts on '{topic}' "
+                                "to look back over yet — give it a few ponder/"
+                                "introspect cycles first.")}
+        # Readable journal entry (legible by construction, not a prose wall).
+        def _claims(rows):
+            return "\n".join(f"- ({c.get('tier','?')}) {c.get('text','')}"
+                             + (f"  [{c['note']}]" if c.get("note") else "")
+                             for c in rows) or "- (none)"
+        detail = (f"Looked back over {len(retro.reviewed_ids)} of my own thoughts "
+                  f"on '{topic}'.\n\n## How my thinking moved\n\n{retro.movement}\n\n"
+                  f"## What I now hold as grounded\n\n{_claims(retro.now_grounded)}\n\n"
+                  f"## Still open (your judgment needed)\n\n{_claims(retro.still_open)}\n")
+        if retro.mind_changes:
+            mc = "\n".join(f"- {m.get('to_claim','')} (was [t:{m.get('from_id')}]): "
+                           f"{m.get('why','')}" for m in retro.mind_changes)
+            detail += f"\n## Where I changed my mind\n\n{mc}\n"
+        try:
+            self.dream_journal.record(
+                kind="retrospect", topic=topic,
+                summary=(f"Reviewed my thinking on '{topic}': "
+                         f"{len(retro.now_grounded)} grounded, "
+                         f"{len(retro.still_open)} still open, "
+                         f"{len(retro.mind_changes)} mind-change(s)."),
+                detail=detail, regime=regime, resolved=True)
+        except Exception:
+            pass
+        out = retro.to_dict()
+        out["detail"] = detail
+        return out
+
     def get_dreams(self, limit: int = 50,
                    before: Optional[float] = None) -> List[Dict[str, Any]]:
         return self.dream_journal.list(limit=limit, before=before)
