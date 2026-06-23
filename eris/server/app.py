@@ -116,6 +116,16 @@ def create_app(
         version="4.0.0",
     )
 
+    # Optional access gate (for reaching her from your phone over Tailscale/5G).
+    # OFF by default → unchanged local/LAN behavior. When ERIS_AUTH_TOKEN is set,
+    # every request must present the token (header X-Eris-Token, ?token=, or the
+    # cookie that visiting `/?token=SECRET` once sets). The tunnel/VPN is the
+    # transport security; this stops anyone else who reaches the port.
+    _auth_token = os.environ.get("ERIS_AUTH_TOKEN", "").strip()
+    if _auth_token:
+        from eris.server.auth import make_auth_middleware
+        app.add_middleware(make_auth_middleware(_auth_token))
+
     # Tier 7: serve the cockpit's static assets (JS, portrait, Live2D model dir).
     _static_dir = os.path.join(os.path.dirname(__file__), "static")
     os.makedirs(_static_dir, exist_ok=True)
