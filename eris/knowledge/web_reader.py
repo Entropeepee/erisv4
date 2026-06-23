@@ -43,22 +43,44 @@ from eris.retrieval.web_search import (
 
 _UA = _BROWSER_HEADERS
 
+# Wikimedia's API REQUIRES a descriptive User-Agent that identifies the client
+# and a contact; browser-impersonating agents (Mozilla/...) are increasingly
+# rejected, which silently broke the study fetch. Identify ourselves per policy:
+# https://meta.wikimedia.org/wiki/User-Agent_policy
+_WIKI_HEADERS = {
+    "User-Agent": "ErisResearchBot/1.0 (+https://github.com/Entropeepee/erisv4)",
+    "Accept": "application/json",
+}
+
 
 # ----------------------------------------------------------------------------- fetch
 def fetch_wikipedia(title: str, lang: str = "en") -> str:
-    """Plain-text extract of a Wikipedia article. No API key (stdlib only)."""
+    """Plain-text extract of a Wikipedia article. No API key (stdlib only).
+
+    Raises on an API error / empty extract so a failure surfaces as a real reason
+    in the study report instead of a silent '0 passages'. Returns "" only when the
+    article genuinely doesn't exist (a normal, non-error outcome)."""
     params = urlencode({
         "action": "query", "prop": "extracts", "explaintext": "1",
         "redirects": "1", "format": "json", "titles": title,
     })
     url = f"https://{lang}.wikipedia.org/w/api.php?{params}"
-    req = Request(url, headers=_UA)
+    req = Request(url, headers=_WIKI_HEADERS)
     with urlopen(req, timeout=30) as resp:
         data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    if isinstance(data, dict) and "error" in data:
+        info = (data.get("error") or {}).get("info", "?")
+        raise RuntimeError(f"Wikipedia API error: {info}")
     pages = data.get("query", {}).get("pages", {})
     if not pages:
-        return ""
-    return next(iter(pages.values())).get("extract", "")
+        raise RuntimeError("Wikipedia API returned no pages (request rejected?)")
+    page = next(iter(pages.values()))
+    if "missing" in page:
+        return ""                       # no such article — legitimately empty
+    extract = page.get("extract", "")
+    if not extract:
+        raise RuntimeError(f"Wikipedia returned an empty extract for '{title}'")
+    return extract
 
 
 def fetch_url(url: str) -> str:
