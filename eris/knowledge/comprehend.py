@@ -59,3 +59,39 @@ def qa_units(qas: List[dict]) -> List[str]:
     """Render Q→A pairs as storable retrieval units (question first, so a later
     user question matches it directly)."""
     return [f"Q: {qa['q']}\nA: {qa['a']}" for qa in qas if qa.get("q") and qa.get("a")]
+
+
+_PROP_PROMPT = (
+    "Decompose the passage into atomic, self-contained factual statements "
+    "(propositions): each a single fact, with pronouns/references resolved to "
+    "explicit names, understandable on its own. Stay faithful to the passage; add "
+    "nothing. Return ONLY a JSON list of strings, at most {n}.\n\nPASSAGE:\n{text}")
+
+
+def _parse_props(raw: str) -> List[str]:
+    if not raw:
+        return []
+    m = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not m:
+        return []
+    try:
+        data = json.loads(m.group(0))
+    except (json.JSONDecodeError, ValueError):
+        return []
+    return [str(x).strip() for x in data if isinstance(x, str) and x.strip()] \
+        if isinstance(data, list) else []
+
+
+def propositions(text: str, generate: Callable[[str], str], *,
+                 n: int = 6, max_chars: int = 4000) -> List[str]:
+    """Atomic, self-contained facts (Dense X Retrieval) as crisp, low-noise extra
+    retrieval units. Keep the ORIGINAL chunk too — propositions augment, never
+    replace, source text (verification needs the original). [] on failure."""
+    text = (text or "").strip()
+    if not text or generate is None:
+        return []
+    try:
+        raw = generate(_PROP_PROMPT.format(n=n, text=text[:max_chars]))
+    except Exception:
+        return []
+    return _parse_props(raw or "")[:n]

@@ -1,0 +1,30 @@
+# Optional SOTA study/comprehension dependencies (install on the Alienware to
+# light up the Stage-1/2 upgrades). Everything works WITHOUT these via graceful
+# fallback; installing them + flipping the matching flag turns on the better path.
+#
+#   pip install -r requirements-sota.txt
+#
+# Then set the flags (in start_eris.bat or the environment) you want ON:
+#   ERIS_PARSERS=on        # Trafilatura/Docling/GROBID parsers (else stdlib fetch)
+#   ERIS_PROPOSITIONS=on   # atomic-fact extraction at ingest (pure-LLM, no dep)
+#   ERIS_KG=on             # knowledge-graph triples + multi-hop (pure-LLM, networkx optional)
+#   ERIS_EMBED_BASE_URL / ERIS_RERANK_BASE_URL  # point at local BGE-M3 / bge-reranker-v2-m3 services
+
+# --- parsing (Stage 1 §3) -------------------------------------------------
+trafilatura            # open-web main-text extraction → markdown
+playwright             # JS/SPA page fallback (also: playwright install chromium)
+docling                # papers/PDF/DOCX/PPTX layout, tables, math, reading order
+grobid-client          # scholarly metadata + references (needs a running GROBID service)
+unstructured           # heterogeneous local folders
+
+# --- comprehension / graph (Stage 2 §5) -----------------------------------
+networkx               # richer graph analysis (Personalized PageRank); BFS works without it
+scikit-learn           # RAPTOR-style clustering
+umap-learn             # optional dim-reduction for clustering
+
+# --- embeddings / reranker / store (Stage 1 §7-8) -------------------------
+# Prefer serving these as local OpenAI-compatible / TEI services and pointing
+# ERIS_EMBED_BASE_URL / ERIS_RERANK_BASE_URL at them (keeps them out of the
+# main process). Direct in-process alternative:
+FlagEmbedding          # BGE-M3 (dense+sparse) + bge-reranker-v2-m3
+qdrant-client          # dedicated local vector store (optional; in-process store is the default)
