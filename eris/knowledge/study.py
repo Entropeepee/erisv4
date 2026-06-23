@@ -151,9 +151,15 @@ class StudyEngine:
         if not os.path.exists(self.reports_path):
             return []
         out = []
-        for line in open(self.reports_path, encoding="utf-8"):
-            try:
-                out.append(json.loads(line))
-            except Exception:
-                continue
+        # errors="replace" so a disk-full-truncated line can't throw mid-iteration
+        # and wipe the whole report history.
+        try:
+            with open(self.reports_path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    try:
+                        out.append(json.loads(line))
+                    except Exception:
+                        continue
+        except OSError:
+            pass
         return out

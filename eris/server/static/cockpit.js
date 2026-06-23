@@ -237,7 +237,7 @@ async function loadDreams(){
   }catch(e){}
 }
 function dreamRow(x){
-  const it=document.createElement('div'); it.className='item'; it.onclick=()=>openDream(x.id);
+  const it=document.createElement('div'); it.className='item'; it.onclick=()=>openDream(x.id, x);
   const claude=x.used_claude?' <span class="tag">Claude</span>':'';
   const label=x.guided?'guided':(x.kind||'reflection');
   const counts=(x.source_count!=null)?` &middot; ${x.stored_count||0} kept / ${x.source_count||0} sources`:'';
@@ -255,37 +255,50 @@ async function loadOlderDreams(){
     if(rows.length) _dreamsOldest=rows[rows.length-1].timestamp;
   }catch(e){}
 }
-async function openDream(id){
-  const d=await (await fetch('/api/dreams/'+id)).json();
-  if(d.error) return;
-  $('#m-title').textContent=`${d.kind||'reflection'}: ${d.topic||''}`+(d.used_claude?'  (consulted Claude)':'');
-  $('#m-when').textContent=fmtDate(d.timestamp)+(d.regime?' · feeling '+d.regime:'')+(d.guided?' · you asked':' · self-directed');
-  $('#m-body').textContent=d.detail||d.summary||'';   // detail = her reflection + what she read
-  const s=$('#m-src'); s.innerHTML='';
-  const srcs=d.sources||[];
-  if(srcs.length){
-    const h=document.createElement('div'); h.className='muted'; h.textContent='Sources'; s.appendChild(h);
-    srcs.forEach(src=>{
-      const o=(typeof src==='string')?{title:src,url:src}:src;
-      if(o.url && o.url.indexOf('anthropic:')===0){ const c=document.createElement('div'); c.textContent='Claude ('+(o.title||'')+')'; s.appendChild(c); }
-      else { const a=document.createElement('a'); a.href=o.url||'#'; a.target='_blank'; a.textContent=o.title||o.url; s.appendChild(a); }
-    });
+async function openDream(id, fallback){
+  let r;
+  try{ r=await fetch('/api/dreams/'+id); }
+  catch(e){ toast('Could not reach server: '+e); return; }
+  if(!r.ok){
+    toast('Could not open this entry (HTTP '+r.status+')');
+    if(fallback) showModal(fallback.summary||fallback.topic||'(entry)',
+                           fallback.timestamp, fallback.summary||'(detail unavailable)',
+                           fallback.sources);
+    return;
   }
-  const kept=d.stored||[];
-  const btn=document.createElement('button'); btn.className='btn'; btn.style.marginTop='8px';
-  btn.textContent=`Show what she kept (${kept.length})`;
-  const box=document.createElement('div'); box.style.display='none'; box.style.marginTop='6px';
-  if(!kept.length){ box.innerHTML='<em class="muted">Nothing passed the quality filter this cycle.</em>'; }
-  else kept.forEach(it=>{
-    const bq=document.createElement('blockquote'); bq.className='kept'; bq.textContent=it.snippet||'';
-    const m=document.createElement('div'); m.className='muted'; m.style.fontSize='10px';
-    if(it.source_url && it.source_url.indexOf('anthropic:')!==0){ const a=document.createElement('a'); a.href=it.source_url; a.target='_blank'; a.textContent='source'; m.appendChild(a); }
-    else { m.textContent='Claude'; }
-    bq.appendChild(m); box.appendChild(bq);
-  });
-  btn.onclick=()=>{ box.style.display = (box.style.display==='none')?'block':'none'; };
-  s.appendChild(btn); s.appendChild(box);
-  $('#modal').classList.add('on');
+  let d;
+  try{ d=await r.json(); }catch(e){ toast('Bad response opening entry'); return; }
+  if(d.error){ toast('Entry not found'); return; }
+  try{
+    $('#m-title').textContent=`${d.kind||'reflection'}: ${d.topic||''}`+(d.used_claude?'  (consulted Claude)':'');
+    $('#m-when').textContent=fmtDate(d.timestamp)+(d.regime?' · feeling '+d.regime:'')+(d.guided?' · you asked':' · self-directed');
+    $('#m-body').textContent=d.detail||d.summary||'';   // detail = her reflection + what she read
+    const s=$('#m-src'); s.innerHTML='';
+    const srcs=d.sources||[];
+    if(srcs.length){
+      const h=document.createElement('div'); h.className='muted'; h.textContent='Sources'; s.appendChild(h);
+      srcs.forEach(src=>{
+        const o=(typeof src==='string')?{title:src,url:src}:src;
+        if(o.url && o.url.indexOf('anthropic:')===0){ const c=document.createElement('div'); c.textContent='Claude ('+(o.title||'')+')'; s.appendChild(c); }
+        else { const a=document.createElement('a'); a.href=o.url||'#'; a.target='_blank'; a.textContent=o.title||o.url; s.appendChild(a); }
+      });
+    }
+    const kept=d.stored||[];
+    const btn=document.createElement('button'); btn.className='btn'; btn.style.marginTop='8px';
+    btn.textContent=`Show what she kept (${kept.length})`;
+    const box=document.createElement('div'); box.style.display='none'; box.style.marginTop='6px';
+    if(!kept.length){ box.innerHTML='<em class="muted">Nothing passed the quality filter this cycle.</em>'; }
+    else kept.forEach(it=>{
+      const bq=document.createElement('blockquote'); bq.className='kept'; bq.textContent=it.snippet||'';
+      const m=document.createElement('div'); m.className='muted'; m.style.fontSize='10px';
+      if(it.source_url && it.source_url.indexOf('anthropic:')!==0){ const a=document.createElement('a'); a.href=it.source_url; a.target='_blank'; a.textContent='source'; m.appendChild(a); }
+      else { m.textContent='Claude'; }
+      bq.appendChild(m); box.appendChild(bq);
+    });
+    btn.onclick=()=>{ box.style.display = (box.style.display==='none')?'block':'none'; };
+    s.appendChild(btn); s.appendChild(box);
+    $('#modal').classList.add('on');
+  }catch(e){ console.error('dream render failed', e); toast('Could not render this entry: '+(e&&e.message||e)); }
 }
 async function deepRead(){
   const src=prompt("Comprehend what? Give a file or FOLDER path on this PC "

@@ -42,8 +42,25 @@ class DreamJournal:
             "stored": stored,
             "source_count": len(sources), "stored_count": len(stored),
         }
-        with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
+        # Guard the write so a full/read-only disk degrades gracefully (the
+        # caller still gets the entry for display) instead of raising into the
+        # ponder thread and hanging the request. Crucially, if a PRIOR write was
+        # truncated by a full disk and left a partial line with no trailing
+        # newline, repair it first — otherwise this entry concatenates onto the
+        # partial line and BOTH become one unparseable line (the lost-ponder bug).
+        try:
+            prefix = ""
+            if os.path.exists(self.path) and os.path.getsize(self.path) > 0:
+                with open(self.path, "rb") as rf:
+                    rf.seek(-1, os.SEEK_END)
+                    if rf.read(1) != b"\n":
+                        prefix = "\n"
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write(prefix + json.dumps(entry) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+        except OSError:
+            pass
         return entry
 
     def list(self, limit: int = 50,
@@ -66,9 +83,19 @@ class DreamJournal:
         if not os.path.exists(self.path):
             return []
         out = []
-        for line in open(self.path, encoding="utf-8"):
-            try:
-                out.append(json.loads(line))
-            except Exception:
-                continue
+        # errors="replace" so a truncated line from a disk-full write (a partial
+        # multibyte char) degrades to one skippable bad line instead of throwing
+        # during iteration and nuking the whole journal (clicks open nothing).
+        try:
+            with open(self.path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        out.append(json.loads(line))
+                    except Exception:
+                        continue
+        except OSError:
+            pass
         return out

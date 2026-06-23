@@ -55,8 +55,10 @@ class ThoughtStream:
         self._load()
 
     def _load(self) -> None:
+        # errors="replace": a truncated final line from a disk-full write must
+        # not throw during iteration and lose every prior thought.
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
                 for line in f:
                     line = line.strip()
                     if line:
@@ -64,14 +66,23 @@ class ThoughtStream:
                             self._thoughts.append(Thought(**json.loads(line)))
                         except (json.JSONDecodeError, TypeError):
                             continue
-        except FileNotFoundError:
+        except (FileNotFoundError, OSError):
             pass
 
     def _append(self, t: Thought) -> None:
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         try:
+            # Repair a missing trailing newline from a prior disk-full-truncated
+            # write, so this thought can't merge onto a partial line (which would
+            # lose both as one unparseable line).
+            prefix = ""
+            if os.path.exists(self.path) and os.path.getsize(self.path) > 0:
+                with open(self.path, "rb") as rf:
+                    rf.seek(-1, os.SEEK_END)
+                    if rf.read(1) != b"\n":
+                        prefix = "\n"
             with open(self.path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(asdict(t), ensure_ascii=False) + "\n")
+                f.write(prefix + json.dumps(asdict(t), ensure_ascii=False) + "\n")
         except OSError:
             pass
 
