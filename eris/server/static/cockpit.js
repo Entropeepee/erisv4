@@ -340,6 +340,14 @@ async function dreamPrompt(){
     loadDreams(); if(e&&e.id) openDream(e.id); else showModal(e.topic||q, e.timestamp, e.detail||e.summary, e.sources);
   }catch(err){ alert('ponder failed: '+err);} finally{ const p=$('#pending'); if(p)p.remove(); }
 }
+async function retrospect(){
+  const t=prompt('Look back over her own past thoughts on which topic?'); if(!t)return;
+  const it=$('#dreams'); it.insertAdjacentHTML('afterbegin','<div class="muted" id="pending">looking back...</div>');
+  try{ const e=await (await fetch('/api/retrospect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:t})})).json();
+    if(e&&e.error){ toast(e.message||'Not enough past thoughts on that yet.'); return; }
+    loadDreams(); showModal('retrospective: '+t, e.timestamp, e.detail||e.movement, []);
+  }catch(err){ toast('look-back failed: '+err);} finally{ const p=$('#pending'); if(p)p.remove(); }
+}
 
 /* ---------------- study ---------------- */
 async function loadStudy(){

@@ -44,10 +44,55 @@ _IDENTITY_VERBS = re.compile(
 _QUOTE_RE = re.compile(r"[\"“”]([^\"“”]{12,240})[\"“”]")
 
 
+# A message that is talk — a question, aside, or instruction to Eris herself —
+# rather than material to synthesize. The deep scaffold must NOT run on these
+# (it found no source and invented one: the "reviewed a spec that didn't exist"
+# failure). A conversational message is not a source.
+_CONVERSATIONAL = re.compile(
+    r"\b(want me to|should i|shall i|can you|could you|would you|do you think|"
+    r"what do you think|how are you|thank you|thanks|please\s+(write|make|do|"
+    r"add|fix)|let'?s\b|go ahead|sounds good)\b", re.IGNORECASE)
+
+
+def _looks_conversational(text: str) -> bool:
+    """True for chat/asides/instructions to Eris (not material to synthesize).
+    Marker-based, not length-based — a short synthesis command like 'compare X
+    and Y' is NOT conversational, but 'want me to write the spec?' is."""
+    t = (text or "").strip()
+    if not t:
+        return True
+    return bool(_CONVERSATIONAL.search(t))
+
+
 def is_synthesis_task(query: str, named_sources: int = 0) -> bool:
     """Synthesis-across-sources tasks (patent review, cross-document mapping,
-    code-vs-paper) get the full structure; simple deep questions don't."""
-    return bool(_SYNTH_MARKERS.search(query or "")) or named_sources >= 2
+    code-vs-paper) get the full structure; simple deep questions and plain
+    conversation don't. A real attached source forces synthesis on; a purely
+    conversational message forces it off (so the scaffold never confabulates a
+    source to review)."""
+    if named_sources >= 2:
+        return True
+    if _looks_conversational(query) and named_sources == 0:
+        return False
+    return bool(_SYNTH_MARKERS.search(query or ""))
+
+
+def verify_grounding(claim: dict, provided_sources) -> dict:
+    """Grounding check UNDER the calibration labels: a claim may be tier
+    'fact'/'grounded' ONLY if the source it cites actually exists in the material
+    we were given. Honest retrieval is a precondition for an honest label — this
+    is the organ behind the confabulation (a 'directly grounded' table citing a
+    source found nowhere in the input). Mutates and returns the claim dict.
+
+    `provided_sources` is the set/collection of real source ids actually present
+    (document section ids, retrieved memory ids, or reviewed thought ids)."""
+    allowed = set(provided_sources or [])
+    if claim.get("tier") in ("fact", "grounded"):
+        sid = claim.get("source_id")
+        if sid is None or sid not in allowed:
+            claim["tier"] = "speculation"
+            claim["note"] = "cited source not found in provided material — demoted"
+    return claim
 
 
 def _normalize(s: str) -> str:

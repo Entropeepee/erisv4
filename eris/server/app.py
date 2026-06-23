@@ -245,6 +245,14 @@ def create_app(
         entry = await orchestrator.ponder(req.question.strip())
         return entry
 
+    @app.post("/api/retrospect")
+    async def api_retrospect(req: PonderRequest):
+        """Look back over her own past thoughts on a topic and synthesize them."""
+        topic = req.question.strip()
+        if not topic:
+            return JSONResponse({"error": "topic required"}, status_code=400)
+        return await orchestrator.retrospect(topic)
+
     @app.post("/api/study-topic")
     async def api_study_topic(req: PonderRequest):
         """Steer Eris's self-directed crawl onto a specific topic (guided)."""
