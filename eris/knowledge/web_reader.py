@@ -110,6 +110,24 @@ def _default_embed(text: str):
     return get_embedding(text)
 
 
+def _chunk_for_ingest(text: str, title: str) -> List[str]:
+    """Pick the ingestion chunker. Default 'structured' = section/paragraph-aware
+    + contextual headers (higher recall); 'legacy' = the naive fixed-char split."""
+    try:
+        from eris.config import CONFIG
+        if (CONFIG.chunker or "structured").lower() != "legacy":
+            from eris.knowledge.chunking import structured_chunks
+            out = structured_chunks(
+                text, title=title,
+                target_chars=CONFIG.chunk_target_chars,
+                overlap_chars=CONFIG.chunk_overlap_chars)
+            if out:
+                return out
+    except Exception:
+        pass
+    return chunk(text)                       # legacy / safe fallback
+
+
 # ----------------------------------------------------------------------------- ingest
 def ingest_text(text: str, *, title: str,
                 extractor: KnowledgeExtractor,
@@ -125,7 +143,7 @@ def ingest_text(text: str, *, title: str,
     if embed_fn == "default":
         embed_fn = _default_embed
 
-    chunks = chunk(text)
+    chunks = _chunk_for_ingest(text, title)
     for j, ch in enumerate(chunks):
         # (b) FIELD TRACK — extractor runs the PDE and returns descriptor(s)
         #     carrying phi/theta field snapshot + BFECDS for this chunk.

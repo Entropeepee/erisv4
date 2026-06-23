@@ -181,6 +181,11 @@ class ErisConfig:
     stt_base_url: str = os.environ.get("ERIS_STT_BASE_URL", "")       # Whisper-on-NPU; else off
     stt_model: str = os.environ.get("ERIS_STT_MODEL", "")
     accel_timeout_s: float = float(os.environ.get("ERIS_ACCEL_TIMEOUT", "20"))
+    # Ingestion chunker: "structured" (section/paragraph-aware + contextual
+    # headers — the higher-recall default) or "legacy" (naive fixed-char).
+    chunker: str = os.environ.get("ERIS_CHUNKER", "structured")
+    chunk_target_chars: int = int(os.environ.get("ERIS_CHUNK_CHARS", "2000"))
+    chunk_overlap_chars: int = int(os.environ.get("ERIS_CHUNK_OVERLAP", "200"))
     orch_resp_blend: float = 0.7          # Tier 3 warm-reseed: new-text weight (1.0 = cold)
 
 
