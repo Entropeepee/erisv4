@@ -114,6 +114,16 @@ async function send(){
     const d=await r.json();
     convId=d.conversation_id||convId;
     thinking.firstChild.innerHTML=mdToHtml(d.response||'(no response)');
+    const cites=d.citations||[];
+    if(cites.length){
+      const cc=document.createElement('div'); cc.className='cites';
+      cc.style.cssText='margin-top:6px;font-size:11px;opacity:.75';
+      cc.innerHTML='Sources: '+cites.map(c=>{
+        const label=(c.title||c.source||'source').replace(/^reading:|^study:|^exploration:/,'');
+        return c.url ? `<a href="${c.url}" target="_blank">${label}</a>` : `<span>${label}</span>`;
+      }).join(' · ');
+      thinking.appendChild(cc);
+    }
     const mm=document.createElement('div'); mm.className='mm';
     mm.textContent=`${d.archetype||''} · ${d.regime||''} · dC/dX=${(d.dCdX||0).toFixed(3)} · ${(d.latency_ms||0).toFixed(0)}ms`;
     thinking.appendChild(mm);
