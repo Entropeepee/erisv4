@@ -17,63 +17,97 @@ from dataclasses import dataclass, field
 import numpy as np
 import os
 
-# ─── GPU Setup ───────────────────────────────────────────────────────────
+# ─── GPU Setup (LAZY) ──────────────────────────────────────────────────────
+# CuPy import + pool config + warm-up kernel + device print are deferred into
+# _ensure_gpu(), invoked on FIRST array use — so importing any Eris module
+# (tests, scripts, the server) never touches the GPU and never crashes on a
+# misconfigured CUDA runtime. `xp` is a transparent proxy that resolves to CuPy
+# (or NumPy) on first attribute access. Mirrors the lazy-model pattern in
+# embeddings.py.
 VRAM_CAP_GB: float = float(os.environ.get("ERIS_VRAM_CAP_GB", "2.0"))  # Eris's own CuPy pool; keep small — a ~13GB local LLM shares the 16GB card. Override with ERIS_VRAM_CAP_GB.
 
-# GPU is ON by default. Set ERIS_GPU=0 to force CPU (use this if CuPy ever
-# JIT-hangs on your driver — it reverts cleanly to NumPy).
-try:
-    if os.environ.get("ERIS_GPU", "1").strip().lower() in ("0", "off", "false", "no"):
-        raise ImportError("GPU disabled via ERIS_GPU=0")
-    import cupy as cp
-    from cupy import fft as cupyfft
+_GPU_TRIED: bool = False
+GPU_AVAILABLE = None          # None until first resolved; then True/False
+cp = None                     # the cupy module when available, else None
+_BACKEND = None               # resolved array module (cp or np)
+mempool = None
+pinned_mempool = None
 
-    GPU_AVAILABLE = True
-    xp = cp  # "array library" — use xp.array(), xp.zeros(), etc. everywhere
 
-    # Configure memory pool
-    mempool = cp.get_default_memory_pool()
-    pinned_mempool = cp.get_default_pinned_memory_pool()
+def _ensure_gpu():
+    """Resolve the array backend once (idempotent). Returns the array module."""
+    global _GPU_TRIED, GPU_AVAILABLE, cp, _BACKEND, mempool, pinned_mempool
+    if _GPU_TRIED:
+        return _BACKEND
+    _GPU_TRIED = True
+    try:
+        if os.environ.get("ERIS_GPU", "1").strip().lower() in ("0", "off", "false", "no"):
+            raise ImportError("GPU disabled via ERIS_GPU=0")
+        import cupy as _cp
+        GPU_AVAILABLE = True
+        cp = _cp
+        _BACKEND = _cp
+        mempool = _cp.get_default_memory_pool()
+        pinned_mempool = _cp.get_default_pinned_memory_pool()
+        # Warm the JIT once (tiny kernel) so the FIRST real field tick doesn't
+        # stall while CuPy compiles. If this ever hangs, relaunch with ERIS_GPU=0.
+        _ = (_cp.zeros((8, 8), dtype=_cp.float32) + 1.0).sum()
+        _cp.cuda.Stream.null.synchronize()
+        _name = _cp.cuda.runtime.getDeviceProperties(0)["name"].decode()
+        print(f"[Eris GPU] {_name} — "
+              f"Total: {_cp.cuda.runtime.memGetInfo()[1] / (1024**3):.1f} GB, "
+              f"Cap: {VRAM_CAP_GB} GB")
+    except Exception as _gpu_err:   # ImportError, CUDA/driver errors, JIT issues…
+        GPU_AVAILABLE = False
+        cp = None
+        _BACKEND = np
+        print(f"[Eris CPU] GPU off ({_gpu_err}); running on CPU — "
+              f"install cupy-cuda13x and leave ERIS_GPU unset to use the RTX 5080")
+    return _BACKEND
 
-    def vram_used_gb() -> float:
-        """Current VRAM usage in GB."""
+
+class _LazyXP:
+    """Transparent stand-in for the array module. Forwards every attribute
+    (zeros, array, float32, ndarray, linalg, fft, …) to the resolved backend,
+    triggering GPU init on first use. So `from eris.config import xp` is free at
+    import time; the GPU is only touched when an array op actually runs."""
+    __slots__ = ()
+
+    def __getattr__(self, name):
+        return getattr(_ensure_gpu(), name)
+
+    def __repr__(self):
+        state = "cupy" if GPU_AVAILABLE else ("numpy" if _GPU_TRIED else "unresolved")
+        return f"<eris.config.xp lazy → {state}>"
+
+
+xp = _LazyXP()
+
+
+def vram_used_gb() -> float:
+    """Current VRAM usage in GB (0.0 on CPU)."""
+    _ensure_gpu()
+    if GPU_AVAILABLE and mempool is not None:
         return mempool.used_bytes() / (1024 ** 3)
+    return 0.0
 
-    def vram_free_gb() -> float:
-        """Approximate free VRAM in GB (against our cap, not physical)."""
+
+def vram_free_gb() -> float:
+    """Approximate free VRAM in GB against our cap (inf on CPU)."""
+    _ensure_gpu()
+    if GPU_AVAILABLE:
         return max(0.0, VRAM_CAP_GB - vram_used_gb())
+    return float("inf")
 
-    def vram_check(needed_gb: float = 0.5) -> bool:
-        """Check if we have room for `needed_gb` more VRAM. Frees pool first if tight."""
-        if vram_used_gb() + needed_gb > VRAM_CAP_GB:
-            mempool.free_all_blocks()
-        return vram_used_gb() + needed_gb <= VRAM_CAP_GB
 
-    # Warm the JIT once (tiny kernel) so the FIRST real turn doesn't stall
-    # while CuPy compiles. If this ever hangs, relaunch with ERIS_GPU=0.
-    _ = (cp.zeros((8, 8), dtype=cp.float32) + 1.0).sum()
-    cp.cuda.Stream.null.synchronize()
-
-    _device_name = cp.cuda.runtime.getDeviceProperties(0)["name"].decode()
-    print(f"[Eris GPU] {_device_name} — "
-          f"Total: {cp.cuda.runtime.memGetInfo()[1] / (1024**3):.1f} GB, "
-          f"Cap: {VRAM_CAP_GB} GB")
-
-except Exception as _gpu_err:  # ImportError, CUDA/driver errors, JIT issues…
-    GPU_AVAILABLE = False
-    xp = np  # Fallback: everything runs on CPU with NumPy
-
-    def vram_used_gb() -> float:
-        return 0.0
-
-    def vram_free_gb() -> float:
-        return float("inf")
-
-    def vram_check(needed_gb: float = 0.0) -> bool:
+def vram_check(needed_gb: float = 0.5) -> bool:
+    """Room for `needed_gb` more VRAM? Frees the pool first if tight."""
+    _ensure_gpu()
+    if not GPU_AVAILABLE:
         return True
-
-    print(f"[Eris CPU] GPU off ({_gpu_err}); running on CPU — "
-          f"install cupy-cuda13x and leave ERIS_GPU unset to use the RTX 5080")
+    if vram_used_gb() + needed_gb > VRAM_CAP_GB and mempool is not None:
+        mempool.free_all_blocks()
+    return vram_used_gb() + needed_gb <= VRAM_CAP_GB
 
 
 def to_numpy(arr) -> np.ndarray:
@@ -84,14 +118,16 @@ def to_numpy(arr) -> np.ndarray:
     - Pass to non-GPU libraries (FAISS, matplotlib, JSON serialization)
     - Print/log values
     """
-    if GPU_AVAILABLE and isinstance(arr, cp.ndarray):
+    _ensure_gpu()
+    if GPU_AVAILABLE and cp is not None and isinstance(arr, cp.ndarray):
         return cp.asnumpy(arr)
     return np.asarray(arr)
 
 
 def to_gpu(arr):
     """Convert a NumPy array to CuPy (GPU). No-op if GPU unavailable."""
-    if GPU_AVAILABLE:
+    _ensure_gpu()
+    if GPU_AVAILABLE and cp is not None:
         return cp.asarray(arr)
     return arr
 
