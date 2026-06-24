@@ -156,6 +156,11 @@ def create_app(
     from eris.knowledge.documents import library_dir as _lib_dir
     author = DocumentAuthor(orchestrator.mediator,
                             out_dir=os.path.join(_lib_dir(), "generated"))
+    # A2: one workload governor — foreground chat stays responsive while the four
+    # background loops + heavy endpoints share the GPU. Background work serializes
+    # and defers to active foreground; chat never waits on background.
+    from eris.server.governor import Governor
+    governor = Governor()
 
     # WILLOW Part I — the multi-node collective: the pool is orchestrator.memory;
     # 'eris' is the OverSoul, 'willow' a companion node. Unreal addresses nodes
@@ -187,9 +192,10 @@ def create_app(
     async def chat(req: ChatRequest):
         """Main conversation endpoint."""
         prof = profiles.get(req.profile)
-        result = await orchestrator.process(
-            req.message, system_context=req.system_context, profile=prof
-        )
+        async with governor.foreground():
+            result = await orchestrator.process(
+                req.message, system_context=req.system_context, profile=prof
+            )
         # Tier 7: persist into a conversation thread for the history sidebar.
         cid = req.conversation_id or conversations.new_thread(req.message)
         try:
@@ -285,7 +291,8 @@ def create_app(
             return JSONResponse({"error": "topic required"}, status_code=400)
         # Jump the queue so idle_explore picks THIS topic first.
         orchestrator.dreaming_loop.topic_queue.insert(0, topic)
-        result = await asyncio.to_thread(orchestrator.dreaming_loop.idle_explore)
+        async with governor.foreground():
+            result = await asyncio.to_thread(orchestrator.dreaming_loop.idle_explore)
         if not result:
             return {"studied": topic, "message": f"Nothing new found for '{topic}'."}
         return result
@@ -406,9 +413,10 @@ def create_app(
         if agent is not None and agent.name != "eris":
             reply = await agent.respond(message_text.strip(), agent_backends)
         else:
-            result = await orchestrator.process(
-                message_text.strip(), system_context=system_context.strip(),
-                profile=profiles.get(req.profile))
+            async with governor.foreground():
+                result = await orchestrator.process(
+                    message_text.strip(), system_context=system_context.strip(),
+                    profile=profiles.get(req.profile))
             reply = result.response_text
 
         return {
@@ -611,7 +619,8 @@ def create_app(
                     base *= int(os.environ.get("ERIS_GAMING_THROTTLE", "4"))
                 await asyncio.sleep(max(60, base + random.randint(-180, 180)))
             try:
-                report = await orchestrator.run_dream_cycle()
+                async with governor.background():
+                    report = await orchestrator.run_dream_cycle()
                 msg = f"[Dream Loop] Processed {report['tensions_processed']} tensions. Resolved: {report['tensions_resolved']}"
                 if report.get("explored_topic"):
                     msg += f" | learned about: {report['explored_topic'][:80]}"
@@ -646,7 +655,8 @@ def create_app(
             if now.hour == hour and now.date() != last_day:
                 last_day = now.date()
                 try:
-                    rep = await asyncio.to_thread(study.study)
+                    async with governor.background():
+                        rep = await asyncio.to_thread(study.study)
                     print(f"[Study] nightly session: {rep['total_chunks']} passages on {rep['topics']}")
                 except Exception as e:
                     print(f"[Study Error] {e}")
@@ -668,7 +678,8 @@ def create_app(
         await asyncio.sleep(150)                     # settle after boot
         while True:
             try:
-                rep = await asyncio.to_thread(study.study_one)
+                async with governor.background():
+                    rep = await asyncio.to_thread(study.study_one)
                 print(f"[Study:single] read {rep.get('topics')}: "
                       f"{rep.get('total_chunks', 0)} passages")
             except Exception as e:
@@ -686,7 +697,8 @@ def create_app(
         await asyncio.sleep(450)                     # offset from the single loop's first run
         while True:
             try:
-                rep = await asyncio.to_thread(study.deep_dive)
+                async with governor.background():
+                    rep = await asyncio.to_thread(study.deep_dive)
                 print(f"[Study:deep] dive on {rep.get('topics')}: "
                       f"{rep.get('total_chunks', 0)} passages"
                       + (" + synthesis" if rep.get("synthesis") else ""))
@@ -754,8 +766,9 @@ def create_app(
                 max_tokens=prof.max_tokens, temperature=prof.temperature))
             return (getattr(resp, "text", "") or "").strip() if resp else ""
 
-        result = await asyncio.to_thread(
-            deep_read, orchestrator.memory, summarize, src, data_dir=data_dir)
+        async with governor.foreground():
+            result = await asyncio.to_thread(
+                deep_read, orchestrator.memory, summarize, src, data_dir=data_dir)
         return result
 
     @app.get("/api/accelerators")
