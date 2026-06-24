@@ -16,7 +16,9 @@ import pytest
 class TestValidator:
     def test_safe_code_passes(self):
         from eris.sandbox.validator import validate_code
-        ok, msg = validate_code("import numpy as np\nfrom eris.config import to_numpy, xp\nprint(np.pi)")
+        # B2: `eris` is no longer importable in the sandbox (it was an indirect
+        # path to host os/subprocess), so safe code uses the pure-compute allowlist.
+        ok, msg = validate_code("import numpy as np\nimport math\nprint(np.pi, math.tau)")
         assert ok, msg
 
     def test_blocked_import_os(self):
@@ -41,10 +43,14 @@ class TestValidator:
         assert not ok
         assert "Syntax error" in msg
 
-    def test_eris_import_allowed(self):
+    def test_eris_import_blocked(self):
+        # B2 (security): importing `eris` in the sandbox is now BLOCKED — many eris
+        # modules import os/subprocess at module level, so it was an indirect host
+        # reach. (Previously this asserted it was allowed.)
         from eris.sandbox.validator import validate_code
         ok, msg = validate_code("from eris.computation.activations import BVec")
-        assert ok, msg
+        assert not ok
+        assert "eris" in msg
 
 
 class TestSandboxExecutor:

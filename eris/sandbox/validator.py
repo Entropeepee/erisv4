@@ -21,6 +21,10 @@ BLOCKED_MODULES = {
     "ctypes", "importlib", "runpy", "code", "codeop",
     "signal", "multiprocessing", "threading",
     "pickle", "shelve", "marshal",
+    # B2: block `eris` — many eris modules import os/subprocess at their own
+    # module level, so `import eris.<x>` was an INDIRECT path to the host. The
+    # subprocess runs the host interpreter with Eris's libs, so this matters.
+    "eris",
 }
 
 # Patterns that indicate dangerous operations
@@ -40,8 +44,7 @@ ALLOWED_MODULES = {
     "json", "collections", "itertools", "functools",
     "dataclasses", "typing", "time", "hashlib", "random",
     "statistics", "decimal", "fractions", "operator",
-    "eris",  # Allow importing eris modules for self-testing
-}
+}   # NB: `eris` deliberately removed — see BLOCKED_MODULES (B2)
 
 
 def validate_code(code: str) -> Tuple[bool, str]:

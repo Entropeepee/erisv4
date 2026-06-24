@@ -70,12 +70,43 @@ def _read_text_file(path: str) -> str:
         return ""
 
 
+def _allowed_roots() -> List[str]:
+    """B1: the only directories a browser-supplied deep-read path may touch — the
+    library, eris_data, and any extra roots in ERIS_DEEPREAD_ROOTS (os.pathsep-
+    separated). Everything else (e.g. /etc/passwd, C:\\Windows) is rejected."""
+    roots: List[str] = []
+    try:
+        from eris.knowledge.documents import library_dir
+        roots.append(os.path.realpath(library_dir()))
+    except Exception:
+        pass
+    for p in (os.path.realpath("eris_data"), os.path.realpath("checkpoints")):
+        roots.append(p)
+    extra = os.environ.get("ERIS_DEEPREAD_ROOTS", "")
+    for part in (extra.split(os.pathsep) if extra else []):
+        part = part.strip()
+        if part:
+            roots.append(os.path.realpath(part))
+    return [r for r in roots if r]
+
+
+def _within_roots(path: str, roots: List[str]) -> bool:
+    try:
+        rp = os.path.realpath(path)        # resolves symlinks, so they can't escape
+    except Exception:
+        return False
+    return any(rp == root or rp.startswith(root + os.sep) for root in roots)
+
+
 def _iter_segments(memory, source: str, cfg: DeepReadConfig) -> List[Tuple[str, str]]:
     """Return [(label, text)] for a file / folder / raw text / 'ltm'."""
     if source == "ltm":
         recs = memory.all_records() if hasattr(memory, "all_records") else []
         return [(f"ltm:{i}", r.text) for i, r in enumerate(recs) if (r.text or "").strip()]
+    roots = _allowed_roots()
     if isinstance(source, str) and os.path.isdir(source):
+        if not _within_roots(source, roots):       # B1: confine to approved roots
+            return []
         segs: List[Tuple[str, str]] = []
         for dirpath, dirnames, filenames in os.walk(source):
             dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
@@ -83,6 +114,8 @@ def _iter_segments(memory, source: str, cfg: DeepReadConfig) -> List[Tuple[str, 
                 if os.path.splitext(fn)[1].lower() in _SKIP_EXT:
                     continue
                 p = os.path.join(dirpath, fn)
+                if not _within_roots(p, roots):     # a symlinked file can't escape
+                    continue
                 try:
                     if os.path.getsize(p) > cfg.max_file_bytes:
                         continue
@@ -95,6 +128,8 @@ def _iter_segments(memory, source: str, cfg: DeepReadConfig) -> List[Tuple[str, 
                     return segs
         return segs
     if isinstance(source, str) and os.path.isfile(source):
+        if not _within_roots(source, roots):       # B1: reject /etc/passwd etc.
+            return []
         return [(os.path.basename(source), _read_text_file(source))]
     return [("(text)", str(source))]
 
