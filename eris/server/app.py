@@ -31,6 +31,7 @@ try:
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect
     from fastapi.staticfiles import StaticFiles
     from fastapi.responses import HTMLResponse, JSONResponse
+    from fastapi import Response, UploadFile, File, Request
     from pydantic import BaseModel
     HAS_FASTAPI = True
 except ImportError:
@@ -44,7 +45,6 @@ from eris.server.system_stats import get_system_stats
 from eris.memory.conversations import ConversationStore
 from eris.knowledge.study import StudyEngine
 from eris.knowledge.documents import DocumentLibrary, library_dir
-from fastapi import Response, UploadFile, File, Request
 
 
 class ChatRequest(BaseModel if HAS_FASTAPI else object):
@@ -798,16 +798,24 @@ def create_app(
 
     @app.get("/api/status")
     async def get_status():
-        """Check if LLM is ready."""
-        import httpx
+        """Honest readiness (A3): probe the ACTUALLY-configured LLM backend(s) and
+        report whether the embeddings are truly semantic — not a hardcoded Ollama
+        URL and not 'a URL string is set'."""
+        from eris.knowledge.embeddings import is_semantic
+        backends = []
         try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                resp = await client.get("http://localhost:11434/api/tags")
-                if resp.status_code == 200:
-                    return {"llm_ready": True}
+            # available_backends calls each backend's is_available() (may do a
+            # short sync HTTP probe) — run off the event loop.
+            avail = await asyncio.to_thread(lambda: orchestrator.mediator.available_backends)
+            backends = [getattr(b, "name", b.__class__.__name__) for b in avail]
         except Exception:
-            pass
-        return {"llm_ready": False}
+            backends = []
+        try:
+            semantic = await asyncio.to_thread(is_semantic)
+        except Exception:
+            semantic = False
+        return {"llm_ready": bool(backends), "backends": backends,
+                "embeddings_semantic": semantic}
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):

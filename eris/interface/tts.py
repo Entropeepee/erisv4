@@ -43,8 +43,11 @@ class TTSEngine:
         return self.voices
 
     def generate_audio(self, text: str, voice_id: str) -> Optional[bytes]:
-        """Synchronous wrapper for Edge-TTS generation."""
-        return asyncio.run(self._generate_audio_async(text, voice_id))
+        """Synchronous wrapper for Edge-TTS generation. Routes through the async
+        bridge (run_blocking) instead of bare asyncio.run, so calling it from
+        within a running event loop does not raise (A6)."""
+        from eris.interface.mediator import run_blocking
+        return run_blocking(self._generate_audio_async(text, voice_id))
 
     async def _generate_audio_async(self, text: str, voice_id: str) -> Optional[bytes]:
         # Phase 3b: optional local TTS provider (iGPU Kokoro, etc.) via

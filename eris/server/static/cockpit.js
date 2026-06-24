@@ -101,6 +101,7 @@ async function send(){
       // talk to a specific node via the OpenAI-shaped, model-routed endpoint
       const r=await fetch('/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({model:node, profile:profile, messages:[{role:'user',content:t}]})});
+      if(!r.ok){ const m=await r.text().catch(()=>''); thinking.firstChild.textContent='Error: HTTP '+r.status+(m?' – '+m.slice(0,200):''); return; }
       const d=await r.json();
       const reply=(((d.choices||[])[0]||{}).message||{}).content||'(no response)';
       thinking.firstChild.innerHTML=mdToHtml(reply);
@@ -111,6 +112,7 @@ async function send(){
     }
     const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:t, conversation_id:convId||'', profile:profile})});
+    if(!r.ok){ const m=await r.text().catch(()=>''); thinking.firstChild.textContent='Error: HTTP '+r.status+(m?' – '+m.slice(0,200):''); return; }
     const d=await r.json();
     convId=d.conversation_id||convId;
     thinking.firstChild.innerHTML=mdToHtml(d.response||'(no response)');
