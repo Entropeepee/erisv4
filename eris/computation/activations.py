@@ -209,6 +209,37 @@ def bvec_cosine(a: BVec, b: BVec) -> float:
     return float(np.dot(va, vb) / (norm_a * norm_b))
 
 
+def bvec_resonance(a: BVec, b: BVec) -> float:
+    """Per-domain wave-interference coupling between two BVecs — the κ/λ = cos/sin
+    treatment (NOT a single cosine). Factored verbatim from MoEGate.score_bid so the gate,
+    the cross-attention hub, and specialist activation all use ONE field metric (§B3):
+
+      coupling = √(a·b) per domain;  ratio = min/max per domain;
+      cos2 = ratio² (elastic/constructive),  sin2 = 1−cos2 (plastic/destructive);
+      net = Σ (elastic − plastic)·w  /  Σ (elastic+plastic)·w,
+    with Davidian Hill-Power shrinkage w on the coupling spectrum (denoise). Range ≈[−1,1];
+    higher = stronger constructive interference. 6-vectors → plain NumPy (no GPU transfer)."""
+    from eris.computation.shrinkage import davidian_weight
+    va = a.as_array().astype(np.float64)
+    vb = b.as_array().astype(np.float64)
+    coupling = np.sqrt(np.maximum(va * vb, 0.0))
+    max_vals = np.maximum(va, vb)
+    max_vals = np.where(max_vals < 1e-8, 1.0, max_vals)
+    ratios = np.minimum(va, vb) / max_vals
+    cos2 = ratios * ratios
+    sin2 = 1.0 - cos2
+    elastic = cos2 * coupling
+    plastic = sin2 * coupling
+    total = elastic + plastic
+    mean_c = max(float(np.mean(total)), 1e-10)
+    weights = np.asarray(davidian_weight(total / mean_c, alpha=1.0, beta=0.5,
+                                         gamma=1.0, delta=0.0)).ravel()
+    norm = float(np.sum(total * weights))
+    if norm < 1e-10:
+        return 0.0
+    return float(np.sum((elastic - plastic) * weights) / norm)
+
+
 def cosine(a, b) -> float:
     """Cosine similarity between two raw vectors (e.g. semantic embeddings).
     Shared helper so the same safe, normalized formula isn't re-inlined across
