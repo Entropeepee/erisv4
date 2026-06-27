@@ -103,10 +103,26 @@ class TestEvalSet(unittest.TestCase):
         ids = [record_id(p) for p in passages]
         bm25 = _build_bm25([p.text for p in passages])
         question = "What do mitochondria release during respiration in the cell?"
-        has, dids = mine_distractor(question, 0, ids, bm25, self.cfg)
+        has, dids = mine_distractor(question, record_id(gold), ids, bm25, self.cfg)
         self.assertTrue(has)
         self.assertIn(record_id(distractor), dids)
         self.assertNotIn(record_id(gold), dids)        # gold is never its own distractor
+
+    def test_distractor_excludes_duplicate_gold_by_id(self):
+        # A DUPLICATE of the gold passage (identical text ⇒ identical record_id) must
+        # never be flagged as the gold's own distractor (RULE C #6 — exclude by id).
+        # same source AND text ⇒ identical record_id (a passage re-ingested into the pool)
+        gold = _Rec("Entropy in an isolated system never decreases over time.", "study:g")
+        twin = _Rec("Entropy in an isolated system never decreases over time.", "study:g")
+        far = _Rec("Bananas are rich in potassium.", "reading:food")
+        passages = [gold, twin, far]
+        self.assertEqual(record_id(gold), record_id(twin))   # same content+source ⇒ same id
+        ids = [record_id(p) for p in passages]
+        bm25 = _build_bm25([p.text for p in passages])
+        has, dids = mine_distractor("Why does entropy never decrease in isolation?",
+                                    record_id(gold), ids, bm25, self.cfg)
+        self.assertNotIn(record_id(gold), dids)   # the twin (== gold id) is excluded
+        self.assertFalse(has)                     # only the gold's twin matched → no real distractor
 
     def test_no_distractor_when_corpus_is_unrelated(self):
         gold = _Rec("Quaternions extend complex numbers to four dimensions.", "reading:math")
@@ -116,8 +132,78 @@ class TestEvalSet(unittest.TestCase):
         ids = [record_id(p) for p in passages]
         bm25 = _build_bm25([p.text for p in passages])
         has, dids = mine_distractor("What do quaternions extend to four dimensions?",
-                                    0, ids, bm25, self.cfg)
+                                    record_id(gold), ids, bm25, self.cfg)
         self.assertFalse(has)
+
+    def test_distractor_ratio_boundary(self):
+        # has_distractor fires exactly at top_nongold >= ratio*gold (RULE C boundary).
+        from eris.dual.eval_set import EvalSetConfig as _C
+
+        class _BM:                       # stub BM25 with controlled scores
+            def __init__(self, s): self._s = s
+            def scores(self, q): return list(self._s)
+        ids = ["gold", "d", "far"]
+        cfg = _C(distractor_ratio=0.8)
+        at = mine_distractor("q", "gold", ids, _BM([1.0, 0.80, 0.0]), cfg)   # exactly ratio
+        below = mine_distractor("q", "gold", ids, _BM([1.0, 0.79, 0.0]), cfg)  # just under
+        self.assertTrue(at[0])
+        self.assertFalse(below[0])
+
+    def test_short_verbatim_echo_is_rejected(self):
+        # RULE B #2: a question too short to form trigrams must NOT slip the filter.
+        from eris.dual.eval_set import ngram_overlap, is_paraphrastic, EvalSetConfig as _C
+        passage = "Photosynthesis converts light into chemical energy."
+        echo = "Photosynthesis converts light"          # 3 tokens, verbatim run
+        paraphrase = "stored sugars"                     # short but NOT in the passage
+        self.assertEqual(ngram_overlap(echo, passage), 1.0)
+        self.assertEqual(ngram_overlap(paraphrase, passage), 0.0)
+        self.assertFalse(is_paraphrastic(echo, passage, _C()))     # echo rejected
+        self.assertTrue(is_paraphrastic(paraphrase, passage, _C()))
+
+    def test_split_keyed_by_gold_no_leakage(self):
+        # RULE A #1: every question from one passage shares a split (gold never straddles).
+        from eris.dual.eval_set import assign_split, EvalSetConfig as _C
+        cfg = _C()
+        for gold in ("h:aaaa", "h:bbbb", "h:cccc", "sha:dddd"):
+            splits = {assign_split(gold, cfg) for _ in range(5)}
+            self.assertEqual(len(splits), 1)            # deterministic per gold
+        # and through the real generation path: rows grouped by gold are single-split
+        rows, _ = generate_rows(self.passages, _stub_llm, cfg)
+        by_gold = {}
+        for r in rows:
+            by_gold.setdefault(r["gold"], set()).add(r["split"])
+        for splits in by_gold.values():
+            self.assertEqual(len(splits), 1)
+
+    def test_run_survives_a_raising_passage(self):
+        # RULE D #11: an unexpected error on one passage must not abort the run.
+        import eris.dual.eval_set as es
+        out = os.path.join(tempfile.mkdtemp(), "eval_set.jsonl")
+        real = es.generate_rows
+        calls = {"n": 0}
+
+        def flaky(passages, llm, cfg=None, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("boom on first passage")
+            return real(passages, llm, cfg, **kw)
+        es.generate_rows = flaky
+        try:
+            agg = es.run(self.passages, _stub_llm, out, self.cfg)
+        finally:
+            es.generate_rows = real
+        self.assertEqual(agg["errors"], 1)              # counted, not crashed
+        self.assertGreaterEqual(agg["kept"], 1)         # the good passage still produced
+        # both passages marked done (the failed one too, so it isn't retried forever)
+        with open(out + ".done") as fh:
+            self.assertEqual(len(fh.read().split()), len(self.passages))
+
+    def test_empty_and_single_passage_corpora(self):
+        out = os.path.join(tempfile.mkdtemp(), "e.jsonl")
+        self.assertEqual(run([], _stub_llm, out, self.cfg)["kept"], 0)   # empty: no crash
+        rows, st = generate_rows(self.passages[:1], _stub_llm, self.cfg)  # single passage
+        for r in rows:
+            self.assertFalse(r["has_distractor"])       # nothing else to be a distractor
 
     # ── feeds gold_passage_at_k (the #40 arbiter) ─────────────────────────
     def test_set_drives_gold_passage_at_k(self):
@@ -138,6 +224,13 @@ class TestEvalSet(unittest.TestCase):
         self.assertEqual(res["full"]["good"]["hit@1"], 1.0)
         self.assertEqual(res["full"]["bad"]["hit@1"], 0.0)
         self.assertEqual(res["n_full"], len(rows))
+
+    def test_library_prefixes_match_orchestrator(self):
+        # RULE D #14: iter_library must read the SAME library origins the orchestrator
+        # defines — pin them together so a future edit to one is caught here.
+        from eris.dual.eval_set import LIBRARY_PREFIXES
+        from eris.orchestrator import _LIBRARY_PREFIXES
+        self.assertEqual(set(LIBRARY_PREFIXES), set(_LIBRARY_PREFIXES))
 
     def test_report_formatter_prints_both_subsets(self):
         from eris.dual.report import print_eval_report

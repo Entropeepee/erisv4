@@ -113,9 +113,20 @@ def _trigrams(text: str, n: int = 3) -> set:
 
 def ngram_overlap(question: str, passage: str, n: int = 3) -> float:
     """Fraction of the QUESTION's n-grams that also appear in the passage. A
-    verbatim copy ⇒ ~1.0; a true paraphrase ⇒ low (RULE B's lever)."""
+    verbatim copy ⇒ ~1.0; a true paraphrase ⇒ low (RULE B's lever).
+
+    A question shorter than n tokens has no n-grams; rather than pass it for free
+    (which would let a 1–2 word verbatim echo slip RULE B), fall back to a contiguous
+    token-subsequence check — a short echo IS a contiguous run of the passage ⇒ 1.0."""
     q = _trigrams(question, n)
     if not q:
+        qt = _WORD.findall((question or "").lower())
+        if not qt:
+            return 0.0
+        pt = _WORD.findall((passage or "").lower())
+        for i in range(len(pt) - len(qt) + 1):
+            if pt[i:i + len(qt)] == qt:
+                return 1.0           # short verbatim echo
         return 0.0
     p = _trigrams(passage, n)
     return len(q & p) / len(q)
@@ -130,7 +141,13 @@ def is_answerable(question: str, passage: str, cfg: EvalSetConfig,
                   llm: Optional[LLM] = None) -> bool:
     """Cheap heuristic (RULE A sanity): the passage must share enough salient terms
     with the question to plausibly answer it (so the question is on-topic, not a
-    hallucination). Optional LLM confirmation behind cfg.llm_answerable."""
+    hallucination). Optional LLM confirmation behind cfg.llm_answerable.
+
+    min_answer_terms stays low (1) ON PURPOSE: this is in TENSION with RULE B — a good
+    conceptual paraphrase deliberately shares FEW literal terms with its passage (e.g.
+    "what molecule carries the energy" vs a passage naming only "ATP, the energy
+    currency"), so demanding many shared terms here would reject exactly the questions
+    RULE B wants. Use cfg.llm_answerable for a stronger, non-lexical check instead."""
     q = _terms(question)
     if not q:
         return False
@@ -172,18 +189,24 @@ def _build_bm25(texts: List[str]):
     return BM25(texts)
 
 
-def mine_distractor(question: str, gold_idx: int, ids: List[str], bm25,
+def mine_distractor(question: str, gold_id: str, ids: List[str], bm25,
                     cfg: EvalSetConfig) -> Tuple[bool, List[str]]:
     """Score the question against the whole library with BM25; if the top non-gold
     passage scores within `distractor_ratio` of the gold's score, this is a hard
     negative where cosine is most likely to be fooled (RULE C). Returns
-    (has_distractor, distractor_ids)."""
+    (has_distractor, distractor_ids).
+
+    Gold is excluded by ID, not index: with duplicate passages (same content ⇒ same
+    record_id ⇒ same id as gold) an index-only exclusion would let the gold's own twin
+    masquerade as a distractor. Excluding every index whose id == gold_id prevents that."""
     import numpy as np
     scores = np.asarray(bm25.scores(question), dtype=float)
-    if gold_idx < 0 or gold_idx >= len(scores):
+    gold_idxs = [i for i, rid in enumerate(ids) if rid == gold_id]
+    if not gold_idxs:
         return False, []
-    gold_score = float(scores[gold_idx])
-    order = [i for i in np.argsort(-scores) if i != gold_idx]
+    gold_score = float(np.max(scores[gold_idxs]))
+    gold_set = set(gold_idxs)
+    order = [i for i in np.argsort(-scores) if i not in gold_set]
     top = [i for i in order if scores[i] > 0.0][:cfg.distractor_top_m]
     distractor_ids = [ids[i] for i in top]
     has = bool(top) and gold_score > 0.0 and \
@@ -191,17 +214,18 @@ def mine_distractor(question: str, gold_idx: int, ids: List[str], bm25,
     return has, distractor_ids
 
 
-# ── split assignment (deterministic, stratified by source) ──────────────────
+# ── split assignment (deterministic, by passage to avoid leakage) ───────────
 def _hash01(s: str) -> float:
     h = hashlib.blake2b(s.encode("utf-8"), digest_size=8).hexdigest()
     return int(h, 16) / float(1 << 64)
 
 
-def assign_split(qid: str, source: str, cfg: EvalSetConfig) -> str:
-    """Deterministic held-out split, salted by source so the held-out set is
-    stratified across sources rather than clustering on one document."""
-    return "heldout" if _hash01(f"{source}|{cfg.seed}|{qid}") < cfg.heldout_frac \
-        else "train"
+def assign_split(gold: str, cfg: EvalSetConfig) -> str:
+    """Deterministic held-out split keyed by GOLD (the passage id), so EVERY question
+    from a passage shares one split — a passage never straddles train/heldout, which
+    would leak the gold across the boundary. Hashing the gold spreads passages
+    uniformly, so ~heldout_frac of passages (not of questions) land held-out."""
+    return "heldout" if _hash01(f"{gold}|{cfg.seed}") < cfg.heldout_frac else "train"
 
 
 def _qid(gold: str, question: str) -> str:
@@ -231,11 +255,11 @@ def generate_rows(passages: List[Any], llm: LLM, cfg: Optional[EvalSetConfig] = 
     corpus_ids = corpus_ids if corpus_ids is not None else own_ids
     bm25 = corpus_bm25 if corpus_bm25 is not None else \
         _build_bm25([getattr(p, "text", "") or "" for p in passages])
-    id_to_idx = {rid: i for i, rid in enumerate(corpus_ids)}
 
     rows: List[dict] = []
     stats = {"passages": len(passages), "raw_questions": 0, "rejected_unanswerable": 0,
-             "rejected_paraphrastic": 0, "kept": 0, "has_distractor": 0}
+             "rejected_paraphrastic": 0, "kept": 0, "has_distractor": 0,
+             "llm_errors": 0, "capped": 0}
 
     for p, gold in zip(passages, own_ids):
         ptext = getattr(p, "text", "") or ""
@@ -245,12 +269,14 @@ def generate_rows(passages: List[Any], llm: LLM, cfg: Optional[EvalSetConfig] = 
             reply = llm(make_qgen_prompt(ptext, cfg.n_questions))
         except Exception:
             reply = ""
+            stats["llm_errors"] += 1          # surfaced, never silent (RULE D)
         cands = _dedup(parse_questions(reply))
         stats["raw_questions"] += len(cands)
         kept = 0
         for qn in cands:
             if kept >= cfg.max_per_passage:
-                break
+                stats["capped"] += 1          # dropped by the per-passage cap — logged
+                continue
             if not is_answerable(qn, ptext, cfg, llm):
                 stats["rejected_unanswerable"] += 1
                 continue
@@ -258,12 +284,12 @@ def generate_rows(passages: List[Any], llm: LLM, cfg: Optional[EvalSetConfig] = 
                 stats["rejected_paraphrastic"] += 1
                 continue
             qid = _qid(gold, qn)
-            has, dids = mine_distractor(qn, id_to_idx.get(gold, -1), corpus_ids, bm25, cfg)
+            has, dids = mine_distractor(qn, gold, corpus_ids, bm25, cfg)
             rows.append({
                 "qid": qid, "question": qn, "gold": gold,
                 "source_meta": _source_meta(p),
                 "has_distractor": has, "distractor_ids": dids,
-                "split": assign_split(qid, _source_meta(p)["source"], cfg),
+                "split": assign_split(gold, cfg),
             })
             kept += 1
             stats["kept"] += 1
@@ -310,21 +336,30 @@ def run(passages: Iterable[Any], llm: LLM, out_path: str,
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     agg = {"passages": len(passages), "kept": 0, "has_distractor": 0,
-           "rejected_paraphrastic": 0, "rejected_unanswerable": 0, "skipped": 0}
+           "rejected_paraphrastic": 0, "rejected_unanswerable": 0, "skipped": 0,
+           "llm_errors": 0, "capped": 0, "errors": 0}
     with open(out_path, "a", encoding="utf-8") as f, \
             open(out_path + ".done", "a", encoding="utf-8") as df:
         for p, gold in zip(passages, ids):
             if gold in done:
                 agg["skipped"] += 1
                 continue
-            rows, st = generate_rows([p], llm, cfg, corpus_bm25=bm25, corpus_ids=ids)
+            # One bad passage must never abort a long overnight run. Mark it done so a
+            # deterministically-failing passage isn't retried forever; count it.
+            try:
+                rows, st = generate_rows([p], llm, cfg, corpus_bm25=bm25, corpus_ids=ids)
+            except Exception:
+                agg["errors"] += 1
+                df.write(gold + "\n"); df.flush()
+                done.add(gold)
+                continue
             for row in rows:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
             f.flush()
             df.write(gold + "\n"); df.flush()
             done.add(gold)
             for kk in ("kept", "has_distractor", "rejected_paraphrastic",
-                       "rejected_unanswerable"):
+                       "rejected_unanswerable", "llm_errors", "capped"):
                 agg[kk] += st.get(kk, 0)
     agg["reject_rate"] = round(
         agg["rejected_paraphrastic"] / max(1, agg["rejected_paraphrastic"] + agg["kept"]), 4)
