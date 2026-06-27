@@ -32,7 +32,7 @@ import numpy as np
 from eris.config import to_numpy, xp
 import math
 
-from eris.computation.activations import BVec, bvec_cosine, bvec_distance
+from eris.computation.activations import BVec, bvec_cosine, bvec_distance, bvec_resonance
 from eris.computation.sgt import SGTGate
 from eris.computation.shrinkage import davidian_weight
 from eris.tribe.specialists import SpecialistFinding
@@ -206,47 +206,13 @@ class MoEGate:
     def score_bid(self, finding: SpecialistFinding) -> float:
         """Score a bid using per-domain coupling geometry (not single cosine).
 
-        Computes interference between bid and goal across all six BLECD
-        domains independently, applies Davidian shrinkage to separate
-        signal from noise in the coupling, returns net constructive
-        interference as the score.
-        """
+        The κ/λ = cos/sin elastic−plastic decomposition with Davidian shrinkage now lives
+        in the shared `bvec_resonance` helper (§B3), so the gate, the cross-attention hub,
+        and specialist activation all use ONE field metric instead of three. The math is
+        unchanged (verified identical to the prior inline form to float precision)."""
         if self.goal_bvec is None:
             return 0.0
-
-        bid = finding.bvec.as_array()
-        goal = self.goal_bvec.as_array()
-
-        # Per-domain coupling: geometric mean of activations
-        coupling = np.sqrt(np.maximum(bid * goal, 0.0))
-
-        # Per-domain alignment: ratio of min/max (1 = identical, 0 = opposite)
-        max_vals = np.maximum(bid, goal)
-        max_vals = np.where(max_vals < 1e-8, 1.0, max_vals)
-        min_vals = np.minimum(bid, goal)
-        ratios = min_vals / max_vals
-
-        # Elastic (constructive) and plastic (destructive) per domain
-        cos2 = ratios * ratios
-        sin2 = 1.0 - cos2
-        elastic = cos2 * coupling
-        plastic = sin2 * coupling
-
-        # Davidian shrinkage on coupling spectrum: denoise
-        total_coupling = elastic + plastic
-        mean_c = max(float(xp.mean(total_coupling)), 1e-10)
-        snr = total_coupling / mean_c
-        weights = to_numpy(davidian_weight(
-            snr, alpha=1.0, beta=0.5, gamma=1.0, delta=0.0
-        )).ravel()
-
-        # Net constructive interference (shrunk)
-        net = float(xp.sum((elastic - plastic) * weights))
-        norm = float(xp.sum(total_coupling * weights))
-        if norm < 1e-10:
-            return 0.0
-
-        return net / norm
+        return bvec_resonance(finding.bvec, self.goal_bvec)
 
     def select_winner(self, findings: List[SpecialistFinding],
                       coherence: float = 0.0,

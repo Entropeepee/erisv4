@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
 import time
 
-from eris.computation.activations import BVec, bvec_cosine
+from eris.computation.activations import BVec, bvec_cosine, bvec_resonance
 from eris.computation.sgt import SGTGate
 
 
@@ -60,10 +60,16 @@ class Specialist:
     activation_gate: SGTGate = field(default_factory=lambda: SGTGate(threshold_sigma=1.5))
 
     def should_activate(self, goal_bvec: BVec) -> bool:
-        """SGT-gated activation: only fire if relevance exceeds noise floor."""
-        relevance = bvec_cosine(self.sensitivity_bvec, goal_bvec)
+        """SGT-gated activation: only fire if relevance exceeds the noise floor. Relevance
+        is the full field metric (κ/λ cos+sin coupling, §B3) — the same one the MoEGate and
+        hub use — not a plain cosine (§0.3)."""
+        relevance = bvec_resonance(self.sensitivity_bvec, goal_bvec)
         should_fire, _ = self.activation_gate.update(relevance)
-        return should_fire or relevance > 0.6  # Also activate on strong alignment
+        # The SGT gate (adaptive z-score) is the primary, scale-free authority. The absolute
+        # fallback is calibrated to the RESONANCE scale (≈[-0.8,+0.5], the relevant domains
+        # cluster ~0.3-0.5), NOT cosine's compressed ~[0.8,0.99] where >0.6 fired for nearly
+        # everything. 0.3 keeps a sparse cold-start set (the top few domains), not all eleven.
+        return should_fire or relevance > 0.3
 
 
 # The Eleven
@@ -122,8 +128,9 @@ class CrossAttentionHub:
             self._findings = self._findings[-self.capacity:]
 
     def query(self, bvec: BVec, top_k: int = 5) -> List[SpecialistFinding]:
-        """Find findings most aligned with the query BFECDS."""
-        scored = [(f, bvec_cosine(bvec, f.bvec)) for f in self._findings]
+        """Find findings most resonant with the query BFECDS — the full κ/λ cos+sin field
+        metric (§B3), so cross-pollination uses interference, not plain cosine (§0.2)."""
+        scored = [(f, bvec_resonance(bvec, f.bvec)) for f in self._findings]
         scored.sort(key=lambda x: x[1], reverse=True)
         return [f for f, _ in scored[:top_k]]
 
@@ -135,9 +142,25 @@ class CrossAttentionHub:
         return len(self._findings)
 
 
-def get_active_specialists(goal_bvec: BVec) -> List[Specialist]:
-    """Return specialists whose relevance exceeds the noise floor."""
-    return [s for s in TRIBE if s.should_activate(goal_bvec)]
+def get_active_specialists(goal_bvec: BVec, max_k: int = 5) -> List[Specialist]:
+    """Active specialists for this goal — TRIBE-RELATIVE (top-K by field resonance),
+    which is both scale-free (the resonance metric's absolute level depends on how
+    saturated the goal bvec is, so a fixed threshold can't work) and the §2 cost guard:
+    cap the active set at `max_k` so a deep cycle never runs all eleven.
+
+    A specialist activates if it is a temporal outlier (its own SGT gate fires) OR it is
+    above the tribe's average resonance to this goal; the set is capped at max_k and is
+    never empty (the single best always speaks)."""
+    scored = []
+    for s in TRIBE:
+        rel = bvec_resonance(s.sensitivity_bvec, goal_bvec)
+        gate_fire = s.should_activate(goal_bvec)        # updates the per-specialist SGT gate
+        scored.append((rel, gate_fire, s))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    mean_rel = sum(r for r, _, _ in scored) / max(1, len(scored))
+    active = [s for rel, gate_fire, s in scored
+              if gate_fire or rel >= mean_rel][:max(1, max_k)]
+    return active or [scored[0][2]]
 
 
 def should_trigger_research(bvec: BVec) -> bool:
