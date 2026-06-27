@@ -40,3 +40,34 @@ class OrchestrationCounters:
             "cloud_calls": self.cloud_calls,
             "llm_samples": self.llm_samples,
         }
+
+
+@dataclass
+class DualCounters:
+    """CUMULATIVE shadow-comparison tally (does NOT reset per turn — it's the
+    running A/B ruler for the DualPath, surfaced in /vitals)."""
+
+    dual_shadow_turns: int = 0   # shadow turns where both paths ran
+    novel_wins: int = 0          # arbiter.success(novel) > success(trad)
+    trad_wins: int = 0
+    both_miss: int = 0
+    novel_errors: int = 0        # novel path raised (floor still answered)
+
+    def record_verdict(self, verdict: str) -> None:
+        self.dual_shadow_turns += 1
+        if verdict == "novel_wins":
+            self.novel_wins += 1
+        elif verdict == "trad_wins":
+            self.trad_wins += 1
+        elif verdict == "both_miss":
+            self.both_miss += 1
+
+    def as_dict(self) -> dict:
+        return {
+            "dual_shadow_turns": self.dual_shadow_turns,
+            "novel_wins": self.novel_wins,
+            "trad_wins": self.trad_wins,
+            "both_miss": self.both_miss,
+            "novel_errors": self.novel_errors,
+        }
+
