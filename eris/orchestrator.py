@@ -825,7 +825,8 @@ class ErisOrchestrator:
         try:
             return await asyncio.to_thread(_run)
         except Exception as e:
-            return {"error": str(e)}
+            import traceback
+            return {"error": str(e), "traceback": traceback.format_exc()}
 
     def _assemble_prompt(self, user_message: str,
                          winner: Optional[SpecialistFinding],

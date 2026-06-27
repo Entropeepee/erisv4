@@ -24,6 +24,17 @@ class TestBvecResonance(unittest.TestCase):
             self.assertAlmostEqual(gate.score_bid(SpecialistFinding("x", "", a)),
                                    bvec_resonance(a, g), places=5)
 
+    def test_resonance_is_gpu_safe_uses_to_numpy(self):
+        # Regression guard (GPU-only bug, invisible to CPU tests): davidian_weight returns
+        # an xp array (CuPy on GPU); converting it with np.asarray() raises "implicit
+        # conversion". The helper MUST use to_numpy(.get()). Assert at the source level,
+        # since CPU's to_numpy falls back to np.asarray and can't reproduce the failure.
+        import inspect
+        from eris.computation import activations
+        src = inspect.getsource(activations.bvec_resonance)
+        self.assertIn("to_numpy(davidian_weight", src)
+        self.assertNotIn("np.asarray(davidian_weight", src)
+
     def test_constructive_beats_destructive(self):
         goal = BVec(B=0.8, F=0.7, E=0.2, C=0.2, D=0.1, S=0.3)
         aligned = BVec(B=0.8, F=0.7, E=0.2, C=0.2, D=0.1, S=0.3)     # same → constructive

@@ -232,8 +232,10 @@ def bvec_resonance(a: BVec, b: BVec) -> float:
     plastic = sin2 * coupling
     total = elastic + plastic
     mean_c = max(float(np.mean(total)), 1e-10)
-    weights = np.asarray(davidian_weight(total / mean_c, alpha=1.0, beta=0.5,
-                                         gamma=1.0, delta=0.0)).ravel()
+    # to_numpy (NOT np.asarray): davidian_weight returns an xp array, which on GPU is a
+    # CuPy array — np.asarray() on it raises "implicit conversion". to_numpy(.get()) is safe.
+    weights = to_numpy(davidian_weight(total / mean_c, alpha=1.0, beta=0.5,
+                                       gamma=1.0, delta=0.0)).ravel()
     norm = float(np.sum(total * weights))
     if norm < 1e-10:
         return 0.0
