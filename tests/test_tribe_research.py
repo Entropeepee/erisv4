@@ -109,6 +109,30 @@ class TestTribeResearch(unittest.TestCase):
         self.assertIsNotNone(res.thought_id)
         self.assertEqual(ts.get(res.thought_id).topic, "emergence")
 
+    def test_gaps_parsing_skips_section_headers(self):
+        from eris.tribe.research import _gaps_from
+        text = ("**Open GAPS**\n- empirical validation is missing\n"
+                "- the matrix sign convention is unspecified\nGaps\n- another real gap here")
+        gaps = _gaps_from(text)
+        self.assertNotIn("Open GAPS", " | ".join(gaps))   # header not treated as a gap
+        self.assertTrue(any("empirical validation" in g for g in gaps))
+        self.assertTrue(any("sign convention" in g for g in gaps))
+
+    def test_single_pass_control_is_one_call_no_specialists(self):
+        # the A/B control: single-pass RAG summary — no specialists, no second cycle, but the
+        # same retrieval + citation grounding so the delta isolates what the hive adds
+        calls = {"n": 0}
+        def model(prompt):
+            calls["n"] += 1
+            return "Single-pass summary grounded in [s:0]."
+        res = run_two_cycle_research("topic", retriever=_retriever, model=model,
+                                     specialists=TRIBE[:4], goal_bvec=GOAL, single_pass=True)
+        self.assertEqual(calls["n"], 1)                 # exactly one model call
+        self.assertEqual(res.n_active, 0)               # no specialists ran
+        self.assertEqual(res.cycles, 0)
+        self.assertGreater(res.n_sources, 0)            # retrieval still happened
+        self.assertIn("[s:0]", res.synthesis)
+
     def test_elos_falsifies_when_active(self):
         seen = {"elos": False}
         def model(prompt):

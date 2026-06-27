@@ -50,14 +50,44 @@ class ResearchResult:
     gaps: List[str] = field(default_factory=list)
     n_contributors: int = 0          # distinct specialists that contributed (diversity)
     n_active: int = 0
-    n_sources: int = 0               # how many sources the RAG actually retrieved
+    n_sources: int = 0               # how many DISTINCT sources the RAG retrieved
+    sources: List[str] = field(default_factory=list)   # source previews (for source-alignment)
+    synthesis_pre_ground: str = ""   # the synthesis BEFORE citation-stripping (for honest A/B)
     stripped_claims: int = 0         # uncited/unresolved claims removed at canonize
     elos_critique: str = ""
     cycles: int = 0
 
 
-def _format_sources(sources: List[str]) -> str:
-    return "\n".join(f"[s:{i}] {s}" for i, s in enumerate(sources)) or "(no sources)"
+def _format_sources(sources: List[str], digester: Optional[Callable[[str], List[str]]] = None
+                    ) -> str:
+    """Format sources as [s:i] blocks. When a `digester` is given (the Stage-2 comprehension
+    pipeline), prepend each source's atomic KEY FACTS (propositions) before its raw text —
+    distilled, pronoun-resolved units a small model comprehends far better than a raw chunk,
+    while keeping the original text so citations still verify."""
+    if not sources:
+        return "(no sources)"
+    blocks = []
+    for i, s in enumerate(sources):
+        head = f"[s:{i}]"
+        if digester is not None:
+            try:
+                facts = digester(s)
+            except Exception:
+                facts = []
+            if facts:
+                head += " KEY FACTS: " + " | ".join(facts)
+        blocks.append(f"{head}\n{s}")
+    return "\n\n".join(blocks)
+
+
+def _distinct(sources: List[str]) -> List[str]:
+    """De-duplicate sources by normalized-text prefix (the same paper chunk can recur)."""
+    seen, out = set(), []
+    for s in sources:
+        key = " ".join((s or "").lower().split())[:200]
+        if key and key not in seen:
+            seen.add(key); out.append(s)
+    return out
 
 
 def _ground_citations(text: str, n_sources: int) -> tuple:
@@ -90,12 +120,19 @@ def _ground_citations(text: str, n_sources: int) -> tuple:
 
 
 def _gaps_from(text: str) -> List[str]:
-    """Pull bulleted/numbered gap lines the synthesis named."""
+    """Pull bulleted/numbered gap lines the synthesis named (skipping section headers like
+    '**Open GAPS**' that aren't themselves gaps)."""
+    _HEADERS = {"open gaps", "gaps", "gap", "remaining gaps", "limitations",
+                "open questions", "open gap"}
     out = []
     for line in (text or "").splitlines():
-        line = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line.strip())
-        if line and len(line.split()) >= 2:
-            out.append(line)
+        line = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line.strip()).strip("*").strip()
+        if not line or len(line.split()) < 2:
+            continue
+        # skip a line that is ONLY a section header ("Open GAPS"), but keep "gap: <real gap>"
+        if re.sub(r"[^a-z ]", "", line.lower()).strip() in _HEADERS:
+            continue
+        out.append(line)
     return out[:5]
 
 
@@ -104,7 +141,8 @@ def run_two_cycle_research(
     specialists: Optional[List[Specialist]] = None,
     hub: Optional[CrossAttentionHub] = None,
     moe_gate=None, thought_stream=None, embed_fn: Optional[Callable[[str], Any]] = None,
-    goal_bvec: Optional[BVec] = None, max_specialists: int = 5,
+    synth_model: Optional[Model] = None, digester: Optional[Callable[[str], List[str]]] = None,
+    goal_bvec: Optional[BVec] = None, max_specialists: int = 5, single_pass: bool = False,
     regime: str = "research", log: Optional[Callable[[str], None]] = None,
 ) -> ResearchResult:
     """Run the broad→synthesis→refined→canonize cycle. `retriever(query)->[sources]` is the
@@ -112,6 +150,22 @@ def run_two_cycle_research(
     the top-K active for the topic's field; the result is canonized to `thought_stream` if
     given (citation-grounded)."""
     _log = log or (lambda m: None)
+    synth = synth_model or model                       # deep model for comprehension-heavy steps
+
+    # ── CONTROL: a single-pass RAG summary (same retrieval/model/grounding, NO hive) — the
+    # honest A/B baseline that isolates what the multi-specialist two-cycle engine adds. ──
+    if single_pass:
+        ctx = _distinct(list(retriever(topic) or []))
+        _log(f"single-pass RAG control — {len(ctx)} source(s), one summary call…")
+        pre = (synth(
+            f"Summarize what the sources establish about '{topic}'. Ground every claim with "
+            f"[s:i]; assert nothing the sources don't support.\n\n"
+            f"SOURCES:\n{_format_sources(ctx, digester)}\n\nSummary:") or "").strip()
+        g, strp = _ground_citations(pre, len(ctx))
+        return ResearchResult(topic=topic, synthesis=(g or pre), synthesis_pre_ground=pre,
+                              n_sources=len(ctx), sources=[c[:300] for c in ctx],
+                              n_active=0, n_contributors=0, stripped_claims=strp, cycles=0)
+
     goal_bvec = goal_bvec or _text_to_bvec(topic)
     active = (specialists if specialists is not None
               else get_active_specialists(goal_bvec, max_k=max_specialists))[:max_specialists]
@@ -119,11 +173,11 @@ def run_two_cycle_research(
     _log(f"active specialists: {', '.join(s.name for s in active)}")
 
     # ── Cycle 1 — broad: RAG → each active specialist reasons → post to hub ──
-    ctx1 = list(retriever(topic) or [])
+    ctx1 = _distinct(list(retriever(topic) or []))
     _log(f"cycle 1 — retrieved {len(ctx1)} source(s); specialists reasoning…")
     for i, s in enumerate(ctx1):                       # show WHAT was retrieved (diagnose RAG)
         _log(f"    [s:{i}] {' '.join((s or '').split())[:80]}…")
-    src1 = _format_sources(ctx1)
+    src1 = _format_sources(ctx1, digester)             # propositions distilled in (if available)
     c1: List[SpecialistFinding] = []
     for s in active:
         _log(f"  {s.name} reasoning…")
@@ -136,15 +190,19 @@ def run_two_cycle_research(
         winner = moe_gate.select_winner(c1) if c1 else None
     else:
         winner = max(c1, key=lambda f: f.confidence) if c1 else None
-    cross = hub.query(winner.bvec, top_k=3) if winner is not None else []
+    cross = hub.query(winner.bvec, top_k=2) if winner is not None else []
+    # Show the TOP findings only (context budget — a small model truncates an over-long prompt).
+    top_findings = sorted(c1, key=lambda f: f.confidence, reverse=True)[:3]
     synth_prompt = (
         f"You are Kairos, integrating the Tribe's findings on: {topic}\n\n"
-        f"FINDINGS:\n" + "\n".join(f"- {f.specialist_id}: {f.content}" for f in c1) +
-        f"\n\nMost-resonant cross-links:\n" + "\n".join(f"- {f.content}" for f in cross) +
-        f"\n\nSOURCES:\n{src1}\n\nIntegrate into a synthesis grounded in the sources "
-        f"(cite [s:i]). Then on new lines list the open GAPS as bullets.")
+        f"FINDINGS:\n" + "\n".join(f"- {f.specialist_id}: {f.content}" for f in top_findings) +
+        (("\n\nCross-links:\n" + "\n".join(f"- {f.content}" for f in cross)) if cross else "") +
+        f"\n\nSOURCES:\n{src1}\n\nSynthesize with real comprehension: (1) state the CENTRAL "
+        f"mechanism/claim the sources establish; (2) show how the findings connect or CONFLICT; "
+        f"(3) mark what the sources SUPPORT vs what is inference. Ground each claim [s:i]. Then "
+        f"list genuine open GAPS as bullets.")
     _log("synthesis — Kairos integrating…")
-    synthesis = (model(synth_prompt) or "").strip()
+    synthesis = (synth(synth_prompt) or "").strip()
     elos_critique = ""
     if any(s.id == "elos" for s in active):
         elos_critique = (model(
@@ -153,27 +211,35 @@ def run_two_cycle_research(
         ) or "").strip()
     gaps = _gaps_from(synthesis)
 
-    # ── Cycle 2 — refined: targeted RAG on the gaps → specialists refine ──
+    # ── Cycle 2 — refined: targeted RAG on the gaps → specialists CLOSE the gaps ──
+    # (conditioned on cycle-1 findings + the named gaps, not a blind re-run.)
     ctx2, c2 = [], []
     if gaps:
         _log(f"cycle 2 — {len(gaps)} gap(s); targeted retrieval + refine…")
-        ctx2 = list(retriever(" ; ".join(gaps)) or [])
-        src2 = _format_sources(ctx1 + ctx2)
+        ctx2 = _distinct(list(retriever(" ; ".join(gaps)) or []))
+        src2 = _format_sources(_distinct(ctx1 + ctx2), digester)
+        c1_summary = "; ".join(f"{f.specialist_id}: {f.content[:120]}" for f in top_findings)
+        gap_goal = (f"Close these GAPS in our understanding of '{topic}': " + " | ".join(gaps) +
+                    f". (Cycle-1 already found: {c1_summary}.) Add only what the sources reveal "
+                    f"about the gaps; if a gap is already covered, say so briefly.")
         for s in active:
-            c2.append(make_reasoned_finding(
-                s, f"Refine the synthesis of '{topic}', closing these gaps: {gaps}", src2, model))
+            _log(f"  {s.name} closing gaps…")
+            c2.append(make_reasoned_finding(s, gap_goal, src2, model))
 
-    # ── Canonize: citation-grounded thought-stream entry (strip unresolved cites) ──
-    all_sources = ctx1 + ctx2
+    # ── Canonize: INTEGRATE cycle-2 gap-closures into the cycle-1 synthesis (not regenerate) ──
+    all_sources = _distinct(ctx1 + ctx2)
+    refinements = "\n".join(f"- {f.content}" for f in c2 if f.content.strip()
+                            and not f.metadata.get("echo"))
     canon_prompt = (
-        f"Write the final, defensible synthesis on '{topic}'. Ground EVERY claim in a "
-        f"source citation [s:i]; do not assert anything the sources don't support"
+        f"Refine this synthesis on '{topic}' into its final, defensible form. Integrate the "
+        f"gap-closures below into ONE coherent passage; ground EVERY claim with [s:i] and assert "
+        f"nothing the sources don't support"
         + (f". Address this critique: {elos_critique}" if elos_critique else "") +
-        f".\n\nDRAFT:\n{synthesis}\n\nREFINEMENTS:\n" +
-        "\n".join(f"- {f.content}" for f in c2) +
-        f"\n\nSOURCES:\n{_format_sources(all_sources)}\n\nFinal synthesis:")
-    _log("canonizing — citation-grounding the final synthesis…")
-    final = (model(canon_prompt) or synthesis).strip()
+        f".\n\nSYNTHESIS:\n{synthesis}\n\nGAP-CLOSURES:\n{refinements or '(none)'}\n\n"
+        f"SOURCES:\n{_format_sources(all_sources, digester)}\n\nFinal synthesis:")
+    _log("canonizing — integrating gaps + citation-grounding…")
+    final = (synth(canon_prompt) or synthesis).strip()
+    synthesis_pre_ground = final                       # capture BEFORE stripping (honest A/B)
     grounded, stripped = _ground_citations(final, len(all_sources))
     # The synthesis is ALWAYS visible (grounded text, or the draft if grounding emptied it) —
     # an empty result hides her reasoning. But canonization to long-term memory is gated on
@@ -203,5 +269,7 @@ def run_two_cycle_research(
     return ResearchResult(
         topic=topic, synthesis=synthesis_out, thought_id=thought_id, gaps=gaps,
         n_contributors=len(contributors), n_sources=len(all_sources),
+        sources=[c[:300] for c in all_sources],
+        synthesis_pre_ground=synthesis_pre_ground,
         n_active=len(active), stripped_claims=stripped,
         elos_critique=elos_critique, cycles=2 if gaps else 1)

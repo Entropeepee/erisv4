@@ -15,72 +15,98 @@ The metric computation is pure/offline-testable; running it over the real librar
 local model (so the actual A/B is a [machine] step).
 """
 from __future__ import annotations
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List
+import re
 
 from eris.tribe.research import _cited_ids
 
 
 def citation_resolution_rate(synthesis: str, n_sources: int) -> float:
-    """Fraction of the synthesis's distinct source citations (any form: [s:i], (s:i),
-    ranges) that resolve to a real source. A control with no citations scores 0.0."""
+    """Fraction of the synthesis's distinct citations that resolve to a real source. Use the
+    PRE-grounding synthesis — measured on the final (post-strip) text it's ~always 1.0 (bad
+    cites were already removed), which measures nothing. On the draft it shows how grounded
+    the model's OWN claims were."""
     cited = _cited_ids(synthesis)
     if not cited:
         return 0.0
     return len(cited & set(range(n_sources))) / len(cited)
 
 
-def ab_metrics(result, n_sources: int) -> Dict[str, Any]:
-    """Treatment-side quality metrics from a ResearchResult (or any object with the same
-    fields). Control is the null synthesis (no contributors, no citations)."""
-    synth = getattr(result, "synthesis", "") or ""
+def _trigrams(text: str) -> set:
+    toks = re.findall(r"[a-z0-9]{3,}", (text or "").lower())
+    return {tuple(toks[i:i + 3]) for i in range(len(toks) - 2)} if len(toks) >= 3 else set()
+
+
+def source_alignment(synthesis: str, sources: List[str]) -> float:
+    """Fraction of the synthesis's trigrams that appear in SOME source — does the synthesis
+    actually draw on the sources, or invent? (A discriminating quality signal, unlike the
+    post-grounding citation rate.)"""
+    syn = _trigrams(synthesis)
+    if not syn:
+        return 0.0
+    src = set()
+    for s in sources:
+        src |= _trigrams(s)
+    return len(syn & src) / len(syn)
+
+
+def metrics_from(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """Honest grounded-quality metrics from a hive_research summary dict (works for both the
+    hive treatment and the single-pass control)."""
+    n = max(1, summary.get("n_sources", 0))
+    pre = summary.get("synthesis_pre_ground", "") or summary.get("synthesis", "")
+    final = summary.get("synthesis", "") or ""
     return {
-        "citation_resolution_rate": round(citation_resolution_rate(synth, n_sources), 4),
-        "domain_diversity": getattr(result, "n_contributors", 0),
-        "n_active": getattr(result, "n_active", 0),
-        "cycles": getattr(result, "cycles", 0),
-        "stripped_claims": getattr(result, "stripped_claims", 0),
-        "canonized": bool(getattr(result, "thought_id", None)),
-        "synthesis_len": len(synth),
+        "citation_resolution_pre_ground": round(citation_resolution_rate(pre, n), 4),
+        "source_alignment": round(source_alignment(final, summary.get("sources", [])), 4),
+        "domain_diversity": summary.get("n_contributors", 0),
+        "n_active": summary.get("n_active", 0),
+        "cycles": summary.get("cycles", 0),
+        "stripped_claims": summary.get("stripped_claims", 0),
+        "canonized": bool(summary.get("canonized")),
+        "synthesis_len": len(final),
     }
 
 
-def compare(treatment, n_sources: int) -> Dict[str, Any]:
-    """Side-by-side: control (hollow — no synthesis) vs treatment (hive)."""
-    control = {"citation_resolution_rate": 0.0, "domain_diversity": 0, "cycles": 0,
-               "canonized": False, "synthesis_len": 0}
-    treat = ab_metrics(treatment, n_sources)
+async def run_ab(orchestrator, topic: str, max_specialists: int = 5, *,
+                 scope: str = "memory", document: str = "") -> Dict[str, Any]:   # pragma: no cover
+    """[machine] — run BOTH arms over the real library/local-model and compare honestly:
+      control   = single-pass RAG summary (same retrieval/model/grounding, NO hive)
+      treatment = the full multi-specialist two-cycle hive.
+    Same topic, same sources, same scope — so the delta isolates what the hive actually adds.
+    `scope`/`document` select what she reads: "memory" (all tiers + thought-stream), "doc"
+    (only the named document), "web" (fresh arXiv/Wikipedia/web)."""
+    kw = dict(max_specialists=max_specialists, scope=scope, document=document)
+    treat = await orchestrator.hive_research(topic, mode="hive", **kw)
+    if "error" in treat:
+        return {"error": treat["error"], "traceback": treat.get("traceback")}
+    ctrl = await orchestrator.hive_research(topic, mode="single", **kw)
+    if "error" in ctrl:
+        return {"error": "control failed: " + ctrl["error"], "traceback": ctrl.get("traceback")}
+
+    tm, cm = metrics_from(treat), metrics_from(ctrl)
     return {
-        "control": control,
-        "treatment": treat,
+        "topic": topic,
+        "control_single_pass_rag": cm,
+        "treatment_hive": tm,
         "verdict": {
-            "more_grounded": treat["citation_resolution_rate"] > control["citation_resolution_rate"],
-            "more_diverse": treat["domain_diversity"] > control["domain_diversity"],
-            "produced_synthesis": treat["canonized"],
+            "hive_more_source_grounded": tm["source_alignment"] >= cm["source_alignment"],
+            "hive_more_diverse": tm["domain_diversity"] > cm["domain_diversity"],
+            "hive_deeper": tm["cycles"] > cm["cycles"],
+            "hive_synthesis_longer": tm["synthesis_len"] > cm["synthesis_len"],
         },
+        "treatment_raw": treat,
+        "control_raw": ctrl,
     }
-
-
-async def run_ab(orchestrator, topic: str, max_specialists: int = 5) -> Dict[str, Any]:   # pragma: no cover
-    """[machine] — run the treatment over the real library/local-model via the orchestrator
-    and report the comparison. (Control is the hollow cycle, which canonizes nothing.)"""
-    summary = await orchestrator.hive_research(topic, max_specialists=max_specialists)
-    if "error" in summary:
-        return {"error": summary["error"], "traceback": summary.get("traceback")}
-
-    class _R:  # adapt the summary dict to the field shape ab_metrics expects
-        synthesis = summary.get("synthesis", "")        # the actual reasoning, now surfaced
-        n_contributors = summary.get("n_contributors", 0)
-        n_active = summary.get("n_active", 0)
-        cycles = summary.get("cycles", 0)
-        stripped_claims = summary.get("stripped_claims", 0)
-        thought_id = summary.get("thought_id")
-    n_sources = max(1, summary.get("n_sources", 0))
-    return {"topic": topic, **compare(_R, n_sources=n_sources), "raw": summary}
 
 
 def main(argv=None):   # pragma: no cover
     """[machine] CLI: run the hive A/B on a study topic, using her real library + local
-    model. Usage:  python -m eris.experiments.hive_ab "your topic here" [--size 32]"""
+    model. Usage:
+      python -m eris.experiments.hive_ab "your topic here" [--size 32] [--specialists 5]
+      python -m eris.experiments.hive_ab "what does BLECD claim?" --document BLECD --scope doc
+      python -m eris.experiments.hive_ab "latest on phase transitions" --scope web
+    Scopes:  memory (default, all tiers + thought-stream) | doc (only --document) | web."""
     import argparse
     import asyncio
     import json
@@ -88,13 +114,19 @@ def main(argv=None):   # pragma: no cover
     ap.add_argument("topic", help="the study topic to research")
     ap.add_argument("--size", type=int, default=32, help="PDE field size (32 fast, 64 default)")
     ap.add_argument("--specialists", type=int, default=5, help="top-K active specialists")
+    ap.add_argument("--scope", default="memory", choices=["memory", "doc", "web"],
+                    help="memory=all tiers (default) | doc=only --document | web=arXiv/wiki/web")
+    ap.add_argument("--document", default="",
+                    help="title/filename to prioritise (or restrict to, with --scope doc)")
     args = ap.parse_args(argv)
 
     from eris.orchestrator import ErisOrchestrator
     print(f"[hive-ab] booting Eris (reads ./eris_data, talks to your local Ollama)…")
     orch = ErisOrchestrator(field_size=args.size)           # default data_dir = eris_data
-    print(f"[hive-ab] researching: {args.topic!r}\n")
-    result = asyncio.run(run_ab(orch, args.topic, max_specialists=args.specialists))
+    scope_note = f" [scope={args.scope}{', doc=' + args.document if args.document else ''}]"
+    print(f"[hive-ab] researching: {args.topic!r}{scope_note}\n")
+    result = asyncio.run(run_ab(orch, args.topic, max_specialists=args.specialists,
+                                scope=args.scope, document=args.document))
     print(json.dumps(result, indent=2, default=str))
     if result.get("raw", {}).get("thought_id"):
         print(f"\n[hive-ab] canonized thought id: {result['raw']['thought_id']} "
