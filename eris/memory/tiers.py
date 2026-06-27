@@ -558,8 +558,18 @@ class MemorySystem:
             title = str((rec.metadata or {}).get("title", "")).lower()
             src = str(rec.source).lower()
             is_doc = bool((rec.metadata or {}).get("title")) or src.startswith(
-                ("reading:", "exploration:", "research:", "ponder:"))
-            if is_doc and any(t in title or t in src for t in toks):
+                ("reading:", "exploration:", "research:", "ponder:", "study:", "deepread"))
+            if not is_doc:
+                continue
+            # A name can match the title/filename (any token) OR appear in the chunk BODY.
+            # PDFs are ingested with per-SECTION-HEADING titles, not the filename — so an
+            # acronym like "BLECD" lives in the text, not the title; matching title/source
+            # alone misses most of the paper. Restricting to is_doc records keeps this from
+            # pulling in conversation that merely mentions the name.
+            text = str(getattr(rec, "text", "") or "").lower()
+            name_hit = any(t in title or t in src for t in toks)
+            body_hit = all(t in text for t in toks)        # FULL name present in the body
+            if name_hit or body_hit:
                 hits.append(rec)
         if not hits:
             return []
