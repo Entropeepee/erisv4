@@ -70,13 +70,28 @@ class FieldDebias:
 
 
 class UnknownGate:
-    """SGT 'unknown' gate: feed per-query top coupling scores; a query whose best
-    score is not significant above the running noise floor is labelled `unknown`."""
+    """'Unknown' gate over per-query top coupling scores: track a running mean/var
+    of the best score and call a query `unknown` when its top score falls BELOW the
+    noise floor (mean − k·σ). Directional (low = unknown), unlike SGT's |z|; built
+    on the same EMA statistics. Returns known during warmup (stats not yet stable)."""
 
-    def __init__(self, threshold_sigma: float = 1.0):
-        from eris.computation.sgt import SGTGate
-        self._gate = SGTGate(threshold_sigma=threshold_sigma)
+    def __init__(self, threshold_sigma: float = 1.0, warmup: int = 8, alpha: float = 0.2):
+        from eris.computation.sgt import update_ema
+        self._ema = update_ema
+        self.k = threshold_sigma
+        self.warmup = warmup
+        self.alpha = alpha
+        self.mean = 0.0
+        self.var = 1.0
+        self.n = 0
 
     def is_known(self, top_score: float) -> bool:
-        act, _z = self._gate.update(float(top_score))
-        return bool(act)
+        top_score = float(top_score)
+        self.n += 1
+        if self.n <= self.warmup:
+            self.mean, self.var = self._ema(top_score, self.mean, self.var, self.alpha)
+            return True
+        std = max(self.var ** 0.5, 1e-9)
+        known = top_score >= (self.mean - self.k * std)
+        self.mean, self.var = self._ema(top_score, self.mean, self.var, self.alpha)
+        return known
