@@ -1,0 +1,65 @@
+# erisv4 Contractor Layer — LiteLLM gateway config (contractor_gateway_layer_spec §7)
+#
+# ILLUSTRATIVE. Confirm every key against the LiteLLM version you PIN (a 2026 supply-chain
+# incident hit rolling tags — pin a digest, do not use :latest). Run on loopback only.
+#
+#   docker run -p 4000:4000 \
+#     -v $PWD/deploy/litellm/config.yaml:/app/config.yaml \
+#     ghcr.io/berriai/litellm:main-vX.Y.Z@sha256:<digest> \
+#     --config /app/config.yaml
+#
+# Then point erisv4 at it (the sovereign path ignores all of this):
+#   set ERIS_GATEWAY_BASE_URL=http://localhost:4000/v1
+#   set ERIS_GATEWAY_API_KEY=sk-litellm-local      # the gateway's own virtual key
+#
+# SOVEREIGNTY (§5, layer 2): there is NO route from a sovereign model-group to a cloud
+# provider. `local-mirror` points ONLY at the on-box Ollama/vLLM. Cloud providers are
+# reachable solely through the `open`-tagged groups below. erisv4's router (layer 1) already
+# refuses to hand a sovereign call any non-local backend; this file must not reintroduce a path.
+
+model_list:
+  # --- local mirror (optional; the sovereign path normally BYPASSES the gateway entirely) ---
+  - model_name: local-mirror
+    litellm_params:
+      model: ollama/qwen3:14b
+      api_base: http://host.docker.internal:11434
+
+  # --- free pool (NON-sensitive bulk: per-specialist reasoning) ---
+  - model_name: free-pool
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+  - model_name: free-pool
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+  - model_name: free-pool
+    litellm_params:
+      model: openrouter/qwen/qwen3-coder:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # --- cheap-paid overflow (real money; used only when free-pool is exhausted/rate-limited) ---
+  - model_name: cheap-paid
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  # NOTE: the frontier SYNTH tier is intentionally NOT here. erisv4 reaches Claude via the
+  # claude-agent-sdk backend (subscription credit, OAuth — NOT an API key), which bypasses the
+  # gateway on purpose (a LiteLLM Anthropic route bills pay-as-you-go and skips the credit).
+  # If you deliberately want Option B (Claude pay-go via the gateway), add an `open`-tagged
+  # `synth` group here with an ANTHROPIC_API_KEY and set ERIS_TIER_SYNTH=synth.
+
+router_settings:
+  routing_strategy: usage-based-routing-v2
+  fallbacks: [{ free-pool: ["cheap-paid"] }]   # 429/503/overflow → overflow tier
+  num_retries: 3
+  # Semantic cache via Redis — confirm the current cache config block for your pinned version:
+  # redis_host: localhost
+  # redis_port: 6379
+  # cache: true
+  # cache_params: { type: redis-semantic, similarity_threshold: 0.9 }
+
+litellm_settings:
+  drop_params: true
+  # set_verbose: false   # keep prompts/logs on-box; do not ship telemetry off-box

@@ -278,6 +278,17 @@ class ErisOrchestrator:
         # Number of genuine (cloud) experts wired for deep synthesis.
         self._cloud_experts = len(self.deep_mediator._backends) - 1
 
+        # ── Contractor Layer (sovereignty-routed gateway) — opt-in, inert unless
+        # ERIS_GATEWAY_BASE_URL is set. Builds the cost-tiered `open`-path backends and the
+        # router that enforces the §5 sovereignty boundary. The sovereign/IP-sensitive path
+        # NEVER touches this — it routes to the direct local mediator only. ──
+        from eris.interface.gateway import ContractorGateway
+        from eris.interface.contractor import ContractorRouter
+        self.gateway = ContractorGateway()
+        self._contractor_costs: Dict[str, int] = {}
+        self.contractor = ContractorRouter(self.gateway, self.mediator,
+                                           cost_log=self._contractor_costs)
+
         # Scale-adaptive gate for the deep path: opens only when |dC/dX| is a
         # statistical outlier relative to this engine's own running history.
         self._router_gate = SGTGate(threshold_sigma=2.0, ema_alpha=0.1)
@@ -774,9 +785,31 @@ class ErisOrchestrator:
                            field_state_fn=_field_state, max_steps=max_steps)
         return await agent.run(goal)
 
+    async def run_contractor(self, goal: str, *, sensitivity: str = "open",
+                             model: str = "") -> Dict[str, Any]:
+        """Dispatch a long-horizon research run to the sandboxed Hermes contractor (§8.5).
+        Opt-in (default OFF); non-IP only — a sovereign goal is refused (fail-closed), and the
+        endpoint must be loopback. Returns the Runs API response or {'error'} / {'disabled'}."""
+        from eris.interface.hermes import HermesContractor, HermesNotConfiguredError
+        from eris.interface.sovereignty import SovereigntyError
+        hermes = HermesContractor()
+        if not hermes.enabled:
+            return {"disabled": "Hermes contractor is OFF (set ERIS_HERMES_BASE_URL + "
+                                "ERIS_HERMES_API_KEY)."}
+        try:
+            return await asyncio.to_thread(
+                hermes.run, goal, sensitivity=sensitivity, model=model)
+        except SovereigntyError as e:
+            return {"error": f"sovereignty: {e}"}
+        except HermesNotConfiguredError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            import traceback
+            return {"error": str(e), "traceback": traceback.format_exc()}
+
     async def hive_research(self, topic: str, max_specialists: int = 5, *,
                             scope: str = "memory", document: str = "",
-                            mode: str = "hive") -> Dict[str, Any]:
+                            mode: str = "hive", sensitivity: str = "open") -> Dict[str, Any]:
         """Run the two-cycle hive research engine (§A2) over a topic, using her REAL seams.
 
         scope:
@@ -784,10 +817,14 @@ class ErisOrchestrator:
             STM/MTM/LTM); if `document` is named, those chunks LEAD but related memory rides along.
           • "doc"    — ONLY the named `document`'s chunks (nothing else).
           • "web"    — fetch fresh from the web/arXiv/Wikipedia via the research cascade.
-        Comprehension boosters: sources are pre-digested into atomic propositions (Stage-2),
-        and the synthesis/canonize steps use the DEEP model when a cloud expert is configured
-        (else local). Runs in a worker thread; best-effort — returns a summary dict or {'error'}."""
+        sensitivity (Contractor Layer §5): "open" (default — research is the non-IP path; bulk
+        specialist reasoning may route to the gateway's free pool, synthesis to the frontier
+        tier when ERIS_HIVE_SYNTH_CLOUD=1) or "sovereign" (IP-sensitive — every call stays on
+        the direct local model, fail-closed, never the gateway).
+        Comprehension boosters: sources are pre-digested into atomic propositions (Stage-2).
+        Runs in a worker thread; best-effort — returns a summary dict or {'error'}."""
         from eris.tribe.research import run_two_cycle_research, resonance_rerank
+        from eris.interface.sovereignty import Sensitivity
         from eris.interface.mediator import run_blocking
         from eris.knowledge.embeddings import get_embedding, is_semantic
         from eris.retrieval.hybrid import hybrid_search
@@ -883,26 +920,37 @@ class ErisOrchestrator:
                     traceback.print_exc()
                 return []
 
-        def _local(prompt: str) -> str:
-            try:
-                resp = run_blocking(self.mediator.generate(prompt=prompt, system=sys_prompt))
-                return getattr(resp, "text", "") or ""
-            except Exception:
-                return ""
+        sens = Sensitivity.coerce(sensitivity)
+        # Bind the router to the LIVE mediator (not the init-time one) so a swapped backend is
+        # honored, and share the per-run cost log.
+        from eris.interface.contractor import ContractorRouter as _CR
+        contractor = _CR(self.gateway, self.mediator, cost_log=self._contractor_costs)
 
-        # Deep model for the comprehension-heavy synthesis/canonize steps. LOCAL-ONLY by
-        # default — the hive talks to your Ollama, full stop. Routing synthesis through the
-        # cloud experts is OPT-IN (ERIS_HIVE_DEEP=1) so a stale OPENAI/ANTHROPIC key in the
-        # environment can never silently pull research onto a paid (or dead) endpoint.
-        _want_deep = os.environ.get("ERIS_HIVE_DEEP", "0") == "1" and \
-            getattr(self, "_cloud_experts", 0) >= 1
-        def _deep(prompt: str) -> str:
+        def _gen(tier: str, prompt: str) -> str:
+            """Generate via the Contractor Router at `tier`, enforcing sovereignty. SOVEREIGN
+            stays local (fail-closed); OPEN may use the gateway tier with a local fallback.
+            A SovereigntyError is NEVER swallowed — a misroute must surface, not degrade."""
+            from eris.interface.sovereignty import SovereigntyError
             try:
-                resp = run_blocking(self.deep_mediator.generate(prompt=prompt, system=sys_prompt))
-                return getattr(resp, "text", "") or _local(prompt)
+                resp = run_blocking(contractor.generate(sens, tier, prompt, system=sys_prompt))
+                return getattr(resp, "text", "") or ""
+            except SovereigntyError:
+                raise
             except Exception:
-                return _local(prompt)
-        synth_model = _deep if _want_deep else None
+                try:                                   # last-ditch: direct local (never for sovereign cloud)
+                    resp = run_blocking(self.mediator.generate(prompt=prompt, system=sys_prompt))
+                    return getattr(resp, "text", "") or ""
+                except Exception:
+                    return ""
+
+        # Per-specialist reasoning is high-volume → the FREE tier on the open path (local when
+        # no gateway / when sovereign). Synthesis/canonize is the one step a frontier model
+        # earns its cost → the SYNTH tier, but ONLY when ERIS_HIVE_SYNTH_CLOUD=1 (default OFF,
+        # the A/B is its gate) and the call is open. Everything defaults to local Ollama.
+        _local = lambda p: _gen("local", p)
+        _reason = (lambda p: _gen("free", p)) if (sens is Sensitivity.OPEN and self.gateway.enabled) else _local
+        _synth_on = CONFIG.hive_synth_cloud and sens is Sensitivity.OPEN
+        synth_model = (lambda p: _gen("synth", p)) if _synth_on else None
 
         # Stage-2 comprehension: pre-digest each source into atomic propositions so the
         # specialists reason over distilled facts, not raw chunks (default ON; cheap, local).
@@ -924,8 +972,9 @@ class ErisOrchestrator:
             print(f"[hive] {m}", flush=True)
 
         def _run():
+            self._contractor_costs.clear()              # per-run tier tally (cost observability)
             res = run_two_cycle_research(
-                topic, retriever=_rag, model=_local, moe_gate=self.moe_gate, hub=self.hub,
+                topic, retriever=_rag, model=_reason, moe_gate=self.moe_gate, hub=self.hub,
                 thought_stream=self.thought_stream, embed_fn=_embed,
                 synth_model=synth_model, digester=digester, single_pass=(mode == "single"),
                 max_specialists=max_specialists, log=_log)
@@ -933,7 +982,8 @@ class ErisOrchestrator:
                     "n_contributors": res.n_contributors, "n_active": res.n_active,
                     "n_sources": res.n_sources, "stripped_claims": res.stripped_claims,
                     "cycles": res.cycles, "canonized": res.thought_id is not None,
-                    "sources": res.sources,
+                    "sources": res.sources, "sensitivity": str(sens.value),
+                    "tier_calls": dict(self._contractor_costs),   # per-tier call counts + paid
                     "synthesis": res.synthesis[:2000],      # the actual reasoning, visible
                     "synthesis_pre_ground": res.synthesis_pre_ground[:2000]}
 
