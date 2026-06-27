@@ -114,6 +114,55 @@ class TestGrounding(unittest.TestCase):
         self.assertGreater(p_con["residual_mean"], 0.9)                  # concept survives
         self.assertGreater(p_low["explained_by_lowlevel"], 0.2)
 
+    def test_transitivity_follows_on_planted_compositional_map(self):
+        # Plant audio = word·U1 and image = word·U2 (both unitary). Then audio↔image is the
+        # composition U1ᴴU2 — grounding audio→word and image→word should let audio↔image
+        # follow WITHOUT ever fitting an audio→image map. Accuracy must clear chance.
+        rng = np.random.RandomState(0)
+        d, per = 6, 10
+        U1, U2 = _diag_unitary(d, 1), _diag_unitary(d, 2)
+        word = {}
+        for ci in range(3):
+            base = _unit(rng.randn(d) + 1j * rng.randn(d))
+            word[f"c{ci}"] = [_unit(base + 0.02 * (rng.randn(d) + 1j * rng.randn(d)))
+                              for _ in range(per)]
+        audio = {c: [_unit(w @ U1) for w in word[c]] for c in word}
+        image = {c: [_unit(w @ U2) for w in word[c]] for c in word}
+        cfg = GroundingConfig(seed=1)
+        res = transitivity(audio, image, word, cfg, n_pairs=8)
+        self.assertGreater(res["audio_image_via_word_acc"], res["chance"] + 0.2)
+
+    def test_tension_channel_adds_discrimination(self):
+        # Two candidates with EQUAL elastic (in-phase) overlap to a query but different
+        # tension (out-of-phase): aligned-only ties and cannot choose, both-channels
+        # demotes the high-tension one. The sin/tension channel carries the signal (RULE 2).
+        from eris.experiments.grounding import pair_score
+        q = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.complex128)
+        a = _unit(np.array([0.6, 0.8, 0.0, 0.0], dtype=np.complex128))        # Re=0.6, Im=0
+        b = _unit(np.array([0.6 + 0.5j, 0.625, 0.0, 0.0], dtype=np.complex128))  # Re=0.6, Im=0.5
+        self.assertAlmostEqual(pair_score(q, a, "unitary", "aligned"),
+                               pair_score(q, b, "unitary", "aligned"), places=3)   # tie
+        self.assertGreater(pair_score(q, a, "unitary", "both"),
+                           pair_score(q, b, "unitary", "both") + 0.3)              # tension breaks it
+
+    def test_degenerate_datasets_do_not_crash(self):
+        cfg = GroundingConfig(Ns=(0, 4), n_repeat=2, seed=0)
+        # empty
+        self.assertIsInstance(grounding_curve({}, {}, cfg), dict)
+        # single class on each side (one concept) — no crash, returns a curve
+        one = {"a": [_unit(np.random.RandomState(0).randn(6) + 1j).astype(np.complex128)
+                     for _ in range(3)]}
+        curve = grounding_curve(one, one, cfg)
+        self.assertIn(4, curve)
+
+    def test_N_may_exceed_instances_per_class(self):
+        # sampling is with replacement → N=32 with only 4 instances/class must work
+        U_true = _diag_unitary(6, seed=2)
+        src, tgt = _phase_classes(d=6, per=4, U_true=U_true, seed=3)
+        cfg = GroundingConfig(Ns=(32,), n_repeat=4, seed=0)
+        curve = grounding_curve(src, tgt, cfg, kind="unitary")
+        self.assertTrue(0.0 <= curve[32]["acc"] <= 1.0)
+
     def test_image_word_arm_runs_on_real_frontends(self):
         # The image↔word arm grounds above chance using the real #41 frontends.
         from eris.knowledge.frontends import ImageFrontend

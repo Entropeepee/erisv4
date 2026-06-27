@@ -113,15 +113,27 @@ def _np_stft(samples: np.ndarray, n_fft: int = 256, hop: int = 128) -> np.ndarra
     return np.fft.rfft(frames, axis=0)            # (n_fft//2+1, n_frames), complex
 
 
-def audio_density_phase(samples: np.ndarray, n_fft: int = 256, hop: int = 128):
+def audio_density_phase(samples: np.ndarray, n_fft: int = 256, hop: int = 128,
+                        size: Optional[int] = None):
     """ρ, θ for audio per the canonical glossary: ρ = |STFT| min-max to [0,1] (energy
     at each time–freq point), θ = ∠STFT (local phase). The acoustic analog of the
-    image gradient-spinor; same (ρ, θ) contract, so τ/κ/λ and coupling apply identically."""
+    image gradient-spinor; same (ρ, θ) contract, so τ/κ/λ and coupling apply identically.
+
+    When `size` is given, ρ=|STFT| and θ=∠STFT are resized to size×size and ρ is min-max
+    normalized AFTER the resize, so its max is exactly 1.0 — matching ImageFrontend (which
+    derives ρ,θ from the already-resized gray). Normalizing AFTER resize is the real
+    commensurability fix (before-resize normalization left audio's max ≈ 0.9, not 1.0).
+    θ is resized componentwise; the bilinear-on-a-wrapped-angle caveat is immaterial here
+    (STFT phase is effectively noise) and, measured, the plain resize preserves class
+    structure better than a cos/sin angle resize — so we keep it simple and faithful."""
     Z = _np_stft(samples, n_fft=n_fft, hop=hop)
     rho = np.abs(Z)
-    lo, hi = float(rho.min()), float(rho.max())
-    rho = (rho - lo) / (hi - lo + 1e-9)           # min-max → commensurable with image ρ
     theta = np.angle(Z)
+    if size is not None:
+        rho = _resize(rho, size)
+        theta = _resize(theta, size)
+    lo, hi = float(rho.min()), float(rho.max())
+    rho = (rho - lo) / (hi - lo + 1e-9)           # min-max AFTER resize → max 1.0, commensurable
     return rho, theta
 
 
@@ -151,9 +163,9 @@ class AudioFrontend(ModalityFrontend):
             # deterministic mock tone (no RNG — keeps tests reproducible)
             t = np.linspace(0, 1, 16000, endpoint=False)
             data = np.sin(2 * np.pi * 220.0 * t)
-        rho, theta = audio_density_phase(data, n_fft=self.n_fft, hop=self.hop)
-        rho = _resize(rho, size)
-        theta = _resize(theta, size)
+        # resize the COMPLEX spectrogram inside audio_density_phase (no angle-wrap), with
+        # ρ normalized AFTER resize → max 1.0, commensurable with the image field.
+        rho, theta = audio_density_phase(data, n_fft=self.n_fft, hop=self.hop, size=size)
         mag = np.sqrt(np.clip(rho, 0.0, 1.0))        # phi = √ρ per the field API
         return mag.astype(np.float32), theta.astype(np.float32)
 

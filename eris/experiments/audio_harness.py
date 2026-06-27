@@ -55,7 +55,9 @@ def _by_class(items, labels) -> Dict[str, list]:
 # ── Phase 1: audio within-modal ─────────────────────────────────────────────
 def run_audio_within(samples_by_class: Dict[str, List[np.ndarray]],
                      cfg: FieldConfig) -> dict:
-    classes = sorted(samples_by_class)
+    classes = [c for c in sorted(samples_by_class) if samples_by_class.get(c)]
+    if len(classes) < 2:
+        return {"error": "need >=2 non-empty classes", "classes": classes}
     rng = np.random.RandomState(0)
     train, test_sigs, test_y = {}, [], []
     train_samples, train_y, test_samples = [], [], []
@@ -163,10 +165,15 @@ def run_grounding(audio_fields, image_fields, word_fields,
                          "audio->image": (audio_fields, image_fields),
                          "image->word": (image_fields, word_fields)}.items():
         if s and t:
-            acc = G.zero_shot_accuracy(s, t)
-            n_items = sum(len(v) for v in s.values())
+            # low-level probe: audio source → transient burstiness; image source → spatial
+            # busyness. Separates a bouba/kiki (transient↔spiky) effect from concept transfer.
+            featfn = G.transient_score if name.startswith("audio") else G.spatial_busyness
+            flags, mags = G.zero_shot_items(s, t)
+            acc = float(np.mean(flags)) if flags else 0.0
+            probe = G.lowlevel_probe(flags, [featfn(m) for m in mags])
             zero_shot[name] = {"acc": round(acc, 4),
-                               "p": round(G.permutation_null(acc, n_items, len(s)), 5)}
+                               "p": round(G.permutation_null(acc, len(flags), len(s)), 5),
+                               "lowlevel_probe": {k: round(v, 4) for k, v in probe.items()}}
 
     out = {"pairs": pairs, "zero_shot": zero_shot, "Ns": list(gcfg.Ns)}
     if ga and gi and gw:
@@ -200,17 +207,26 @@ def prepare_audio(out_dir: str, classes=("dog", "cat", "rain", "clock_tick"),
     meta = [r for r in csv.DictReader(io.TextIOWrapper(
         zf.open("ESC-50-master/meta/esc50.csv")))]
     want = {c: 0 for c in classes}
+    errors = 0
     for row in meta:
         c = row["category"]
         if c in want and want[c] < per_class:
-            wav = zf.open(f"ESC-50-master/audio/{row['filename']}")
-            with wave.open(io.BytesIO(wav.read())) as w:
-                frames = w.readframes(w.getnframes())
-                x = np.frombuffer(frames, dtype=np.int16).astype(np.float64) / 32768.0
+            try:
+                wav = zf.open(f"ESC-50-master/audio/{row['filename']}")
+                with wave.open(io.BytesIO(wav.read())) as w:
+                    nch = w.getnchannels()
+                    frames = w.readframes(w.getnframes())
+                    x = np.frombuffer(frames, dtype=np.int16).astype(np.float64) / 32768.0
+                    if nch > 1:                       # de-interleave stereo → mono mean
+                        x = x.reshape(-1, nch).mean(axis=1)
+                if x.size == 0 or not np.isfinite(x).all():
+                    errors += 1; continue
+            except Exception:
+                errors += 1; continue                 # one bad file never aborts the prep
             cdir = os.path.join(out_dir, c); os.makedirs(cdir, exist_ok=True)
             np.save(os.path.join(cdir, f"{want[c]:05d}.npy"), x)
             want[c] += 1
-    return {"out_dir": out_dir, "counts": want}
+    return {"out_dir": out_dir, "counts": want, "errors": errors}
 
 
 def main(argv=None):   # pragma: no cover

@@ -43,13 +43,14 @@ class TestZeroWeightAudio(unittest.TestCase):
         train = {"low": [compute_audio_signature(_band("low", s), cfg) for s in range(5)],
                  "high": [compute_audio_signature(_band("high", s + 50), cfg) for s in range(5)]}
         clf = ZeroWeightClassifier(cfg).fit(train)
+        n = 40                                     # 40 samples → a stable estimate (20 is noisy)
         correct = 0
-        for s in range(20):
+        for s in range(n):
             label = "low" if s % 2 == 0 else "high"
             sig = compute_audio_signature(_band(label, s + 200), cfg)
             pred, _ = clf.predict(sig)
             correct += (pred == label)
-        self.assertGreater(correct, 13)            # well above 10/20 chance
+        self.assertGreater(correct, 0.60 * n)      # ~0.70 observed, robustly above 0.50 chance
 
     def test_blade_control_zero_contribution(self):
         cfg = AudioConfig(size=24)

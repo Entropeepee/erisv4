@@ -8,12 +8,15 @@ NEW modality? A good representation makes grounding cheap.
 
 RULE 1 — two arms, two parameter budgets, BOTH channels in the fit:
   • Zero-shot arm: ZERO cross-modal parameters. Raw two-channel field resonance. ≈chance.
-  • Grounding arm: UNITARY alignment only (phase-preserving) — a single unitary map U
-    from N labeled pairs via closed-form COMPLEX Procrustes (M=AᴴB; W,_,Vᴴ=svd(M); U=W Vᴴ).
-    Unitary because the complex inner product aᴴb KEEPS the phase, so the aligned (cos)
-    AND tension (sin) channels both survive the fit. The cosine-only ablation drops the
-    imaginary/sin half and fits a real-orthogonal map on Re(·) only — exactly the phase
-    flattening RULE 1 warns about.
+  • Grounding arm: UNITARY alignment only — a single unitary map U from N labeled pairs via
+    closed-form COMPLEX Procrustes (M=AᴴB; W,_,Vᴴ=svd(M); U=W Vᴴ). The fit operates on the
+    COMPLEX descriptors, so both the real (cos) and imaginary (sin) parts inform U, and
+    scoring via aᴴb then yields both elastic (Re) and tension (|Im|) channels. The
+    cosine-only ablation instead takes Re(·) BEFORE fitting — discarding the imaginary/sin
+    half entirely — then fits a real-orthogonal map on the reduced real data. So for
+    phase-dependent structure (e.g. real-part collisions) the unitary arm separates classes
+    the cosine-only arm cannot: the win comes from fitting on complex data, not from any
+    magic phase "preservation" of the unitary constraint itself.
 
 ADAPT (signature layout): per-example κ coordinates live in each field's OWN SVD gauge,
 so cross-example Procrustes over κ is ill-posed (and the N<d overfit regime the spec
@@ -40,9 +43,14 @@ _EPS = 1e-12
 @dataclass
 class GroundingConfig:
     descriptor_grid: int = 4          # m: spinor reduced to m×m → d = m² complex dims
-    Ns: Tuple[int, ...] = (0, 1, 2, 4, 8, 16, 32)
+    Ns: Tuple[int, ...] = (0, 1, 2, 4, 8, 16, 32)   # spec grid (keep N=1 — the small-N regime is the point)
     n_repeat: int = 20                # subsamples per N for the CI
     seed: int = 0
+    # NOTE on the d>N regime: a unitary U on ℂ^d has d² real DOF, so for small N the fit is
+    # underdetermined and could in principle absorb noise. The SHUFFLED control (random
+    # pairings) is the guard the spec mandates — it stays at chance ∀N — and the held-out
+    # source items the curve classifies are never in the fit set. Read low-N points against
+    # the shuffled row, not in isolation.
 
 
 # ── complex coherence descriptor (shared frame, phase-bearing) ──────────────
@@ -132,9 +140,14 @@ def _classify(q: np.ndarray, protos: Dict[str, np.ndarray], M, kind: str,
 # ── §2b grounding curve (the headline) ──────────────────────────────────────
 def _sample_pairs(src_by_class, tgt_by_class, n, rng, shuffle=False):
     """N labeled source→target pairs (one source + one target instance of the SAME
-    concept). shuffle=True pairs a source with a RANDOM target (control)."""
-    classes = sorted(src_by_class)
+    concept). shuffle=True pairs a source with a RANDOM target (control). Sampling is WITH
+    replacement, so N may exceed the instances-per-class. Classes with no instances on
+    either side are skipped (an empty/degenerate dataset yields no pairs, never a crash)."""
+    classes = [c for c in sorted(src_by_class)
+               if src_by_class.get(c) and tgt_by_class.get(c)]
     src, tgt = [], []
+    if not classes:
+        return src, tgt
     for _ in range(n):
         c = classes[rng.randint(len(classes))]
         s = src_by_class[c][rng.randint(len(src_by_class[c]))]
@@ -191,9 +204,10 @@ def within_modal_ceiling(by_class, cfg: GroundingConfig = None,
 # ── §2a zero-shot (the NULL) + low-level probe ──────────────────────────────
 def zero_shot_accuracy(src_fields_by_class, tgt_fields_by_class) -> float:
     """Raw TWO-CHANNEL field resonance (RULE 2), ZERO cross-modal params: classify each
-    source field by the target concept it couples to most. Framed as the null (≈chance)."""
-    protos = {c: items[0] for c, items in tgt_fields_by_class.items() if items}
-    classes = sorted(protos)
+    source field by the target concept it couples to most — scoring against the MEAN
+    resonance over all of that concept's target fields (not a single exemplar). Framed as
+    the null (≈chance)."""
+    classes = sorted(c for c, items in tgt_fields_by_class.items() if items)
     correct = total = 0
     for c in sorted(src_fields_by_class):
         for (mg, th) in src_fields_by_class[c]:
@@ -205,6 +219,19 @@ def zero_shot_accuracy(src_fields_by_class, tgt_fields_by_class) -> float:
 def _resonance(mg, th, tgt_items) -> float:
     return float(np.mean([(lambda e, p, _: e - p)(*field_coupling(mg, th, tm, tt))
                           for (tm, tt) in tgt_items]))
+
+
+def zero_shot_items(src_fields_by_class, tgt_fields_by_class):
+    """Per-item zero-shot: (correct_flags, src_mags) so a low-level probe can regress
+    success on a modality-specific low-level feature (transient/spiky), separating a
+    bouba/kiki correspondence from any concept transfer."""
+    classes = sorted(c for c, items in tgt_fields_by_class.items() if items)
+    flags, mags = [], []
+    for c in sorted(src_fields_by_class):
+        for (mg, th) in src_fields_by_class[c]:
+            best = max(classes, key=lambda k: _resonance(mg, th, tgt_fields_by_class[k]))
+            flags.append(1.0 if best == c else 0.0); mags.append(mg)
+    return flags, mags
 
 
 def permutation_null(accuracy: float, n_items: int, n_classes: int,

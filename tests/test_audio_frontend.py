@@ -75,20 +75,31 @@ class TestAudioFrontend(unittest.TestCase):
         self.assertEqual(cleaned.shape, (24, 24))
 
     def test_rule3_torsion_is_cross_product_not_laplacian(self):
-        # Two audio-like fields whose PHASE is identical (a pure x-ramp ⇒ a Laplacian
-        # ∇²θ is blind) and that differ only in ρ-orientation. ∇ρ×∇θ must discriminate
-        # where the Laplacian cannot (RULE 3 carries over from the image frontend).
+        # Two audio-like fields whose PHASE is identical (a pure x-ramp) and that differ
+        # only in ρ-orientation (∥ vs ⊥ the θ-gradient). The Chimera ∇²θ "torsion" depends
+        # ONLY on θ, so it is identical for both classes (genuinely blind); the #41
+        # cross-product ∇ρ×∇θ uses ρ and so discriminates them (RULE 3).
         size = 24
         yy, xx = np.mgrid[0:size, 0:size].astype(np.float64)
         theta = (xx / size) * 6.0                       # identical phase ramp both classes
         rho_par = xx / size                              # ρ varies along x (∥ θ-gradient)
         rho_perp = yy / size                             # ρ varies along y (⊥ θ-gradient)
-        tau_par = torsion(rho_par, theta)
-        tau_perp = torsion(rho_perp, theta)
-        lap = np.gradient(np.gradient(theta, axis=1), axis=1)  # ∇²θ along x — class-blind
-        disc_cross = abs(tau_par.mean() - tau_perp.mean()) / (abs(tau_par.mean() + tau_perp.mean()) + 1e-9)
-        disc_lap = abs(lap.mean() - lap.mean()) / (abs(2 * lap.mean()) + 1e-9)
-        self.assertGreater(disc_cross, 3.0 * (disc_lap + 1e-9))
+
+        def _lap_torsion(rho, th):
+            # the Laplacian-of-phase candidate ∇²θ — note it ignores ρ entirely
+            return (np.gradient(np.gradient(th, axis=1), axis=1)
+                    + np.gradient(np.gradient(th, axis=0), axis=0))
+
+        def _disc(a, b):
+            return abs(a.mean() - b.mean()) / (abs(a.mean()) + abs(b.mean()) + 1e-9)
+
+        tau_par, tau_perp = torsion(rho_par, theta), torsion(rho_perp, theta)
+        lap_par, lap_perp = _lap_torsion(rho_par, theta), _lap_torsion(rho_perp, theta)
+        disc_cross = _disc(tau_par, tau_perp)            # cross-product SEES ρ-orientation
+        disc_lap = _disc(lap_par, lap_perp)              # Laplacian is BLIND (θ-only)
+        self.assertLess(disc_lap, 0.05)                  # ∇²θ cannot tell the classes apart
+        self.assertGreater(disc_cross, 0.3)              # ∇ρ×∇θ clearly can
+        self.assertGreater(disc_cross, 5.0 * disc_lap)   # and by a wide margin
 
 
 if __name__ == "__main__":
