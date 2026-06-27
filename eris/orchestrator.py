@@ -452,6 +452,7 @@ class ErisOrchestrator:
         # ── Layer 5: Set active goal ──────────────────────────────────
         self.goal_network.set_goal(user_message, input_bvec)
         self.moe_gate.set_goal(input_bvec, user_message)
+        self.workspace.set_goal(user_message, input_bvec)   # §B1: frame carries the goal
 
         # ── Layer 3: Activate specialists and collect findings ────────
         active_specialists = get_active_specialists(input_bvec)
@@ -629,6 +630,15 @@ class ErisOrchestrator:
         # Check if research should trigger
         if should_trigger_research(response_bvec):
             result.research_triggered = True
+            # §A2: the two-cycle hive research engine. DEFAULT OFF (ERIS_HIVE_RESEARCH=1) so
+            # the live per-turn path is byte-for-byte unchanged until opted in — it is a deep,
+            # multi-specialist + local-model cycle (the A/B-on-the-box treatment), never the
+            # ordinary-turn default. Best-effort: a failure never breaks the turn.
+            if os.environ.get("ERIS_HIVE_RESEARCH") == "1":
+                try:
+                    result.metadata["hive_research"] = await self.hive_research(user_message)
+                except Exception as e:
+                    print(f"[hive-research] non-fatal: {e}")
 
         # ── Layer 2: Store in memory + autobiography ──────────────────
         # Always store field snapshots for field-native retrieval (VISION_ROADMAP §4.3)
@@ -764,6 +774,52 @@ class ErisOrchestrator:
                            field_state_fn=_field_state, max_steps=max_steps)
         return await agent.run(goal)
 
+    async def hive_research(self, topic: str, max_specialists: int = 5) -> Dict[str, Any]:
+        """Run the two-cycle hive research engine (§A2) over a topic, using her REAL
+        seams: RAG = hybrid search over the library she has read (local, no network); the
+        local model = self.mediator; canonized to her thought-stream with citation grounding.
+
+        A deep cycle — run on the research trigger (behind ERIS_HIVE_RESEARCH) or called
+        explicitly for an A/B. Runs in a worker thread (the engine is sync and the model
+        seam is async-via-run_blocking), so it never blocks the event loop. Best-effort:
+        returns a compact summary dict, or {'error': ...} on failure — never raises."""
+        from eris.tribe.research import run_two_cycle_research
+        from eris.interface.mediator import run_blocking
+        from eris.knowledge.embeddings import get_embedding
+        from eris.retrieval.hybrid import hybrid_search
+
+        sys_prompt = self._default_system_prompt()
+
+        def _rag(query: str):
+            try:
+                recs = self.memory.all_records(limit=400) if hasattr(self.memory, "all_records") else []
+                if not recs:
+                    return []
+                hits = hybrid_search(query, recs, query_embedding=get_embedding(query), top_k=4)
+                return [(getattr(h, "text", "") or "")[:600] for h in hits]
+            except Exception:
+                return []
+
+        def _local(prompt: str) -> str:
+            try:
+                resp = run_blocking(self.mediator.generate(prompt=prompt, system=sys_prompt))
+                return getattr(resp, "text", "") or ""
+            except Exception:
+                return ""
+
+        def _run():
+            res = run_two_cycle_research(
+                topic, retriever=_rag, model=_local, moe_gate=self.moe_gate, hub=self.hub,
+                thought_stream=self.thought_stream, max_specialists=max_specialists)
+            return {"topic": res.topic, "thought_id": res.thought_id, "gaps": res.gaps,
+                    "n_contributors": res.n_contributors, "n_active": res.n_active,
+                    "stripped_claims": res.stripped_claims, "cycles": res.cycles}
+
+        try:
+            return await asyncio.to_thread(_run)
+        except Exception as e:
+            return {"error": str(e)}
+
     def _assemble_prompt(self, user_message: str,
                          winner: Optional[SpecialistFinding],
                          memory_text: str,
@@ -795,6 +851,23 @@ class ErisOrchestrator:
                 "it; use these to sense time and notice how your thinking on a "
                 "subject has evolved. Use this memory; do not deny having read it]\n"
                 f"{memory_text}")
+
+        # 2.5) Working memory (§B1): a BOUNDED frame of the recent SUBSTANTIVE thoughts she
+        #      was developing, so reasoning carries across turns. Field-projection bid LABELS
+        #      ("Elos: 0.7 bid on C+F") are excluded — the existing rule that the raw bid
+        #      string is never injected still holds, so on ordinary turns this adds nothing;
+        #      it only surfaces when deep-cycle reasoned thoughts are in the frame. Structured
+        #      bullets, never a concatenated blob (the runaway-loop bug).
+        try:
+            frame = self.workspace.working_set(k=3)
+            recent = [b["thought"] for b in frame.get("broadcasts", [])
+                      if b.get("thought") and " bid on " not in b["thought"]]
+        except Exception:
+            recent = []
+        if recent:
+            parts.append("[Working memory — threads you were just developing; continue "
+                         "them, don't repeat them]\n"
+                         + "\n".join(f"- {t}" for t in recent[-3:]))
 
         # 3) Internal weather (NOT content): the felt regime + dominant-domain
         #    attunement. Colors tone/emphasis only — never reported to the person,
