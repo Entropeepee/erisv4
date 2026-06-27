@@ -12,3 +12,6 @@ grok_experiment_results.json
 eris_codebase_full.txt
 eris_codebase_skeleton.txt
 knowledge_base/
+
+# generated experiment artifacts
+results/
