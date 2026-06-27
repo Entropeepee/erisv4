@@ -63,13 +63,31 @@ class TestTribeResearch(unittest.TestCase):
         self.assertNotIn("[s:99]", out)
         self.assertIn("Source shows X", out)        # the valid claim survived
 
-    def test_ground_citations_strict_drops_long_naked_claim(self):
-        # a long uncited assertion the sources don't support is dropped; framing survives
-        text = ("In summary. The hidden cabal secretly controls every market on earth "
-                "through invisible means nobody can detect. The data [s:0] supports growth.")
-        out, n = _ground_citations(text, n_sources=1, strict=True)
-        self.assertNotIn("cabal", out)              # naked unsupported claim stripped
-        self.assertIn("[s:0]", out)                 # cited claim kept
+    def test_ground_citations_recognizes_citation_forms(self):
+        # models cite in many forms: [s:0], (s:1), bare s:2, and ranges (s:1-3)
+        from eris.tribe.research import _cited_ids
+        self.assertEqual(_cited_ids("a [s:0] b (s:1) c s:2"), {0, 1, 2})
+        self.assertEqual(_cited_ids("see (s:1-3) and [s:5]"), {1, 2, 3, 5})
+
+    def test_uncited_honest_reasoning_is_kept_not_nuked(self):
+        # an absence/negative finding ("the sources don't discuss X") is honest, not a
+        # hallucination — it must survive grounding (the bug that emptied a whole synthesis)
+        text = "The sources describe a LaTeX template and never mention resonance at all."
+        out, n = _ground_citations(text, n_sources=2)
+        self.assertEqual(n, 0)
+        self.assertIn("resonance", out)             # kept
+
+    def test_ungrounded_synthesis_is_visible_but_not_canonized(self):
+        path = os.path.join(tempfile.mkdtemp(), "t.jsonl")
+        ts = ThoughtStream(path=path)
+        # model never cites a real source → nothing resolves → must NOT pollute memory,
+        # but the synthesis text must still be returned so it's inspectable
+        res = run_two_cycle_research("topic", retriever=_retriever,
+                                     model=lambda p: "The sources do not cover this topic.",
+                                     specialists=TRIBE[:2], goal_bvec=GOAL, thought_stream=ts)
+        self.assertTrue(res.synthesis)              # visible, not empty
+        self.assertIsNone(res.thought_id)           # NOT canonized (no grounded support)
+        self.assertEqual(ts.size(), 0)
 
     def test_canonized_thought_has_embedding_when_embed_fn_given(self):
         import numpy as np

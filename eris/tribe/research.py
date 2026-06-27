@@ -27,7 +27,19 @@ from eris.tribe.specialists import (
 Retriever = Callable[[str], List[str]]      # query -> list of source texts (the RAG seam)
 Model = Callable[[str], str]                # prompt -> text (local model)
 
-_SRC_RE = re.compile(r"\[s:(\d+)\]")
+# Recognize source citations in the forms models actually emit: [s:0], (s:1), s:2, and
+# ranges (s:1-3) / [s:1–3] with hyphen, en/em-dash, or minus.
+_SRC_RE = re.compile(r"[\[(]?\bs:\s*(\d+)\s*(?:[-‐-―−]\s*(\d+))?\s*[\])]?",
+                     re.IGNORECASE)
+
+
+def _cited_ids(text: str) -> set:
+    """All source ids cited in any recognized form (ranges expanded)."""
+    ids = set()
+    for m in _SRC_RE.finditer(text or ""):
+        a = int(m.group(1)); b = int(m.group(2)) if m.group(2) else a
+        ids.update(range(min(a, b), max(a, b) + 1))
+    return ids
 
 
 @dataclass
@@ -38,6 +50,7 @@ class ResearchResult:
     gaps: List[str] = field(default_factory=list)
     n_contributors: int = 0          # distinct specialists that contributed (diversity)
     n_active: int = 0
+    n_sources: int = 0               # how many sources the RAG actually retrieved
     stripped_claims: int = 0         # uncited/unresolved claims removed at canonize
     elos_critique: str = ""
     cycles: int = 0
@@ -47,31 +60,30 @@ def _format_sources(sources: List[str]) -> str:
     return "\n".join(f"[s:{i}] {s}" for i, s in enumerate(sources)) or "(no sources)"
 
 
-def _ground_citations(text: str, n_sources: int, *, strict: bool = True) -> tuple:
-    """Citation grounding for canonized research (mirrors retrospect's strip-if-unresolved
-    discipline for [s:id]). Returns (grounded_text, n_stripped). Per sentence:
-      • only-fabricated cites (a [s:i] that doesn't resolve, no valid cite) → DROP the sentence;
-      • mixed valid+fabricated → strip just the fabricated token(s), KEEP the valid claim;
-      • strict & a long uncited assertion (>10 words, no citation) → DROP it (a naked claim the
-        sources don't support); short framing/transitions are kept.
-    """
-    text = re.sub(r"\[s:\s*(\d+)\s*\]", r"[s:\1]", text or "")   # normalize multiline cites
-    allowed = {str(i) for i in range(n_sources)}
+def _ground_citations(text: str, n_sources: int) -> tuple:
+    """Citation grounding for canonized research — the strip-if-UNRESOLVED discipline from
+    retrospect.py ([t:id]), applied to [s:id]. Returns (grounded_text, n_stripped). Per
+    sentence: a sentence whose ONLY citations are fabricated (point to a source that doesn't
+    exist) is dropped; a mixed sentence keeps the claim and drops just the fabricated
+    token(s); UNCITED sentences are KEPT (honest framing and negative/absence findings —
+    'the sources don't discuss X' — are not hallucinations and must not be nuked, which is
+    what emptied a whole synthesis before). Whether to trust the result is the caller's job:
+    canonization is gated on the synthesis actually resolving ≥1 citation."""
+    allowed = set(range(n_sources))
     keep, stripped = [], 0
-    for sent in re.split(r"(?<=[.!?])\s+", text):
-        cites = set(_SRC_RE.findall(sent))
-        bad = cites - allowed
-        good = cites & allowed
-        if cites and not good:                       # only fabricated → drop whole sentence
+    for sent in re.split(r"(?<=[.!?])\s+", text or ""):
+        cited = _cited_ids(sent)
+        good, bad = cited & allowed, cited - allowed
+        if cited and not good:                        # only fabricated → drop the sentence
             stripped += 1
             continue
-        if bad:                                       # mixed → strip bad token(s), keep claim
-            sent = _SRC_RE.sub(lambda m: "" if m.group(1) in bad else m.group(0), sent)
-            sent = re.sub(r"\s{2,}", " ", sent).strip()
+        if bad:                                       # mixed → drop only wholly-bad cite tokens
+            def _strip(m):
+                a = int(m.group(1)); b = int(m.group(2)) if m.group(2) else a
+                rng = set(range(min(a, b), max(a, b) + 1))
+                return "" if (rng & bad and not rng & allowed) else m.group(0)
+            sent = re.sub(r"\s{2,}", " ", _SRC_RE.sub(_strip, sent)).strip()
             stripped += 1
-        elif not cites and strict and len(sent.split()) > 10:
-            stripped += 1                             # long, unsupported, uncited → drop
-            continue
         if sent.strip():
             keep.append(sent.strip())
     return " ".join(keep).strip(), stripped
@@ -93,22 +105,28 @@ def run_two_cycle_research(
     hub: Optional[CrossAttentionHub] = None,
     moe_gate=None, thought_stream=None, embed_fn: Optional[Callable[[str], Any]] = None,
     goal_bvec: Optional[BVec] = None, max_specialists: int = 5,
-    regime: str = "research",
+    regime: str = "research", log: Optional[Callable[[str], None]] = None,
 ) -> ResearchResult:
     """Run the broad→synthesis→refined→canonize cycle. `retriever(query)->[sources]` is the
     existing RAG pipeline; `model(prompt)->text` is the local model. Specialists default to
     the top-K active for the topic's field; the result is canonized to `thought_stream` if
     given (citation-grounded)."""
+    _log = log or (lambda m: None)
     goal_bvec = goal_bvec or _text_to_bvec(topic)
     active = (specialists if specialists is not None
               else get_active_specialists(goal_bvec, max_k=max_specialists))[:max_specialists]
     hub = hub if hub is not None else CrossAttentionHub()
+    _log(f"active specialists: {', '.join(s.name for s in active)}")
 
     # ── Cycle 1 — broad: RAG → each active specialist reasons → post to hub ──
     ctx1 = list(retriever(topic) or [])
+    _log(f"cycle 1 — retrieved {len(ctx1)} source(s); specialists reasoning…")
+    for i, s in enumerate(ctx1):                       # show WHAT was retrieved (diagnose RAG)
+        _log(f"    [s:{i}] {' '.join((s or '').split())[:80]}…")
     src1 = _format_sources(ctx1)
     c1: List[SpecialistFinding] = []
     for s in active:
+        _log(f"  {s.name} reasoning…")
         f = make_reasoned_finding(s, topic, src1, model)
         hub.post(f); c1.append(f)
 
@@ -125,6 +143,7 @@ def run_two_cycle_research(
         f"\n\nMost-resonant cross-links:\n" + "\n".join(f"- {f.content}" for f in cross) +
         f"\n\nSOURCES:\n{src1}\n\nIntegrate into a synthesis grounded in the sources "
         f"(cite [s:i]). Then on new lines list the open GAPS as bullets.")
+    _log("synthesis — Kairos integrating…")
     synthesis = (model(synth_prompt) or "").strip()
     elos_critique = ""
     if any(s.id == "elos" for s in active):
@@ -137,6 +156,7 @@ def run_two_cycle_research(
     # ── Cycle 2 — refined: targeted RAG on the gaps → specialists refine ──
     ctx2, c2 = [], []
     if gaps:
+        _log(f"cycle 2 — {len(gaps)} gap(s); targeted retrieval + refine…")
         ctx2 = list(retriever(" ; ".join(gaps)) or [])
         src2 = _format_sources(ctx1 + ctx2)
         for s in active:
@@ -152,15 +172,24 @@ def run_two_cycle_research(
         f".\n\nDRAFT:\n{synthesis}\n\nREFINEMENTS:\n" +
         "\n".join(f"- {f.content}" for f in c2) +
         f"\n\nSOURCES:\n{_format_sources(all_sources)}\n\nFinal synthesis:")
+    _log("canonizing — citation-grounding the final synthesis…")
     final = (model(canon_prompt) or synthesis).strip()
     grounded, stripped = _ground_citations(final, len(all_sources))
+    # The synthesis is ALWAYS visible (grounded text, or the draft if grounding emptied it) —
+    # an empty result hides her reasoning. But canonization to long-term memory is gated on
+    # the synthesis actually RESOLVING ≥1 real source citation, so ungrounded claims never
+    # pollute the thought-stream (the §A2 discipline) — they're returned for inspection only.
+    synthesis_out = grounded or final
+    resolved = len(_cited_ids(grounded) & set(range(len(all_sources))))
+    _log(f"grounded: {len(grounded)} chars, {resolved} resolved citation(s), "
+         f"{stripped} stripped" + ("" if resolved else " — NOT canonized (no grounded support)"))
 
     # diversity = distinct specialists that genuinely contributed across BOTH cycles
     contributors = {f.specialist_id for f in (c1 + c2)
                     if not f.metadata.get("echo") and not f.metadata.get("empty")}
 
     thought_id = None
-    if thought_stream is not None and grounded:
+    if thought_stream is not None and grounded and resolved >= 1:
         try:
             from eris.memory.thought_stream import link_and_store
             # store WITH a semantic embedding (else thought_stream.retrieve skips it and the
@@ -172,7 +201,7 @@ def run_two_cycle_research(
             thought_id = None
 
     return ResearchResult(
-        topic=topic, synthesis=grounded, thought_id=thought_id, gaps=gaps,
-        n_contributors=len(contributors),
+        topic=topic, synthesis=synthesis_out, thought_id=thought_id, gaps=gaps,
+        n_contributors=len(contributors), n_sources=len(all_sources),
         n_active=len(active), stripped_claims=stripped,
         elos_critique=elos_critique, cycles=2 if gaps else 1)

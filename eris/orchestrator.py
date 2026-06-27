@@ -813,14 +813,19 @@ class ErisOrchestrator:
             except Exception:
                 return None
 
+        def _log(m: str):
+            print(f"[hive] {m}", flush=True)
+
         def _run():
             res = run_two_cycle_research(
                 topic, retriever=_rag, model=_local, moe_gate=self.moe_gate, hub=self.hub,
                 thought_stream=self.thought_stream, embed_fn=_embed,
-                max_specialists=max_specialists)
+                max_specialists=max_specialists, log=_log)
             return {"topic": res.topic, "thought_id": res.thought_id, "gaps": res.gaps,
                     "n_contributors": res.n_contributors, "n_active": res.n_active,
-                    "stripped_claims": res.stripped_claims, "cycles": res.cycles}
+                    "n_sources": res.n_sources, "stripped_claims": res.stripped_claims,
+                    "cycles": res.cycles, "canonized": res.thought_id is not None,
+                    "synthesis": res.synthesis[:2000]}      # the actual reasoning, visible
 
         try:
             return await asyncio.to_thread(_run)

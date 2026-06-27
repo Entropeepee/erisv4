@@ -16,20 +16,17 @@ local model (so the actual A/B is a [machine] step).
 """
 from __future__ import annotations
 from typing import Any, Dict, Optional
-import re
 
-_SRC_RE = re.compile(r"\[s:(\d+)\]")
+from eris.tribe.research import _cited_ids
 
 
 def citation_resolution_rate(synthesis: str, n_sources: int) -> float:
-    """Fraction of the synthesis's [s:i] citations that resolve to a real source. After
-    grounding this should be 1.0 (unresolved cites were stripped); a control with no
-    citations scores 0.0 (nothing grounded)."""
-    cites = _SRC_RE.findall(synthesis or "")
-    if not cites:
+    """Fraction of the synthesis's distinct source citations (any form: [s:i], (s:i),
+    ranges) that resolve to a real source. A control with no citations scores 0.0."""
+    cited = _cited_ids(synthesis)
+    if not cited:
         return 0.0
-    ok = sum(1 for c in cites if 0 <= int(c) < n_sources)
-    return ok / len(cites)
+    return len(cited & set(range(n_sources))) / len(cited)
 
 
 def ab_metrics(result, n_sources: int) -> Dict[str, Any]:
@@ -68,23 +65,17 @@ async def run_ab(orchestrator, topic: str, max_specialists: int = 5) -> Dict[str
     and report the comparison. (Control is the hollow cycle, which canonizes nothing.)"""
     summary = await orchestrator.hive_research(topic, max_specialists=max_specialists)
     if "error" in summary:
-        return {"error": summary["error"]}
+        return {"error": summary["error"], "traceback": summary.get("traceback")}
 
-    class _R:  # adapt the summary dict back to the field shape ab_metrics expects
-        synthesis = "[s:0]" * 0
+    class _R:  # adapt the summary dict to the field shape ab_metrics expects
+        synthesis = summary.get("synthesis", "")        # the actual reasoning, now surfaced
         n_contributors = summary.get("n_contributors", 0)
         n_active = summary.get("n_active", 0)
         cycles = summary.get("cycles", 0)
         stripped_claims = summary.get("stripped_claims", 0)
         thought_id = summary.get("thought_id")
-    # citation-resolution is read from the canonized thought itself
-    tid = summary.get("thought_id")
-    synth = ""
-    if tid is not None:
-        t = orchestrator.thought_stream.get(tid)
-        synth = getattr(t, "text", "") if t else ""
-    _R.synthesis = synth
-    return {"topic": topic, **compare(_R, n_sources=max(1, max_specialists)), "raw": summary}
+    n_sources = max(1, summary.get("n_sources", 0))
+    return {"topic": topic, **compare(_R, n_sources=n_sources), "raw": summary}
 
 
 def main(argv=None):   # pragma: no cover
