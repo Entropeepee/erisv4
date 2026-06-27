@@ -101,50 +101,61 @@ class TextFrontend(ModalityFrontend):
             return phi.astype(np.float32), theta.astype(np.float32)
 
 
+def _np_stft(samples: np.ndarray, n_fft: int = 256, hop: int = 128) -> np.ndarray:
+    """Torch-free, scipy-free STFT (np.fft.rfft over Hann-windowed frames).
+    Returns the complex spectrogram (n_freq × n_frames)."""
+    x = np.asarray(samples, dtype=np.float64).ravel()
+    if x.size < n_fft:
+        x = np.pad(x, (0, n_fft - x.size))
+    win = np.hanning(n_fft)
+    n_frames = 1 + (x.size - n_fft) // hop
+    frames = np.stack([x[i * hop:i * hop + n_fft] * win for i in range(n_frames)], axis=1)
+    return np.fft.rfft(frames, axis=0)            # (n_fft//2+1, n_frames), complex
+
+
+def audio_density_phase(samples: np.ndarray, n_fft: int = 256, hop: int = 128):
+    """ρ, θ for audio per the canonical glossary: ρ = |STFT| min-max to [0,1] (energy
+    at each time–freq point), θ = ∠STFT (local phase). The acoustic analog of the
+    image gradient-spinor; same (ρ, θ) contract, so τ/κ/λ and coupling apply identically."""
+    Z = _np_stft(samples, n_fft=n_fft, hop=hop)
+    rho = np.abs(Z)
+    lo, hi = float(rho.min()), float(rho.max())
+    rho = (rho - lo) / (hi - lo + 1e-9)           # min-max → commensurable with image ρ
+    theta = np.angle(Z)
+    return rho, theta
+
+
 class AudioFrontend(ModalityFrontend):
-    """Audio → field state. STUB for v6.0 GVE integration.
+    """Audio → coherence field, ZERO learned weights (RULE 1), torch-free.
 
-    Planned pipeline:
-        Audio waveform → spectrogram (STFT)
-        → formant extraction (F1, F2, F3 frequencies)
-        → map formants to BLECD domains:
-            F1 (mouth openness) → Boundary (spatial extent)
-            F2 (tongue position) → Feedback (articulatory control)
-            F3 (lip rounding) → Saturation (spectral density)
-            Spectral tilt → Decay (energy dissipation rate)
-            Onset transients → Criticality (abrupt transitions)
-            Harmonic richness → Emergence (structure from overtones)
-        → seed φ field from spectral energy distribution
-        → seed θ field from phase structure (instantaneous frequency)
+    Pipeline (the acoustic sibling of ImageFrontend's gradient-spinor):
+        waveform → NumPy STFT → ρ = |STFT| (min-max [0,1]) , θ = ∠STFT
+        → resize the (freq × frame) grid to size×size with the SHARED normalization
+          (commensurability — load-bearing: every modality on the same grid/scale or
+          no cross-modal comparison is valid)
+        → return (mag = √ρ, θ) matching the (phi, theta) field contract, so the #41
+          two-channel coupling, τ = ∇ρ×∇θ, and LAF (κ, λ) operate on it IDENTICALLY to
+          an image or word field.
 
-    From the CFC conversation: "Sound waves have ∇ρ (density gradient)
-    and ∇θ (phase gradient). You can literally speak torsion into existence."
+    From the CFC conversation: "Sound waves have ∇ρ (density gradient) and ∇θ (phase
+    gradient). You can literally speak torsion into existence." The STFT makes both
+    explicit on the time–frequency plane.
     """
 
+    def __init__(self, n_fft: int = 256, hop: int = 128):
+        self.n_fft = n_fft
+        self.hop = hop
+
     def to_field(self, data: Any, size: int = 64) -> Tuple[np.ndarray, np.ndarray]:
-        # Ensure we have a 1D numpy array
         if not isinstance(data, np.ndarray):
-            data = np.random.randn(44100)  # Mock signal if not properly passed
-        data = data.flatten()
-        
-        # Extract spectrogram (STFT)
-        import scipy.signal
-        f, t, Zxx = scipy.signal.stft(data, nperseg=min(256, len(data)))
-        mag = np.abs(Zxx)
-        phase = np.angle(Zxx)
-        
-        # Resize to (size, size) field
-        from scipy.ndimage import zoom
-        zoom_factors = (size / mag.shape[0], size / mag.shape[1]) if mag.shape[1] > 0 else (1, 1)
-        
-        phi = zoom(mag, zoom_factors, mode='nearest') if mag.shape[1] > 0 else np.zeros((size, size))
-        theta = zoom(phase, zoom_factors, mode='nearest') if phase.shape[1] > 0 else np.zeros((size, size))
-        
-        # Normalize phi to [0, 1] amplitude and theta to [0, 2pi]
-        phi = np.clip(phi / (np.max(phi) + 1e-10), 0.0, 1.0).astype(np.float32)
-        theta = ((theta + np.pi) % (2 * np.pi)).astype(np.float32)
-        
-        return phi, theta
+            # deterministic mock tone (no RNG — keeps tests reproducible)
+            t = np.linspace(0, 1, 16000, endpoint=False)
+            data = np.sin(2 * np.pi * 220.0 * t)
+        rho, theta = audio_density_phase(data, n_fft=self.n_fft, hop=self.hop)
+        rho = _resize(rho, size)
+        theta = _resize(theta, size)
+        mag = np.sqrt(np.clip(rho, 0.0, 1.0))        # phi = √ρ per the field API
+        return mag.astype(np.float32), theta.astype(np.float32)
 
 
 def _to_gray(data: np.ndarray) -> np.ndarray:
