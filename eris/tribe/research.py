@@ -93,22 +93,26 @@ def run_two_cycle_research(
     hub: Optional[CrossAttentionHub] = None,
     moe_gate=None, thought_stream=None, embed_fn: Optional[Callable[[str], Any]] = None,
     goal_bvec: Optional[BVec] = None, max_specialists: int = 5,
-    regime: str = "research",
+    regime: str = "research", log: Optional[Callable[[str], None]] = None,
 ) -> ResearchResult:
     """Run the broad→synthesis→refined→canonize cycle. `retriever(query)->[sources]` is the
     existing RAG pipeline; `model(prompt)->text` is the local model. Specialists default to
     the top-K active for the topic's field; the result is canonized to `thought_stream` if
     given (citation-grounded)."""
+    _log = log or (lambda m: None)
     goal_bvec = goal_bvec or _text_to_bvec(topic)
     active = (specialists if specialists is not None
               else get_active_specialists(goal_bvec, max_k=max_specialists))[:max_specialists]
     hub = hub if hub is not None else CrossAttentionHub()
+    _log(f"active specialists: {', '.join(s.name for s in active)}")
 
     # ── Cycle 1 — broad: RAG → each active specialist reasons → post to hub ──
     ctx1 = list(retriever(topic) or [])
+    _log(f"cycle 1 — retrieved {len(ctx1)} source(s); specialists reasoning…")
     src1 = _format_sources(ctx1)
     c1: List[SpecialistFinding] = []
     for s in active:
+        _log(f"  {s.name} reasoning…")
         f = make_reasoned_finding(s, topic, src1, model)
         hub.post(f); c1.append(f)
 
@@ -125,6 +129,7 @@ def run_two_cycle_research(
         f"\n\nMost-resonant cross-links:\n" + "\n".join(f"- {f.content}" for f in cross) +
         f"\n\nSOURCES:\n{src1}\n\nIntegrate into a synthesis grounded in the sources "
         f"(cite [s:i]). Then on new lines list the open GAPS as bullets.")
+    _log("synthesis — Kairos integrating…")
     synthesis = (model(synth_prompt) or "").strip()
     elos_critique = ""
     if any(s.id == "elos" for s in active):
@@ -137,6 +142,7 @@ def run_two_cycle_research(
     # ── Cycle 2 — refined: targeted RAG on the gaps → specialists refine ──
     ctx2, c2 = [], []
     if gaps:
+        _log(f"cycle 2 — {len(gaps)} gap(s); targeted retrieval + refine…")
         ctx2 = list(retriever(" ; ".join(gaps)) or [])
         src2 = _format_sources(ctx1 + ctx2)
         for s in active:
@@ -152,6 +158,7 @@ def run_two_cycle_research(
         f".\n\nDRAFT:\n{synthesis}\n\nREFINEMENTS:\n" +
         "\n".join(f"- {f.content}" for f in c2) +
         f"\n\nSOURCES:\n{_format_sources(all_sources)}\n\nFinal synthesis:")
+    _log("canonizing — citation-grounding the final synthesis…")
     final = (model(canon_prompt) or synthesis).strip()
     grounded, stripped = _ground_citations(final, len(all_sources))
 
