@@ -85,3 +85,30 @@ async def run_ab(orchestrator, topic: str, max_specialists: int = 5) -> Dict[str
         synth = getattr(t, "text", "") if t else ""
     _R.synthesis = synth
     return {"topic": topic, **compare(_R, n_sources=max(1, max_specialists)), "raw": summary}
+
+
+def main(argv=None):   # pragma: no cover
+    """[machine] CLI: run the hive A/B on a study topic, using her real library + local
+    model. Usage:  python -m eris.experiments.hive_ab "your topic here" [--size 32]"""
+    import argparse
+    import asyncio
+    import json
+    ap = argparse.ArgumentParser(description="Hive research A/B (control vs treatment)")
+    ap.add_argument("topic", help="the study topic to research")
+    ap.add_argument("--size", type=int, default=32, help="PDE field size (32 fast, 64 default)")
+    ap.add_argument("--specialists", type=int, default=5, help="top-K active specialists")
+    args = ap.parse_args(argv)
+
+    from eris.orchestrator import ErisOrchestrator
+    print(f"[hive-ab] booting Eris (reads ./eris_data, talks to your local Ollama)…")
+    orch = ErisOrchestrator(field_size=args.size)           # default data_dir = eris_data
+    print(f"[hive-ab] researching: {args.topic!r}\n")
+    result = asyncio.run(run_ab(orch, args.topic, max_specialists=args.specialists))
+    print(json.dumps(result, indent=2, default=str))
+    if result.get("raw", {}).get("thought_id"):
+        print(f"\n[hive-ab] canonized thought id: {result['raw']['thought_id']} "
+              f"(saved to eris_data/thoughts.jsonl)")
+
+
+if __name__ == "__main__":   # pragma: no cover
+    main()
