@@ -848,7 +848,12 @@ class ErisOrchestrator:
                 # BM25 instead of polluting RRF (the lexical match is what actually works then).
                 qe = get_embedding(query) if is_semantic() else None
                 ranked = hybrid_search(query, recs, query_embedding=qe, top_k=16)
-                hits = lead + [h for h in ranked if h not in lead]   # named-doc chunks first
+                # id()-based membership, NOT `h not in lead`: MemoryRecord is a dataclass whose
+                # __eq__ compares its numpy embedding/bvec fields → an array truth value →
+                # "ambiguous" ValueError. That crash silently emptied EVERY named-doc/scope=doc
+                # run (where lead is non-empty); scope=memory worked only because lead was [].
+                lead_ids = {id(h) for h in lead}
+                hits = lead + [h for h in ranked if id(h) not in lead_ids]   # named-doc first
                 lead_text = {(getattr(h, "text", "") or "").strip() for h in lead}
                 # Dedup into a WIDER candidate pool (12), then let resonance pick the final 6.
                 cands, seen = [], set()
