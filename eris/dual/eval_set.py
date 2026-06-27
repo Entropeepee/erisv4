@@ -217,22 +217,28 @@ def _source_meta(passage) -> dict:
 
 # ── core generation (in-memory, testable) ───────────────────────────────────
 def generate_rows(passages: List[Any], llm: LLM, cfg: Optional[EvalSetConfig] = None,
-                  *, _bm25=None, _ids=None) -> Tuple[List[dict], dict]:
+                  *, corpus_bm25=None, corpus_ids=None) -> Tuple[List[dict], dict]:
     """Generate, filter, dedup, mine distractors, split — all in memory. Returns
     (rows, stats). `passages` are MemoryRecord-like (`.text`, `.source`, `.metadata`).
-    The BM25/ids over the full passage corpus can be passed in to avoid rebuilding."""
+
+    Each passage's gold is its OWN record_id. Distractor mining (RULE C) ranks against
+    the whole library, so the caller can pass `corpus_bm25`/`corpus_ids` over the full
+    passage set (run() does this when processing one passage at a time) — distinct from
+    the passages being generated from. When omitted, the corpus IS `passages`."""
     cfg = cfg or EvalSetConfig()
     passages = list(passages)
-    texts = [getattr(p, "text", "") or "" for p in passages]
-    ids = _ids if _ids is not None else [record_id(p) for p in passages]
-    bm25 = _bm25 if _bm25 is not None else _build_bm25(texts)
-    id_to_idx = {rid: i for i, rid in enumerate(ids)}
+    own_ids = [record_id(p) for p in passages]               # this passage's gold
+    corpus_ids = corpus_ids if corpus_ids is not None else own_ids
+    bm25 = corpus_bm25 if corpus_bm25 is not None else \
+        _build_bm25([getattr(p, "text", "") or "" for p in passages])
+    id_to_idx = {rid: i for i, rid in enumerate(corpus_ids)}
 
     rows: List[dict] = []
     stats = {"passages": len(passages), "raw_questions": 0, "rejected_unanswerable": 0,
              "rejected_paraphrastic": 0, "kept": 0, "has_distractor": 0}
 
-    for p, ptext, gold in zip(passages, texts, ids):
+    for p, gold in zip(passages, own_ids):
+        ptext = getattr(p, "text", "") or ""
         if not ptext.strip():
             continue
         try:
@@ -252,7 +258,7 @@ def generate_rows(passages: List[Any], llm: LLM, cfg: Optional[EvalSetConfig] = 
                 stats["rejected_paraphrastic"] += 1
                 continue
             qid = _qid(gold, qn)
-            has, dids = mine_distractor(qn, id_to_idx.get(gold, -1), ids, bm25, cfg)
+            has, dids = mine_distractor(qn, id_to_idx.get(gold, -1), corpus_ids, bm25, cfg)
             rows.append({
                 "qid": qid, "question": qn, "gold": gold,
                 "source_meta": _source_meta(p),
@@ -311,7 +317,7 @@ def run(passages: Iterable[Any], llm: LLM, out_path: str,
             if gold in done:
                 agg["skipped"] += 1
                 continue
-            rows, st = generate_rows([p], llm, cfg, _bm25=bm25, _ids=ids)
+            rows, st = generate_rows([p], llm, cfg, corpus_bm25=bm25, corpus_ids=ids)
             for row in rows:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
             f.flush()

@@ -163,6 +163,24 @@ class TestEvalSet(unittest.TestCase):
         self.assertEqual(agg2["skipped"], len(self.passages))
         self.assertEqual(len(load_eval_set(out)), len(rows))   # no duplicates
 
+    def test_run_assigns_each_passage_its_own_gold(self):
+        # RULE A through the per-passage run() path: a question's gold must be the
+        # record_id of the passage it was generated FROM, not the corpus's first id.
+        out = os.path.join(tempfile.mkdtemp(), "eval_set.jsonl")
+        run(self.passages, _stub_llm, out, self.cfg)
+        rows = load_eval_set(out)
+        from eris.dual.eval_set import _terms
+        by_id = {record_id(p): p.text for p in self.passages}
+        for r in rows:
+            self.assertIn(r["gold"], by_id)
+            # the gold passage must share salient terms with its question (on-topic):
+            # the buggy path mapped every row to passages[0], so cross-topic rows
+            # (mitochondria question vs photosynthesis passage) would share nothing.
+            shared = _terms(r["question"]) & _terms(by_id[r["gold"]])
+            self.assertTrue(shared, f"gold mismatch: {r['question']!r}")
+        # both distinct source passages are represented (not all collapsed to one gold)
+        self.assertEqual(len({r["gold"] for r in rows}), len(self.passages))
+
 
 if __name__ == "__main__":
     unittest.main()
