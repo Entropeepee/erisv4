@@ -186,6 +186,16 @@ class ErisConfig:
     chunker: str = os.environ.get("ERIS_CHUNKER", "structured")
     chunk_target_chars: int = int(os.environ.get("ERIS_CHUNK_CHARS", "2000"))
     chunk_overlap_chars: int = int(os.environ.get("ERIS_CHUNK_OVERLAP", "200"))
+    # ── DualPath shadow comparison (resonance vs hybrid RAG) — DEFAULT OFF ──
+    # Generic ERIS_<SUBSYS>_MODE convention. retrieval_mode default
+    # "traditional_only" leaves process() byte-for-byte unchanged.
+    retrieval_mode: str = os.environ.get("ERIS_RETRIEVAL_MODE", "traditional_only")
+    arbiter_llm: bool = os.environ.get("ERIS_ARBITER_LLM", "0").strip().lower() in ("1", "on", "true", "yes")
+    dual_rerank: bool = os.environ.get("ERIS_DUAL_RERANK", "0").strip().lower() in ("1", "on", "true", "yes")
+    # dual_log: on by default WHEN a shadow/novel mode is active, else off.
+    dual_log: bool = (os.environ.get("ERIS_DUAL_LOG",
+                      "1" if os.environ.get("ERIS_RETRIEVAL_MODE", "traditional_only") != "traditional_only"
+                      else "0").strip().lower() in ("1", "on", "true", "yes"))
     orch_resp_blend: float = 0.7          # Tier 3 warm-reseed: new-text weight (1.0 = cold)
 
 

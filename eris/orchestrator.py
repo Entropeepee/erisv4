@@ -293,6 +293,11 @@ class ErisOrchestrator:
         # Pure instrumentation — incremented at the expensive boundaries below,
         # read by bench_orchestration.py. Does not affect any decision.
         self.counters = OrchestrationCounters()
+        # DualPath shadow comparison: cumulative win/loss tally + a lazily-built
+        # retrieval DualPath (only constructed when a non-default mode is active).
+        from eris.computation.orch_counters import DualCounters
+        self.dual_counters = DualCounters()
+        self._retrieval_dual = None
 
         # Tier 1+: ONE shared noise-floor estimator feeds every gate (per-signal
         # local scale + one global agitation multiplier). The gates that draw
@@ -398,10 +403,17 @@ class ErisOrchestrator:
         # (tension/learning). The tension set is coupled-but-unresolved memory:
         # giving it to the LLM as "related but unresolved" is how Eris connects
         # ideas instead of echoing the nearest neighbor.
-        aligned, tension = self.memory.retrieve_resonant(
-            query_bvec=input_bvec, query_embedding=q_embedding,
-            top_k=8, tension_k=3, query_text=user_message,
-        )
+        # DualPath shadow (default OFF): with ERIS_RETRIEVAL_MODE=traditional_only
+        # this branch is skipped entirely and the resonant call below is byte-for-
+        # byte the original path. In shadow/novel modes the wrapper runs both paths,
+        # logs the arbiter-scored divergence, and returns the mode's authoritative set.
+        if getattr(CONFIG, "retrieval_mode", "traditional_only") != "traditional_only":
+            aligned, tension = self._dual_retrieve(user_message, input_bvec, q_embedding)
+        else:
+            aligned, tension = self.memory.retrieve_resonant(
+                query_bvec=input_bvec, query_embedding=q_embedding,
+                top_k=8, tension_k=3, query_text=user_message,
+            )
         # Give the LLM the FULL retrieved memory, not a sliver — truncating here
         # is what made Eris say she hadn't read an uploaded document she had.
         # Each line is tagged with WHEN it was formed, so she has a sense of time
@@ -976,6 +988,33 @@ class ErisOrchestrator:
         (Tier 7). Offloaded so it never blocks the event loop."""
         return await asyncio.to_thread(self.dreaming_loop.ponder, question)
 
+    def _dual_retrieve(self, user_message, input_bvec, q_embedding):
+        """Run the retrieval DualPath (shadow/novel modes). Returns (aligned,
+        tension) for the rest of the pipeline. In SHADOW the floor (hybrid RAG) is
+        authoritative — its records become `aligned`, with no tension channel; in
+        novel modes the resonant aligned/tension sets flow through. Never raises:
+        on any error it falls back to the resonant path."""
+        try:
+            if self._retrieval_dual is None:
+                from eris.dual.retrieval import build_retrieval_dualpath
+                from eris.dual.arbiter import Arbiter
+                from eris.dual.divergence_log import DivergenceLog
+                from eris.dual.path import Mode
+                div_logger = (DivergenceLog(
+                    os.path.join(self.data_dir, "dual", "divergence.jsonl"),
+                    counters=self.dual_counters) if getattr(CONFIG, "dual_log", False) else None)
+                self._retrieval_dual = build_retrieval_dualpath(
+                    self.memory, mode=Mode.parse(CONFIG.retrieval_mode),
+                    arbiter=Arbiter(), logger=div_logger)
+            res = self._retrieval_dual.run(
+                user_message, query_bvec=input_bvec, query_embedding=q_embedding)
+            return list(res.records), list(res.tension or [])
+        except Exception as e:
+            print(f"[DualPath] retrieval shadow failed ({e}); using resonant path")
+            return self.memory.retrieve_resonant(
+                query_bvec=input_bvec, query_embedding=q_embedding,
+                top_k=8, tension_k=3, query_text=user_message)
+
     async def retrospect(self, topic: str) -> Dict[str, Any]:
         """Look back over her OWN past thoughts on a topic and synthesize how her
         thinking moved (retrospective metacognition). Offloaded off the loop."""
@@ -1057,4 +1096,5 @@ class ErisOrchestrator:
                 f"{b.name}/{b.model}" for b in self.mediator.available_backends
             ],
             "transfixed": self.moe_gate.transfixion_detector.is_transfixed(),
+            "dual": self.dual_counters.as_dict(),   # DualPath shadow A/B tally
         }
