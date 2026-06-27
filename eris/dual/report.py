@@ -72,6 +72,32 @@ def print_report(path: str, sample: int = 5) -> dict:
     return s
 
 
+def print_eval_report(result: dict) -> dict:
+    """Print the labelled-eval-set verdict produced by
+    `eris.dual.eval_set.evaluate` — hit@1/@k for BOTH paths on the FULL set and,
+    crucially, on the has_distractor SUBSET. The full-set row shows parity/competence;
+    the distractor row is the verdict on whether the field sees coupling cosine misses
+    (mirrors this report's cross_domain/novel_wins story, now with gold labels)."""
+    k = result.get("k", 8)
+    print("── DualPath retrieval eval-set report (gold-labelled) ──")
+    paths = sorted(result.get("full", {}).keys())
+    if not paths:
+        print("(no eval rows)")
+        return result
+
+    def _row(label, block, n):
+        cells = "  ".join(
+            f"{p}: hit@1={block[p]['hit@1']} hit@{k}={block[p][f'hit@{k}']}"
+            for p in paths)
+        print(f"{label} (n={n}):  {cells}")
+
+    _row("full      ", result["full"], result.get("n_full", 0))
+    _row("distractor", result["distractor"], result.get("n_distractor", 0))
+    print("  ↑ distractor subset = the verdict: does resonance find coupled-but-"
+          "lexically-distant material cosine misses?")
+    return result
+
+
 if __name__ == "__main__":   # pragma: no cover
     import sys
     print_report(sys.argv[1] if len(sys.argv) > 1
