@@ -242,6 +242,39 @@ def bvec_resonance(a: BVec, b: BVec) -> float:
     return float(np.sum((elastic - plastic) * weights) / norm)
 
 
+def bvec_resonance_2d(a: BVec, b: BVec) -> dict:
+    """Two-channel BVec resonance — the "never just cosine" form (§B3), the bvec analogue of
+    field_resonance_2d. bvec_resonance() returns the NET (elastic − plastic), which subtracts
+    the torsion channel; for RANKING we want both kept so a neighbor that couples through the
+    plastic/torsion (sine) channel is still surfaced when its elastic/cosine alignment is modest.
+
+      R_cos (κ)   = Σ elastic·w / Σ total·w      — aligned/constructive channel
+      R_sin (λ)   = Σ plastic·w / Σ total·w      — the torsion/sine channel (kept, not discarded)
+      magnitude   = √(R_cos² + R_sin²)           — total resonance → the ranking score
+      mixing_angle= atan2(R_sin, R_cos)          — torsion diagnostic (grows as λ carries more)
+    Same Davidian-shrinkage weighting and CuPy-safe to_numpy() as bvec_resonance."""
+    from eris.computation.shrinkage import davidian_weight
+    va = a.as_array().astype(np.float64)
+    vb = b.as_array().astype(np.float64)
+    coupling = np.sqrt(np.maximum(va * vb, 0.0))
+    max_vals = np.where(np.maximum(va, vb) < 1e-8, 1.0, np.maximum(va, vb))
+    cos2 = (np.minimum(va, vb) / max_vals) ** 2
+    elastic = cos2 * coupling
+    plastic = (1.0 - cos2) * coupling
+    total = elastic + plastic
+    mean_c = max(float(np.mean(total)), 1e-10)
+    weights = to_numpy(davidian_weight(total / mean_c, alpha=1.0, beta=0.5,
+                                       gamma=1.0, delta=0.0)).ravel()
+    norm = float(np.sum(total * weights))
+    if norm < 1e-10:
+        return {"R_cos": 0.0, "R_sin": 0.0, "magnitude": 0.0, "mixing_angle": 0.0}
+    r_cos = float(np.sum(elastic * weights) / norm)
+    r_sin = float(np.sum(plastic * weights) / norm)
+    return {"R_cos": r_cos, "R_sin": r_sin,
+            "magnitude": float(np.hypot(r_cos, r_sin)),
+            "mixing_angle": float(np.arctan2(r_sin, r_cos))}
+
+
 def cosine(a, b) -> float:
     """Cosine similarity between two raw vectors (e.g. semantic embeddings).
     Shared helper so the same safe, normalized formula isn't re-inlined across

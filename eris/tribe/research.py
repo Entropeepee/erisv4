@@ -90,6 +90,45 @@ def _distinct(sources: List[str]) -> List[str]:
     return out
 
 
+def resonance_rerank(goal_bvec: BVec, texts: List[str], *, top_k: Optional[int] = None,
+                     blend: float = 0.5, bvec_of: Optional[Callable[[str], BVec]] = None
+                     ) -> List[str]:
+    """Re-rank retrieved chunks by FIELD RESONANCE — not just embedding cosine (§B3).
+
+    Each chunk is scored by the 2D resonance MAGNITUDE √(R_cos²+R_sin²) against the goal
+    (κ cosine/aligned channel AND λ sine/torsion channel — the sine is kept, not discarded),
+    then BLENDED with its incoming lexical/dense rank so a torsion-coupled chunk can rise even
+    when its cosine alignment is modest, without throwing away what BM25/dense already knew.
+    `blend`=1.0 is pure resonance, 0.0 is the incoming order. Best-effort: any chunk whose
+    bvec can't be computed keeps its incoming position. Returns the reordered texts."""
+    from eris.computation.activations import bvec_resonance_2d
+    if not texts or goal_bvec is None:
+        return list(texts)
+    to_bvec = bvec_of or _text_to_bvec
+    n = len(texts)
+    scored = []
+    for i, t in enumerate(texts):
+        prior = 1.0 - (i / max(1, n - 1)) if n > 1 else 1.0   # incoming rank as a [0,1] prior
+        try:
+            res = bvec_resonance_2d(goal_bvec, to_bvec(t))["magnitude"]
+        except Exception:
+            res = None
+        scored.append([i, t, prior, res])
+    mags = [s[3] for s in scored if s[3] is not None]
+    if mags:
+        lo, hi = min(mags), max(mags)
+        span = (hi - lo) or 1.0
+        for s in scored:
+            r = s[2] if s[3] is None else (s[3] - lo) / span   # missing → fall back to prior
+            s.append(blend * r + (1.0 - blend) * s[2])
+    else:
+        for s in scored:
+            s.append(s[2])
+    scored.sort(key=lambda s: (-s[-1], s[0]))                  # stable on the incoming order
+    out = [s[1] for s in scored]
+    return out[:top_k] if top_k else out
+
+
 def _ground_citations(text: str, n_sources: int) -> tuple:
     """Citation grounding for canonized research — the strip-if-UNRESOLVED discipline from
     retrospect.py ([t:id]), applied to [s:id]. Returns (grounded_text, n_stripped). Per

@@ -7,7 +7,7 @@ os.environ.setdefault("ERIS_EMBEDDINGS", "off")
 import unittest
 import numpy as np
 
-from eris.computation.activations import BVec, bvec_resonance
+from eris.computation.activations import BVec, bvec_resonance, bvec_resonance_2d
 from eris.executive.workspace import MoEGate
 from eris.tribe.specialists import (
     SpecialistFinding, CrossAttentionHub, Specialist, get_active_specialists,
@@ -66,6 +66,60 @@ class TestBvecResonance(unittest.TestCase):
         self.assertLess(len(active), 11)
         # tighter cap honoured
         self.assertLessEqual(len(get_active_specialists(saturated, max_k=3)), 3)
+
+
+class TestBvecResonance2D(unittest.TestCase):
+    def test_keeps_both_channels_magnitude_geq_abs_net(self):
+        # the 2D form must NOT discard the sine: magnitude √(κ²+λ²) ≥ |net elastic−plastic|
+        rng = np.random.RandomState(1)
+        for _ in range(50):
+            a = BVec(*rng.rand(6)); g = BVec(*rng.rand(6))
+            r2 = bvec_resonance_2d(a, g)
+            self.assertGreaterEqual(r2["magnitude"] + 1e-9, abs(bvec_resonance(a, g)))
+
+    def test_torsion_channel_nonzero_on_mismatch(self):
+        # a partially-aligned neighbor carries signal in the λ/sine (torsion) channel
+        goal = BVec(B=0.8, F=0.7, E=0.2, C=0.2, D=0.1, S=0.3)
+        mixed = BVec(B=0.8, F=0.1, E=0.2, C=0.8, D=0.1, S=0.3)   # half aligned, half opposed
+        self.assertGreater(abs(bvec_resonance_2d(mixed, goal)["R_sin"]), 0.0)
+
+    def test_is_gpu_safe_uses_to_numpy(self):
+        import inspect
+        from eris.computation import activations
+        src = inspect.getsource(activations.bvec_resonance_2d)
+        self.assertIn("to_numpy(davidian_weight", src)
+        self.assertNotIn("np.asarray(davidian_weight", src)
+
+
+class TestResonanceRerank(unittest.TestCase):
+    def test_reranks_by_resonance_magnitude_keeping_torsion(self):
+        from eris.tribe.research import resonance_rerank
+        goal = BVec(B=0.9, F=0.8, E=0.1, C=0.1, D=0.1, S=0.2)
+        # map each text to a bvec deterministically (no PDE in the test)
+        table = {
+            "aligned": BVec(B=0.9, F=0.8, E=0.1, C=0.1, D=0.1, S=0.2),    # strong resonance
+            "weak":    BVec(B=0.1, F=0.1, E=0.9, C=0.9, D=0.8, S=0.1),    # poor resonance
+        }
+        texts = ["weak", "aligned"]            # incoming order puts the poor match first
+        out = resonance_rerank(goal, texts, blend=1.0, bvec_of=lambda t: table[t])
+        self.assertEqual(out[0], "aligned")    # resonance promotes the real match
+
+    def test_blend_zero_preserves_incoming_order(self):
+        from eris.tribe.research import resonance_rerank
+        goal = BVec(B=0.5, F=0.5, E=0.5, C=0.5, D=0.5, S=0.5)
+        texts = ["first", "second", "third"]
+        out = resonance_rerank(goal, texts, blend=0.0,
+                               bvec_of=lambda t: BVec(*([0.5] * 6)))
+        self.assertEqual(out, texts)
+
+    def test_empty_and_missing_bvec_are_safe(self):
+        from eris.tribe.research import resonance_rerank
+        goal = BVec(*([0.5] * 6))
+        self.assertEqual(resonance_rerank(goal, []), [])
+        def _boom(t):
+            raise ValueError("no bvec")
+        out = resonance_rerank(goal, ["a", "b"], bvec_of=_boom)   # falls back to incoming order
+        self.assertEqual(out, ["a", "b"])
 
 
 if __name__ == "__main__":

@@ -787,12 +787,17 @@ class ErisOrchestrator:
         Comprehension boosters: sources are pre-digested into atomic propositions (Stage-2),
         and the synthesis/canonize steps use the DEEP model when a cloud expert is configured
         (else local). Runs in a worker thread; best-effort — returns a summary dict or {'error'}."""
-        from eris.tribe.research import run_two_cycle_research
+        from eris.tribe.research import run_two_cycle_research, resonance_rerank
         from eris.interface.mediator import run_blocking
         from eris.knowledge.embeddings import get_embedding, is_semantic
         from eris.retrieval.hybrid import hybrid_search
+        from eris.tribe.specialists import _text_to_bvec
 
         sys_prompt = self._default_system_prompt()
+        # The goal field for this research — used to rank retrieval by RESONANCE (κ cos AND
+        # λ sin/torsion), not embedding cosine alone. Computed once; off via ERIS_HIVE_RESONANCE=0.
+        goal_bvec = _text_to_bvec(document or topic)
+        _resonance_on = os.environ.get("ERIS_HIVE_RESONANCE", "1") != "0"
 
         def _rag(query: str):
             try:
@@ -828,15 +833,23 @@ class ErisOrchestrator:
                 qe = get_embedding(query) if is_semantic() else None
                 ranked = hybrid_search(query, recs, query_embedding=qe, top_k=16)
                 hits = lead + [h for h in ranked if h not in lead]   # named-doc chunks first
-                out, seen = [], set()
+                lead_text = {(getattr(h, "text", "") or "").strip() for h in lead}
+                # Dedup into a WIDER candidate pool (12), then let resonance pick the final 6.
+                cands, seen = [], set()
                 for h in hits:
                     t = (getattr(h, "text", "") or "").strip()
                     key = " ".join(t.lower().split())[:300]   # wider key → fewer false dedups
                     if key and key not in seen:
-                        seen.add(key); out.append(t[:1400])
-                    if len(out) >= 6:
+                        seen.add(key); cands.append(t[:1400])
+                    if len(cands) >= 12:
                         break
-                return out
+                # Named-doc chunks LEAD unconditionally; resonance (κ cos + λ sin/torsion) ranks
+                # the rest — so a torsion-coupled chunk can beat a merely word-similar one.
+                led = [t for t in cands if t in lead_text]
+                rest = [t for t in cands if t not in lead_text]
+                if _resonance_on and rest:
+                    rest = resonance_rerank(goal_bvec, rest, bvec_of=_text_to_bvec)
+                return (led + rest)[:6]
             except Exception:
                 return []
 
@@ -847,17 +860,19 @@ class ErisOrchestrator:
             except Exception:
                 return ""
 
-        # Deep model for the comprehension-heavy synthesis/canonize steps, IF a cloud expert
-        # is configured; otherwise this is just the local model (no behavior change, no cost).
+        # Deep model for the comprehension-heavy synthesis/canonize steps. LOCAL-ONLY by
+        # default — the hive talks to your Ollama, full stop. Routing synthesis through the
+        # cloud experts is OPT-IN (ERIS_HIVE_DEEP=1) so a stale OPENAI/ANTHROPIC key in the
+        # environment can never silently pull research onto a paid (or dead) endpoint.
+        _want_deep = os.environ.get("ERIS_HIVE_DEEP", "0") == "1" and \
+            getattr(self, "_cloud_experts", 0) >= 1
         def _deep(prompt: str) -> str:
-            if getattr(self, "_cloud_experts", 0) >= 1:
-                try:
-                    resp = run_blocking(self.deep_mediator.generate(prompt=prompt, system=sys_prompt))
-                    return getattr(resp, "text", "") or ""
-                except Exception:
-                    return _local(prompt)
-            return _local(prompt)
-        synth_model = _deep if getattr(self, "_cloud_experts", 0) >= 1 else None
+            try:
+                resp = run_blocking(self.deep_mediator.generate(prompt=prompt, system=sys_prompt))
+                return getattr(resp, "text", "") or _local(prompt)
+            except Exception:
+                return _local(prompt)
+        synth_model = _deep if _want_deep else None
 
         # Stage-2 comprehension: pre-digest each source into atomic propositions so the
         # specialists reason over distilled facts, not raw chunks (default ON; cheap, local).
