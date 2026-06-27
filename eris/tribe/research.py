@@ -90,6 +90,45 @@ def _distinct(sources: List[str]) -> List[str]:
     return out
 
 
+def resonance_rerank(goal_bvec: BVec, texts: List[str], *, top_k: Optional[int] = None,
+                     blend: float = 0.5, bvec_of: Optional[Callable[[str], BVec]] = None
+                     ) -> List[str]:
+    """Re-rank retrieved chunks by FIELD RESONANCE — not just embedding cosine (§B3).
+
+    Each chunk is scored by the 2D resonance MAGNITUDE √(R_cos²+R_sin²) against the goal
+    (κ cosine/aligned channel AND λ sine/torsion channel — the sine is kept, not discarded),
+    then BLENDED with its incoming lexical/dense rank so a torsion-coupled chunk can rise even
+    when its cosine alignment is modest, without throwing away what BM25/dense already knew.
+    `blend`=1.0 is pure resonance, 0.0 is the incoming order. Best-effort: any chunk whose
+    bvec can't be computed keeps its incoming position. Returns the reordered texts."""
+    from eris.computation.activations import bvec_resonance_2d
+    if not texts or goal_bvec is None:
+        return list(texts)
+    to_bvec = bvec_of or _text_to_bvec
+    n = len(texts)
+    scored = []
+    for i, t in enumerate(texts):
+        prior = 1.0 - (i / max(1, n - 1)) if n > 1 else 1.0   # incoming rank as a [0,1] prior
+        try:
+            res = bvec_resonance_2d(goal_bvec, to_bvec(t))["magnitude"]
+        except Exception:
+            res = None
+        scored.append([i, t, prior, res])
+    mags = [s[3] for s in scored if s[3] is not None]
+    if mags:
+        lo, hi = min(mags), max(mags)
+        span = (hi - lo) or 1.0
+        for s in scored:
+            r = s[2] if s[3] is None else (s[3] - lo) / span   # missing → fall back to prior
+            s.append(blend * r + (1.0 - blend) * s[2])
+    else:
+        for s in scored:
+            s.append(s[2])
+    scored.sort(key=lambda s: (-s[-1], s[0]))                  # stable on the incoming order
+    out = [s[1] for s in scored]
+    return out[:top_k] if top_k else out
+
+
 def _ground_citations(text: str, n_sources: int) -> tuple:
     """Citation grounding for canonized research — the strip-if-UNRESOLVED discipline from
     retrospect.py ([t:id]), applied to [s:id]. Returns (grounded_text, n_stripped). Per
@@ -119,20 +158,50 @@ def _ground_citations(text: str, n_sources: int) -> tuple:
     return " ".join(keep).strip(), stripped
 
 
+_GAP_HEADERS = {"open gaps", "gaps", "gap", "remaining gaps", "limitations",
+                "open questions", "open gap", "gaps and limitations", "open gaps and questions"}
+
+
+def _is_gap_header(line: str) -> bool:
+    return re.sub(r"[^a-z ]", "", line.lower()).strip() in _GAP_HEADERS
+
+
 def _gaps_from(text: str) -> List[str]:
-    """Pull bulleted/numbered gap lines the synthesis named (skipping section headers like
-    '**Open GAPS**' that aren't themselves gaps)."""
-    _HEADERS = {"open gaps", "gaps", "gap", "remaining gaps", "limitations",
-                "open questions", "open gap"}
-    out = []
-    for line in (text or "").splitlines():
-        line = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line.strip()).strip("*").strip()
-        if not line or len(line.split()) < 2:
+    """Pull the gaps the synthesis named — ONLY the bullets that follow an 'open GAPS'
+    section header, not every bullet in the document (the body bullets are findings, not
+    gaps; capturing them bloated cycle-2's targeted retrieval with whole paragraphs).
+
+    Falls back to scanning for explicit gap-language lines ('gap:', 'unclear', 'not
+    established', 'missing', 'unspecified', 'unknown') if no header is present."""
+    def _clean(s: str) -> str:
+        return re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", s.strip()).strip("*").strip()
+
+    lines = (text or "").splitlines()
+    out, in_section = [], False
+    for raw in lines:
+        line = _clean(raw)
+        if not line:
             continue
-        # skip a line that is ONLY a section header ("Open GAPS"), but keep "gap: <real gap>"
-        if re.sub(r"[^a-z ]", "", line.lower()).strip() in _HEADERS:
+        if _is_gap_header(line):                 # entered (or re-entered) the gaps section
+            in_section = True
             continue
-        out.append(line)
+        if in_section:
+            # a new non-gap section header (Title Case / bold, no trailing punctuation) ends it
+            if re.match(r"^[A-Z][A-Za-z ]{2,40}:?$", line) and not line.endswith((".", ";")):
+                in_section = False
+                continue
+            if len(line.split()) >= 2:
+                out.append(line)
+    if out:
+        return out[:5]
+    # No explicit section — keep only lines that actually read like a gap.
+    _GAPISH = re.compile(r"\b(gap|unclear|unknown|unspecified|not (?:yet )?(?:established|"
+                         r"provided|defined)|missing|no empirical|remains? (?:to|unclear)|"
+                         r"lacks?|absent)\b", re.I)
+    for raw in lines:
+        line = _clean(raw)
+        if len(line.split()) >= 2 and not _is_gap_header(line) and _GAPISH.search(line):
+            out.append(line)
     return out[:5]
 
 

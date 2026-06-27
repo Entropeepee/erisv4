@@ -375,9 +375,14 @@ class LLMMediator:
             try:
                 return await backend.generate(prompt, system, max_tokens, temperature)
             except Exception as e:
-                print(f"[LLMMediator] Backend {backend.__class__.__name__} failed: {e}")
-                import traceback
-                traceback.print_exc()
+                # Cascading to the next backend is EXPECTED (e.g. a keyless/stale cloud
+                # backend 401s, then we fall through to local Ollama) — one concise line, not
+                # a full traceback. Set ERIS_BACKEND_TRACE=1 to restore stack traces.
+                print(f"[LLMMediator] {backend.__class__.__name__} unavailable ({e}); "
+                      f"trying next backend")
+                if os.environ.get("ERIS_BACKEND_TRACE") == "1":
+                    import traceback
+                    traceback.print_exc()
                 continue  # Try next backend
         return None
 
