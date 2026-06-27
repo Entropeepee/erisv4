@@ -31,6 +31,7 @@ try:
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect
     from fastapi.staticfiles import StaticFiles
     from fastapi.responses import HTMLResponse, JSONResponse
+    from fastapi import Response, UploadFile, File, Request
     from pydantic import BaseModel
     HAS_FASTAPI = True
 except ImportError:
@@ -44,7 +45,6 @@ from eris.server.system_stats import get_system_stats
 from eris.memory.conversations import ConversationStore
 from eris.knowledge.study import StudyEngine
 from eris.knowledge.documents import DocumentLibrary, library_dir
-from fastapi import Response, UploadFile, File, Request
 
 
 class ChatRequest(BaseModel if HAS_FASTAPI else object):
@@ -156,6 +156,11 @@ def create_app(
     from eris.knowledge.documents import library_dir as _lib_dir
     author = DocumentAuthor(orchestrator.mediator,
                             out_dir=os.path.join(_lib_dir(), "generated"))
+    # A2: one workload governor — foreground chat stays responsive while the four
+    # background loops + heavy endpoints share the GPU. Background work serializes
+    # and defers to active foreground; chat never waits on background.
+    from eris.server.governor import Governor
+    governor = Governor()
 
     # WILLOW Part I — the multi-node collective: the pool is orchestrator.memory;
     # 'eris' is the OverSoul, 'willow' a companion node. Unreal addresses nodes
@@ -187,9 +192,10 @@ def create_app(
     async def chat(req: ChatRequest):
         """Main conversation endpoint."""
         prof = profiles.get(req.profile)
-        result = await orchestrator.process(
-            req.message, system_context=req.system_context, profile=prof
-        )
+        async with governor.foreground():
+            result = await orchestrator.process(
+                req.message, system_context=req.system_context, profile=prof
+            )
         # Tier 7: persist into a conversation thread for the history sidebar.
         cid = req.conversation_id or conversations.new_thread(req.message)
         try:
@@ -238,7 +244,10 @@ def create_app(
 
     @app.get("/api/conversations/{cid}")
     async def api_conversation(cid: str):
-        d = conversations.get_thread(cid)
+        try:
+            d = conversations.get_thread(cid)
+        except ValueError:
+            return JSONResponse({"error": "invalid conversation id"}, status_code=400)
         return d or JSONResponse({"error": "not found"}, status_code=404)
 
     @app.get("/api/dreams")
@@ -285,7 +294,8 @@ def create_app(
             return JSONResponse({"error": "topic required"}, status_code=400)
         # Jump the queue so idle_explore picks THIS topic first.
         orchestrator.dreaming_loop.topic_queue.insert(0, topic)
-        result = await asyncio.to_thread(orchestrator.dreaming_loop.idle_explore)
+        async with governor.foreground():
+            result = await asyncio.to_thread(orchestrator.dreaming_loop.idle_explore)
         if not result:
             return {"studied": topic, "message": f"Nothing new found for '{topic}'."}
         return result
@@ -316,7 +326,9 @@ def create_app(
     # ── Tier 7.4 document library ────────────────────────────────────────
     @app.get("/api/library")
     async def api_library():
-        return {"dir": library_dir(), "documents": library.list_documents()}
+        # B5: don't leak the absolute host path — basename only.
+        return {"dir": os.path.basename(library_dir().rstrip("/\\")),
+                "documents": library.list_documents()}
 
     @app.get("/api/library/progress")
     async def api_library_progress():
@@ -332,11 +344,17 @@ def create_app(
         named = mem.documents_matching(q, max_chunks=k, query_embedding=emb) if q else []
         results = mem.retrieve(query_embedding=emb, query_text=q, top_k=k) if q else []
 
+        # B5: memory snippets are raw stored content — only expose them with
+        # ERIS_DEBUG (info-disclosure if the instance is exposed).
+        _debug = os.environ.get("ERIS_DEBUG", "0").lower() not in ("0", "", "off", "false")
+
         def fmt(r):
-            return {"source": r.source,
-                    "title": (r.metadata or {}).get("title"),
-                    "chars": len(r.text or ""),
-                    "snippet": (r.text or "")[:300]}
+            row = {"source": r.source,
+                   "title": (r.metadata or {}).get("title"),
+                   "chars": len(r.text or "")}
+            if _debug:
+                row["snippet"] = (r.text or "")[:300]
+            return row
         return {
             "query": q,
             "memory_sizes": {"stm": mem.stm.size, "mtm": mem.mtm.size, "ltm": mem.ltm.size},
@@ -368,10 +386,27 @@ def create_app(
             """Ingest a file chosen in the browser (txt/md/pdf/docx/json)."""
             import tempfile
             suffix = os.path.splitext(file.filename or "upload")[1] or ".txt"
-            data = await file.read()
+            # B6: bound the upload — stream in chunks and reject past the cap so a
+            # huge file can't exhaust memory/disk. ERIS_MAX_UPLOAD_MB (default 100).
+            max_bytes = int(os.environ.get("ERIS_MAX_UPLOAD_MB", "100")) * 1024 * 1024
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                tmp.write(data)
                 tmp_path = tmp.name
+                total = 0
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > max_bytes:
+                        tmp.close()
+                        try:
+                            os.remove(tmp_path)
+                        except OSError:
+                            pass
+                        return JSONResponse(
+                            {"error": f"file too large (max {max_bytes // (1024*1024)} MB)"},
+                            status_code=413)
+                    tmp.write(chunk)
             try:
                 # Preserve the original name for memory (temp file is random).
                 res = await asyncio.to_thread(
@@ -406,9 +441,10 @@ def create_app(
         if agent is not None and agent.name != "eris":
             reply = await agent.respond(message_text.strip(), agent_backends)
         else:
-            result = await orchestrator.process(
-                message_text.strip(), system_context=system_context.strip(),
-                profile=profiles.get(req.profile))
+            async with governor.foreground():
+                result = await orchestrator.process(
+                    message_text.strip(), system_context=system_context.strip(),
+                    profile=profiles.get(req.profile))
             reply = result.response_text
 
         return {
@@ -512,9 +548,18 @@ def create_app(
         return {"questions": orchestrator.drain_pending_questions()}
 
     async def _run_sandbox(req: SandboxRequest):
+        # B2: when the instance is potentially exposed (an auth token is set), the
+        # subprocess sandbox is OFF unless explicitly enabled — exposed use should
+        # require docker-or-refuse. Local-only use (no token) keeps subprocess.
+        if _auth_token and os.environ.get("ERIS_SANDBOX_ENABLED", "0").lower() in ("0", "", "off", "false"):
+            return JSONResponse(
+                {"error": "sandbox disabled on a token-protected instance; "
+                          "set ERIS_SANDBOX_ENABLED=1 to allow it"}, status_code=403)
+        # B6: clamp the user-supplied timeout (no unbounded runs).
+        timeout = max(1, min(int(req.timeout or 60), 300))
         # Off the event loop — the subprocess/Docker run is blocking.
         result = await asyncio.to_thread(
-            lambda: sandbox.execute(req.code, timeout=req.timeout))
+            lambda: sandbox.execute(req.code, timeout=timeout))
         return {
             "status": result.status.value,
             "stdout": result.stdout,
@@ -571,7 +616,9 @@ def create_app(
 
     @app.get("/api/author/docs")
     async def api_author_docs():
-        return {"dir": author.out_dir, "documents": author.list_documents()}
+        # B5: basename only — no absolute host path.
+        return {"dir": os.path.basename(author.out_dir.rstrip("/\\")),
+                "documents": author.list_documents()}
 
     @app.get("/api/author/file")
     async def api_author_file(name: str = ""):
@@ -611,7 +658,8 @@ def create_app(
                     base *= int(os.environ.get("ERIS_GAMING_THROTTLE", "4"))
                 await asyncio.sleep(max(60, base + random.randint(-180, 180)))
             try:
-                report = await orchestrator.run_dream_cycle()
+                async with governor.background():
+                    report = await orchestrator.run_dream_cycle()
                 msg = f"[Dream Loop] Processed {report['tensions_processed']} tensions. Resolved: {report['tensions_resolved']}"
                 if report.get("explored_topic"):
                     msg += f" | learned about: {report['explored_topic'][:80]}"
@@ -646,7 +694,8 @@ def create_app(
             if now.hour == hour and now.date() != last_day:
                 last_day = now.date()
                 try:
-                    rep = await asyncio.to_thread(study.study)
+                    async with governor.background():
+                        rep = await asyncio.to_thread(study.study)
                     print(f"[Study] nightly session: {rep['total_chunks']} passages on {rep['topics']}")
                 except Exception as e:
                     print(f"[Study Error] {e}")
@@ -668,7 +717,8 @@ def create_app(
         await asyncio.sleep(150)                     # settle after boot
         while True:
             try:
-                rep = await asyncio.to_thread(study.study_one)
+                async with governor.background():
+                    rep = await asyncio.to_thread(study.study_one)
                 print(f"[Study:single] read {rep.get('topics')}: "
                       f"{rep.get('total_chunks', 0)} passages")
             except Exception as e:
@@ -686,7 +736,8 @@ def create_app(
         await asyncio.sleep(450)                     # offset from the single loop's first run
         while True:
             try:
-                rep = await asyncio.to_thread(study.deep_dive)
+                async with governor.background():
+                    rep = await asyncio.to_thread(study.deep_dive)
                 print(f"[Study:deep] dive on {rep.get('topics')}: "
                       f"{rep.get('total_chunks', 0)} passages"
                       + (" + synthesis" if rep.get("synthesis") else ""))
@@ -754,8 +805,9 @@ def create_app(
                 max_tokens=prof.max_tokens, temperature=prof.temperature))
             return (getattr(resp, "text", "") or "").strip() if resp else ""
 
-        result = await asyncio.to_thread(
-            deep_read, orchestrator.memory, summarize, src, data_dir=data_dir)
+        async with governor.foreground():
+            result = await asyncio.to_thread(
+                deep_read, orchestrator.memory, summarize, src, data_dir=data_dir)
         return result
 
     @app.get("/api/accelerators")
@@ -785,21 +837,34 @@ def create_app(
 
     @app.get("/api/status")
     async def get_status():
-        """Check if LLM is ready."""
-        import httpx
+        """Honest readiness (A3): probe the ACTUALLY-configured LLM backend(s) and
+        report whether the embeddings are truly semantic — not a hardcoded Ollama
+        URL and not 'a URL string is set'."""
+        from eris.knowledge.embeddings import is_semantic
+        backends = []
         try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                resp = await client.get("http://localhost:11434/api/tags")
-                if resp.status_code == 200:
-                    return {"llm_ready": True}
+            # available_backends calls each backend's is_available() (may do a
+            # short sync HTTP probe) — run off the event loop.
+            avail = await asyncio.to_thread(lambda: orchestrator.mediator.available_backends)
+            backends = [getattr(b, "name", b.__class__.__name__) for b in avail]
         except Exception:
-            pass
-        return {"llm_ready": False}
+            backends = []
+        try:
+            semantic = await asyncio.to_thread(is_semantic)
+        except Exception:
+            semantic = False
+        return {"llm_ready": bool(backends), "backends": backends,
+                "embeddings_semantic": semantic}
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         """WebSocket for real-time metrics streaming."""
         await websocket.accept()
+        # B6: cap concurrent metric sockets so they can't grow without bound.
+        _ws_cap = int(os.environ.get("ERIS_WS_MAX", "32"))
+        if len(ws_connections) >= _ws_cap:
+            await websocket.close(code=1013)   # try again later
+            return
         ws_connections.append(websocket)
         try:
             while True:

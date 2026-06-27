@@ -8,16 +8,22 @@ security; this just stops anyone else who reaches the port from using her.
 """
 from __future__ import annotations
 from typing import Optional
+import secrets
 
 
 def token_ok(expected: str, *, header: Optional[str] = None,
              query: Optional[str] = None, cookie: Optional[str] = None) -> bool:
     """True if any presented credential matches the expected token. If no token is
-    configured (expected falsy), everything is allowed (gate disabled)."""
+    configured (expected falsy), everything is allowed (gate disabled).
+
+    B7: constant-time comparison (secrets.compare_digest) so the check doesn't
+    leak the token byte-by-byte via timing. (The earlier 'substring auth' finding
+    was WRONG — this was tuple equality, never a substring match.)"""
     expected = (expected or "").strip()
     if not expected:
         return True
-    return expected in (header or "", query or "", cookie or "")
+    return any(secrets.compare_digest(expected, cred or "")
+               for cred in (header, query, cookie))
 
 
 def make_auth_middleware(token: str):

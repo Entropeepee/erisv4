@@ -34,6 +34,8 @@ window.addEventListener('load', () => {
 // Escape HTML, then render a safe subset of Markdown so bold/italic/code
 // show up properly in the chat bubble (instead of raw ** and *).
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// B4: only http(s) links are safe to render as anchors (rejects javascript:/data:).
+function isSafeHttpUrl(u){ try{ const x=new URL(u, location.href); return x.protocol==='http:'||x.protocol==='https:'; }catch(_){ return false; } }
 function mdToHtml(t){
   let s=esc(t);
   s=s.replace(/```([\s\S]*?)```/g,(m,c)=>`<pre>${c.replace(/\n$/,'')}</pre>`);
@@ -41,7 +43,9 @@ function mdToHtml(t){
   s=s.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
   s=s.replace(/__([^_]+)__/g,'<strong>$1</strong>');
   s=s.replace(/(^|[^*])\*([^*\n]+)\*/g,'$1<em>$2</em>');
-  s=s.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');
+  // B4: forbid quotes/whitespace/angle-brackets in the URL so it can't break out
+  // of the href attribute; require a real scheme://.
+  s=s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s"'<>]+)\)/g,'<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
   s=s.replace(/\n/g,'<br>');
   return s;
 }
@@ -101,6 +105,7 @@ async function send(){
       // talk to a specific node via the OpenAI-shaped, model-routed endpoint
       const r=await fetch('/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({model:node, profile:profile, messages:[{role:'user',content:t}]})});
+      if(!r.ok){ const m=await r.text().catch(()=>''); thinking.firstChild.textContent='Error: HTTP '+r.status+(m?' – '+m.slice(0,200):''); return; }
       const d=await r.json();
       const reply=(((d.choices||[])[0]||{}).message||{}).content||'(no response)';
       thinking.firstChild.innerHTML=mdToHtml(reply);
@@ -111,17 +116,26 @@ async function send(){
     }
     const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:t, conversation_id:convId||'', profile:profile})});
+    if(!r.ok){ const m=await r.text().catch(()=>''); thinking.firstChild.textContent='Error: HTTP '+r.status+(m?' – '+m.slice(0,200):''); return; }
     const d=await r.json();
     convId=d.conversation_id||convId;
     thinking.firstChild.innerHTML=mdToHtml(d.response||'(no response)');
     const cites=d.citations||[];
     if(cites.length){
+      // B4: build with DOM nodes + textContent (never innerHTML) and validate the
+      // URL scheme — a poisoned citation title/url is rendered inert, not injected.
       const cc=document.createElement('div'); cc.className='cites';
       cc.style.cssText='margin-top:6px;font-size:11px;opacity:.75';
-      cc.innerHTML='Sources: '+cites.map(c=>{
+      cc.appendChild(document.createTextNode('Sources: '));
+      cites.forEach((c,i)=>{
+        if(i) cc.appendChild(document.createTextNode(' · '));
         const label=(c.title||c.source||'source').replace(/^reading:|^study:|^exploration:/,'');
-        return c.url ? `<a href="${c.url}" target="_blank">${label}</a>` : `<span>${label}</span>`;
-      }).join(' · ');
+        let el;
+        if(c.url && isSafeHttpUrl(c.url)){ el=document.createElement('a'); el.href=c.url; el.target='_blank'; el.rel='noopener noreferrer'; }
+        else { el=document.createElement('span'); }
+        el.textContent=label;
+        cc.appendChild(el);
+      });
       thinking.appendChild(cc);
     }
     const mm=document.createElement('div'); mm.className='mm';

@@ -171,7 +171,8 @@ class LibraryManifest:
         self.entries: Dict[str, Dict[str, Any]] = {}
         if os.path.exists(path):
             try:
-                self.entries = json.load(open(path, encoding="utf-8"))
+                with open(path, encoding="utf-8") as f:
+                    self.entries = json.load(f)
             except Exception:
                 self.entries = {}
 
@@ -179,11 +180,24 @@ class LibraryManifest:
         return sha in self.entries
 
     def record(self, sha: str, info: Dict[str, Any]) -> None:
+        # A5: atomic write — temp file in the same dir + os.replace, with a
+        # context manager (no leaked handle). A crash or overlapping ingest
+        # leaves the manifest as the complete old OR complete new file, never
+        # a truncated half-write.
         self.entries[sha] = info
+        tmp = self.path + ".tmp"
         try:
-            json.dump(self.entries, open(self.path, "w", encoding="utf-8"))
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.entries, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.path)
         except Exception:
-            pass
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
 
     def list(self) -> List[Dict[str, Any]]:
         rows = list(self.entries.values())
@@ -280,12 +294,32 @@ class DocumentLibrary:
         directory = directory or library_dir()
         results: List[Dict[str, Any]] = []
         if not os.path.isdir(directory):
-            return {"dir": directory, "error": "folder not found", "files": []}
+            # B5: basename only — no absolute host path in the response.
+            return {"dir": os.path.basename(directory.rstrip("/\\")),
+                    "error": "folder not found", "files": []}
+        # B6: bound a folder scan — cap file count + total bytes and SKIP symlinks
+        # (a symlinked file/dir could pull in content from outside the tree).
+        max_files = int(os.environ.get("ERIS_INGEST_MAX_FILES", "5000"))
+        max_bytes = int(os.environ.get("ERIS_INGEST_MAX_GB", "5")) * 1024 ** 3
         paths = []
-        for root, _, files in os.walk(directory):
+        total_bytes = 0
+        for root, dirs, files in os.walk(directory):
+            dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
             for fn in sorted(files):
-                if fn.lower().endswith(SUPPORTED_EXT):
-                    paths.append(os.path.join(root, fn))
+                if not fn.lower().endswith(SUPPORTED_EXT):
+                    continue
+                fp = os.path.join(root, fn)
+                if os.path.islink(fp):
+                    continue
+                try:
+                    total_bytes += os.path.getsize(fp)
+                except OSError:
+                    continue
+                paths.append(fp)
+                if len(paths) >= max_files or total_bytes >= max_bytes:
+                    break
+            if len(paths) >= max_files or total_bytes >= max_bytes:
+                break
         self._progress_begin(len(paths))
         try:
             for fp in paths:
@@ -298,7 +332,7 @@ class DocumentLibrary:
         finally:
             self._progress_end()
         return {
-            "dir": directory,
+            "dir": os.path.basename(directory.rstrip("/\\")),   # B5: basename only
             "files": results,
             "ingested": sum(1 for r in results if not r.get("skipped") and not r.get("error")),
             "skipped": sum(1 for r in results if r.get("skipped")),
@@ -316,4 +350,12 @@ class DocumentLibrary:
             self._progress_end()
 
     def list_documents(self) -> List[Dict[str, Any]]:
-        return self.manifest.list()
+        # B5: never expose the absolute host path stored in the manifest — return
+        # the basename only (the full path stays on disk for internal use).
+        out = []
+        for e in self.manifest.list():
+            e = dict(e)
+            if e.get("path"):
+                e["path"] = os.path.basename(str(e["path"]).rstrip("/\\"))
+            out.append(e)
+        return out
