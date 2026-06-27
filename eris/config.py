@@ -217,6 +217,25 @@ class ErisConfig:
     stt_base_url: str = os.environ.get("ERIS_STT_BASE_URL", "")       # Whisper-on-NPU; else off
     stt_model: str = os.environ.get("ERIS_STT_MODEL", "")
     accel_timeout_s: float = float(os.environ.get("ERIS_ACCEL_TIMEOUT", "20"))
+
+    # ── Contractor Layer: sovereignty-routed LLM gateway (contractor_gateway_layer_spec) ──
+    # One control plane for NON-sensitive outcalls, behind the existing mediator. UNSET =>
+    # current behavior (no gateway, direct backends only). The sovereign/IP-sensitive path
+    # NEVER uses the gateway regardless of these. Mirrors the ERIS_*_BASE_URL convention.
+    gateway_base_url: str = os.environ.get("ERIS_GATEWAY_BASE_URL", "")   # e.g. http://localhost:4000/v1
+    gateway_api_key: str = os.environ.get("ERIS_GATEWAY_API_KEY", "sk-litellm-local")
+    # Model-group names the gateway exposes (LiteLLM config.yaml). Cost-tiered.
+    tier_free: str = os.environ.get("ERIS_TIER_FREE", "free-pool")        # bulk reasoning
+    tier_cheap: str = os.environ.get("ERIS_TIER_CHEAP", "cheap-paid")     # overflow
+    tier_synth: str = os.environ.get("ERIS_TIER_SYNTH", "synth")          # frontier synthesis
+    gateway_timeout_s: float = float(os.environ.get("ERIS_GATEWAY_TIMEOUT", "120"))
+    # Hive synthesis escalation (Stage 2) — DEFAULT OFF. The A/B remains its gate; flip on
+    # only after the numbers confirm the hive earns a frontier-tier synthesis.
+    hive_synth_cloud: bool = os.environ.get("ERIS_HIVE_SYNTH_CLOUD", "0").strip().lower() in ("1", "on", "true", "yes")
+    # Optional sandboxed Hermes contractor (non-IP autonomous research) — DEFAULT OFF.
+    hermes_base_url: str = os.environ.get("ERIS_HERMES_BASE_URL", "")     # e.g. http://127.0.0.1:8642
+    hermes_api_key: str = os.environ.get("ERIS_HERMES_API_KEY", "")
+
     # Ingestion chunker: "structured" (section/paragraph-aware + contextual
     # headers — the higher-recall default) or "legacy" (naive fixed-char).
     chunker: str = os.environ.get("ERIS_CHUNKER", "structured")
