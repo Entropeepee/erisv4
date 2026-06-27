@@ -244,7 +244,10 @@ def create_app(
 
     @app.get("/api/conversations/{cid}")
     async def api_conversation(cid: str):
-        d = conversations.get_thread(cid)
+        try:
+            d = conversations.get_thread(cid)
+        except ValueError:
+            return JSONResponse({"error": "invalid conversation id"}, status_code=400)
         return d or JSONResponse({"error": "not found"}, status_code=404)
 
     @app.get("/api/dreams")
@@ -323,7 +326,9 @@ def create_app(
     # ── Tier 7.4 document library ────────────────────────────────────────
     @app.get("/api/library")
     async def api_library():
-        return {"dir": library_dir(), "documents": library.list_documents()}
+        # B5: don't leak the absolute host path — basename only.
+        return {"dir": os.path.basename(library_dir().rstrip("/\\")),
+                "documents": library.list_documents()}
 
     @app.get("/api/library/progress")
     async def api_library_progress():
@@ -339,11 +344,17 @@ def create_app(
         named = mem.documents_matching(q, max_chunks=k, query_embedding=emb) if q else []
         results = mem.retrieve(query_embedding=emb, query_text=q, top_k=k) if q else []
 
+        # B5: memory snippets are raw stored content — only expose them with
+        # ERIS_DEBUG (info-disclosure if the instance is exposed).
+        _debug = os.environ.get("ERIS_DEBUG", "0").lower() not in ("0", "", "off", "false")
+
         def fmt(r):
-            return {"source": r.source,
-                    "title": (r.metadata or {}).get("title"),
-                    "chars": len(r.text or ""),
-                    "snippet": (r.text or "")[:300]}
+            row = {"source": r.source,
+                   "title": (r.metadata or {}).get("title"),
+                   "chars": len(r.text or "")}
+            if _debug:
+                row["snippet"] = (r.text or "")[:300]
+            return row
         return {
             "query": q,
             "memory_sizes": {"stm": mem.stm.size, "mtm": mem.mtm.size, "ltm": mem.ltm.size},
@@ -375,10 +386,27 @@ def create_app(
             """Ingest a file chosen in the browser (txt/md/pdf/docx/json)."""
             import tempfile
             suffix = os.path.splitext(file.filename or "upload")[1] or ".txt"
-            data = await file.read()
+            # B6: bound the upload — stream in chunks and reject past the cap so a
+            # huge file can't exhaust memory/disk. ERIS_MAX_UPLOAD_MB (default 100).
+            max_bytes = int(os.environ.get("ERIS_MAX_UPLOAD_MB", "100")) * 1024 * 1024
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                tmp.write(data)
                 tmp_path = tmp.name
+                total = 0
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > max_bytes:
+                        tmp.close()
+                        try:
+                            os.remove(tmp_path)
+                        except OSError:
+                            pass
+                        return JSONResponse(
+                            {"error": f"file too large (max {max_bytes // (1024*1024)} MB)"},
+                            status_code=413)
+                    tmp.write(chunk)
             try:
                 # Preserve the original name for memory (temp file is random).
                 res = await asyncio.to_thread(
@@ -520,9 +548,18 @@ def create_app(
         return {"questions": orchestrator.drain_pending_questions()}
 
     async def _run_sandbox(req: SandboxRequest):
+        # B2: when the instance is potentially exposed (an auth token is set), the
+        # subprocess sandbox is OFF unless explicitly enabled — exposed use should
+        # require docker-or-refuse. Local-only use (no token) keeps subprocess.
+        if _auth_token and os.environ.get("ERIS_SANDBOX_ENABLED", "0").lower() in ("0", "", "off", "false"):
+            return JSONResponse(
+                {"error": "sandbox disabled on a token-protected instance; "
+                          "set ERIS_SANDBOX_ENABLED=1 to allow it"}, status_code=403)
+        # B6: clamp the user-supplied timeout (no unbounded runs).
+        timeout = max(1, min(int(req.timeout or 60), 300))
         # Off the event loop — the subprocess/Docker run is blocking.
         result = await asyncio.to_thread(
-            lambda: sandbox.execute(req.code, timeout=req.timeout))
+            lambda: sandbox.execute(req.code, timeout=timeout))
         return {
             "status": result.status.value,
             "stdout": result.stdout,
@@ -579,7 +616,9 @@ def create_app(
 
     @app.get("/api/author/docs")
     async def api_author_docs():
-        return {"dir": author.out_dir, "documents": author.list_documents()}
+        # B5: basename only — no absolute host path.
+        return {"dir": os.path.basename(author.out_dir.rstrip("/\\")),
+                "documents": author.list_documents()}
 
     @app.get("/api/author/file")
     async def api_author_file(name: str = ""):
@@ -821,6 +860,11 @@ def create_app(
     async def websocket_endpoint(websocket: WebSocket):
         """WebSocket for real-time metrics streaming."""
         await websocket.accept()
+        # B6: cap concurrent metric sockets so they can't grow without bound.
+        _ws_cap = int(os.environ.get("ERIS_WS_MAX", "32"))
+        if len(ws_connections) >= _ws_cap:
+            await websocket.close(code=1013)   # try again later
+            return
         ws_connections.append(websocket)
         try:
             while True:

@@ -11,9 +11,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from typing import Any, Dict, List, Optional
+
+# B3: a conversation id becomes a filename, so a browser-supplied "../"-laced id
+# could read/write outside the conversations dir. Generated ids (uuid4().hex[:12])
+# already match this; this only rejects hostile input.
+_CID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def _now() -> float:
@@ -27,6 +33,8 @@ class ConversationStore:
 
     # ---- paths ----
     def _path(self, cid: str) -> str:
+        if not _CID_RE.match(cid or ""):
+            raise ValueError(f"invalid conversation id: {cid!r}")
         return os.path.join(self.dir, f"{cid}.json")
 
     # ---- create / append ----
