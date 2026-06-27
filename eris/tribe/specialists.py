@@ -30,11 +30,15 @@ research engine activates (broad → synthesis → refined → canonize).
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Callable
+import re
 import time
 
 from eris.computation.activations import BVec, bvec_cosine, bvec_resonance
 from eris.computation.sgt import SGTGate
+
+Model = Callable[[str], str]            # prompt -> text (injected; stub in tests)
+_WORD = re.compile(r"[a-z0-9]{3,}")
 
 
 @dataclass
@@ -193,4 +197,80 @@ def make_field_finding(specialist: Specialist, field_bvec: BVec) -> SpecialistFi
         content=text,
         bvec=bid,
         confidence=strength,
+    )
+
+
+# ── §A1: substantive reasoned findings (deep cycles only, local-model) ───────
+def _trigrams(text: str) -> set:
+    toks = _WORD.findall((text or "").lower())
+    return {tuple(toks[i:i + 3]) for i in range(len(toks) - 2)} if len(toks) >= 3 else set()
+
+
+def _echo_overlap(reasoning: str, source_text: str) -> float:
+    """Fraction of the reasoning's trigrams that merely echo the source text — the
+    'placeholder echo of the user's words' failure mode the field-finding fix was
+    fighting. High overlap ⇒ the specialist restated instead of reasoning."""
+    r = _trigrams(reasoning)
+    if not r:
+        return 0.0
+    return len(r & _trigrams(source_text)) / len(r)
+
+
+def _text_to_bvec(text: str, field_size: int = 32):
+    """Compute a BFECDS vector from the reasoning via the real computed-activations
+    bridge (TextFrontend seeds a field, the PDE evolves it, the field is measured) — so
+    the MoEGate scores the REASONING's field signature, not a label. Lazy import keeps
+    the tribe module light and avoids an import cycle."""
+    from eris.knowledge.frontends import TextFrontend
+    return TextFrontend().to_bvec(text, size=field_size)
+
+
+def make_reasoned_finding(specialist: Specialist, goal: str, retrieved_context: str,
+                          model: Model, *, bvec_fn: Optional[Callable[[str], BVec]] = None,
+                          field_size: int = 32, max_regens: int = 1) -> SpecialistFinding:
+    """A genuine domain-lens finding (§A1) — the substantive mode for DEEP cycles only.
+
+    The active specialist reasons through its domain over the RETRIEVED CONTEXT via the
+    injected local model, under the truth-contract (grounded reflection, no fabricated
+    human autobiography). Its content is the reasoning; its bvec is computed FROM that
+    reasoning, so the MoEGate scores real analysis instead of a `"<Name>: <strength> bid"`
+    label. Guards: regenerate once if the truth-contract backstop trips or the output just
+    echoes the goal; if it still echoes, flag it and down-weight (low confidence) so the
+    gate never lets an echo win. Local-model only (the per-turn cost that broke it before
+    is avoided by gating this to deep cycles + the top-K active cap)."""
+    from eris.metacognition.truth_contract import PONDER_CONTRACT, fabricated_self
+    context = (retrieved_context or "").strip() or "(no sources retrieved)"
+    base = (
+        f"{PONDER_CONTRACT}\n\n"
+        f"You are {specialist.name}, the {specialist.domain} specialist "
+        f"({specialist.description}). Through your domain lens ONLY, give ONE concrete, "
+        f"specific finding about the topic below, grounded STRICTLY in the provided "
+        f"sources. Do NOT restate the question or the sources verbatim — add {specialist.domain} "
+        f"analysis the sources support. 2-4 sentences.\n\n"
+        f"TOPIC: {goal}\n\nSOURCES:\n{context}\n\n{specialist.name}'s finding:"
+    )
+    reasoning, echoed = "", False
+    for attempt in range(max_regens + 1):
+        prompt = base if attempt == 0 else (
+            base + "\n\n(Your last attempt echoed the prompt. Give ORIGINAL domain analysis.)")
+        try:
+            reasoning = (model(prompt) or "").strip()
+        except Exception:
+            reasoning = ""
+        if not reasoning:
+            continue
+        if fabricated_self(reasoning):                 # truth-contract backstop
+            base = base + "\n\n(Reflect as Eris — do not invent a human past.)"
+            continue
+        echoed = _echo_overlap(reasoning, f"{goal}\n{context}") > 0.5
+        if not echoed:
+            break
+    bvec = (bvec_fn or (lambda t: _text_to_bvec(t, field_size)))(reasoning or specialist.name)
+    return SpecialistFinding(
+        specialist_id=specialist.id,
+        content=reasoning or f"({specialist.name}: no grounded finding)",
+        bvec=bvec,
+        confidence=0.1 if (echoed or not reasoning) else float(bvec.magnitude()),
+        metadata={"mode": "reasoned", "grounded": True, "echo": echoed,
+                  "empty": not bool(reasoning)},
     )
