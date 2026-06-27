@@ -133,6 +133,29 @@ class TestTribeResearch(unittest.TestCase):
         self.assertGreater(res.n_sources, 0)            # retrieval still happened
         self.assertIn("[s:0]", res.synthesis)
 
+    def test_gaps_parsing_ignores_body_bullets_takes_only_gap_section(self):
+        # the bug from David's BLECD run: body findings (bulleted) were captured as "gaps",
+        # bloating cycle-2 retrieval with whole paragraphs. Only the post-header section counts.
+        from eris.tribe.research import _gaps_from
+        text = ("**What BLECD says**\n"
+                "- Criticality is one of six domains in the interaction matrix.\n"
+                "- The off-diagonal coefficient is the tuning lever.\n"
+                "**Open Gaps**\n"
+                "- no empirical mapping from symbols to control knobs\n"
+                "- sign convention is unspecified")
+        gaps = _gaps_from(text)
+        self.assertTrue(any("empirical mapping" in g for g in gaps))
+        self.assertTrue(any("sign convention" in g for g in gaps))
+        self.assertFalse(any("six domains" in g for g in gaps))      # body finding, NOT a gap
+        self.assertFalse(any("tuning lever" in g for g in gaps))
+
+    def test_gaps_parsing_falls_back_to_gap_language_without_header(self):
+        from eris.tribe.research import _gaps_from
+        text = ("Integrated view grounded in [s:0].\n"
+                "- gap: long-term dynamics remain unclear")
+        gaps = _gaps_from(text)
+        self.assertTrue(any("long-term dynamics" in g for g in gaps))
+
     def test_elos_falsifies_when_active(self):
         seen = {"elos": False}
         def model(prompt):

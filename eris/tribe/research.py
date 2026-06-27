@@ -158,20 +158,50 @@ def _ground_citations(text: str, n_sources: int) -> tuple:
     return " ".join(keep).strip(), stripped
 
 
+_GAP_HEADERS = {"open gaps", "gaps", "gap", "remaining gaps", "limitations",
+                "open questions", "open gap", "gaps and limitations", "open gaps and questions"}
+
+
+def _is_gap_header(line: str) -> bool:
+    return re.sub(r"[^a-z ]", "", line.lower()).strip() in _GAP_HEADERS
+
+
 def _gaps_from(text: str) -> List[str]:
-    """Pull bulleted/numbered gap lines the synthesis named (skipping section headers like
-    '**Open GAPS**' that aren't themselves gaps)."""
-    _HEADERS = {"open gaps", "gaps", "gap", "remaining gaps", "limitations",
-                "open questions", "open gap"}
-    out = []
-    for line in (text or "").splitlines():
-        line = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line.strip()).strip("*").strip()
-        if not line or len(line.split()) < 2:
+    """Pull the gaps the synthesis named — ONLY the bullets that follow an 'open GAPS'
+    section header, not every bullet in the document (the body bullets are findings, not
+    gaps; capturing them bloated cycle-2's targeted retrieval with whole paragraphs).
+
+    Falls back to scanning for explicit gap-language lines ('gap:', 'unclear', 'not
+    established', 'missing', 'unspecified', 'unknown') if no header is present."""
+    def _clean(s: str) -> str:
+        return re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", s.strip()).strip("*").strip()
+
+    lines = (text or "").splitlines()
+    out, in_section = [], False
+    for raw in lines:
+        line = _clean(raw)
+        if not line:
             continue
-        # skip a line that is ONLY a section header ("Open GAPS"), but keep "gap: <real gap>"
-        if re.sub(r"[^a-z ]", "", line.lower()).strip() in _HEADERS:
+        if _is_gap_header(line):                 # entered (or re-entered) the gaps section
+            in_section = True
             continue
-        out.append(line)
+        if in_section:
+            # a new non-gap section header (Title Case / bold, no trailing punctuation) ends it
+            if re.match(r"^[A-Z][A-Za-z ]{2,40}:?$", line) and not line.endswith((".", ";")):
+                in_section = False
+                continue
+            if len(line.split()) >= 2:
+                out.append(line)
+    if out:
+        return out[:5]
+    # No explicit section — keep only lines that actually read like a gap.
+    _GAPISH = re.compile(r"\b(gap|unclear|unknown|unspecified|not (?:yet )?(?:established|"
+                         r"provided|defined)|missing|no empirical|remains? (?:to|unclear)|"
+                         r"lacks?|absent)\b", re.I)
+    for raw in lines:
+        line = _clean(raw)
+        if len(line.split()) >= 2 and not _is_gap_header(line) and _GAPISH.search(line):
+            out.append(line)
     return out[:5]
 
 

@@ -32,15 +32,47 @@ def citation_resolution_rate(synthesis: str, n_sources: int) -> float:
     return len(cited & set(range(n_sources))) / len(cited)
 
 
+# short function words carry no grounding signal — exclude them so the metric measures
+# CONTENT, not how many "the/of/and"s a passage happens to share.
+_STOP = frozenset(
+    "the a an and or but of to in on at by for with from into over under as is are was were be "
+    "been being this that these those it its their there here then than thus so we you they he she "
+    "i not no nor can could will would shall should may might must do does did has have had not "
+    "which who whom whose what when where why how all any both each few more most other some such "
+    "only own same too very s t can".split())
+
+
+def _content_words(text: str) -> set:
+    """Distinct content tokens (len≥4, non-stopword) — paraphrase-tolerant unit of meaning."""
+    return {w for w in re.findall(r"[a-z][a-z0-9]{3,}", (text or "").lower()) if w not in _STOP}
+
+
 def _trigrams(text: str) -> set:
     toks = re.findall(r"[a-z0-9]{3,}", (text or "").lower())
     return {tuple(toks[i:i + 3]) for i in range(len(toks) - 2)} if len(toks) >= 3 else set()
 
 
 def source_alignment(synthesis: str, sources: List[str]) -> float:
-    """Fraction of the synthesis's trigrams that appear in SOME source — does the synthesis
-    actually draw on the sources, or invent? (A discriminating quality signal, unlike the
-    post-grounding citation rate.)"""
+    """Grounding signal: fraction of the synthesis's CONTENT WORDS that appear in some source.
+
+    Deliberately uses unigram content words, NOT verbatim trigrams: a deeper synthesis
+    paraphrases and integrates (it does not parrot source phrasing), so trigram overlap
+    punishes comprehension and rewards copying — the opposite of what we want. Content-word
+    overlap is paraphrase-tolerant: a faithful restatement reuses the same terms even when it
+    rewrites the sentences, while an invented claim introduces vocabulary the sources lack."""
+    syn = _content_words(synthesis)
+    if not syn:
+        return 0.0
+    src = set()
+    for s in sources:
+        src |= _content_words(s)
+    return len(syn & src) / len(syn)
+
+
+def verbatim_overlap(synthesis: str, sources: List[str]) -> float:
+    """Trigram overlap — how much the synthesis COPIES source phrasing (low is fine, even good:
+    it means abstraction). Reported alongside source_alignment to separate 'grounded' from
+    'extractive', so a paraphrasing hive isn't mistaken for an ungrounded one."""
     syn = _trigrams(synthesis)
     if not syn:
         return 0.0
@@ -56,9 +88,11 @@ def metrics_from(summary: Dict[str, Any]) -> Dict[str, Any]:
     n = max(1, summary.get("n_sources", 0))
     pre = summary.get("synthesis_pre_ground", "") or summary.get("synthesis", "")
     final = summary.get("synthesis", "") or ""
+    srcs = summary.get("sources", [])
     return {
         "citation_resolution_pre_ground": round(citation_resolution_rate(pre, n), 4),
-        "source_alignment": round(source_alignment(final, summary.get("sources", [])), 4),
+        "source_alignment": round(source_alignment(final, srcs), 4),       # grounded (paraphrase-ok)
+        "verbatim_overlap": round(verbatim_overlap(final, srcs), 4),       # how extractive/copied
         "domain_diversity": summary.get("n_contributors", 0),
         "n_active": summary.get("n_active", 0),
         "cycles": summary.get("cycles", 0),
