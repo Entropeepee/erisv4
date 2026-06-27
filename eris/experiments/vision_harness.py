@@ -123,12 +123,11 @@ def run_within(data_dir: str, cfg: VisionConfig, *, debias: bool = False) -> dic
     rand = baseline_random(classes, len(te))
     rand_acc = float(np.mean([r == g for r, g in zip(rand, gold)]))
 
-    # RULE 4 ablation: RGB/textness delta (measured, never in the headline).
-    rgb_delta = None
-    if cfg.use_rgb or True:
-        cfg_rgb = VisionConfig(size=cfg.size, laf=cfg.laf, use_rgb=True)
-        # (kept as a hook; full RGB+SVM baseline runs on the machine with sklearn)
-        rgb_delta = "see baselines (sklearn)"
+    # RULE 4 ablation: RGB/textness delta is measured in a SEPARATE arm, never in
+    # the headline number above. The full RGB+SVM baseline needs sklearn and runs on
+    # the machine (see baselines); here we only record where to read it from so the
+    # grayscale-field-only headline stays clean.
+    rgb_delta = "see baselines (sklearn RGB+SVM ablation arm)"
 
     return {
         "classes": classes, "n": n, "test": len(te),

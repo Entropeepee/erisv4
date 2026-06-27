@@ -77,13 +77,19 @@ class ClassPrototype:
 
 
 def build_prototype(label: str, sigs: List[Signature], cfg: VisionConfig) -> ClassPrototype:
-    """Deterministic centroid — NO fitting. Circular-mean phase, mean κ-subspace
-    (SVD of the stacked modes), mean λ and τ-stats."""
+    """Deterministic centroid — NO fitting. Circular-mean phase, extrinsic mean
+    κ-subspace, mean λ and τ-stats.
+
+    The κ-subspace mean is the extrinsic (Karcher-flavoured) mean subspace: stacking
+    the per-image orthonormal κ bases column-wise and taking the top-r left singular
+    vectors is equivalent to the top-r eigenvectors of the averaged projection
+    operator Σᵢ BᵢBᵢᵀ (since [B₁ … Bₙ][B₁ … Bₙ]ᵀ = Σᵢ BᵢBᵢᵀ). That is the standard
+    mean of subspaces, not an arbitrary basis pick — still zero learned parameters."""
     mags = np.stack([s.mag for s in sigs])
     thetas = np.stack([s.theta for s in sigs])
     mean_mag = mags.mean(axis=0)
     mean_theta = np.arctan2(np.sin(thetas).mean(axis=0), np.cos(thetas).mean(axis=0))
-    K = np.concatenate([s.kappa for s in sigs], axis=1)
+    K = np.concatenate([s.kappa for s in sigs], axis=1)   # extrinsic mean subspace ↑
     U, _, _ = np.linalg.svd(K, full_matrices=False)
     r = min(cfg.laf.n_modes, U.shape[1])
     mean_kappa = U[:, :r]
