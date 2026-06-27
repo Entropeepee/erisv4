@@ -171,7 +171,8 @@ class LibraryManifest:
         self.entries: Dict[str, Dict[str, Any]] = {}
         if os.path.exists(path):
             try:
-                self.entries = json.load(open(path, encoding="utf-8"))
+                with open(path, encoding="utf-8") as f:
+                    self.entries = json.load(f)
             except Exception:
                 self.entries = {}
 
@@ -179,11 +180,24 @@ class LibraryManifest:
         return sha in self.entries
 
     def record(self, sha: str, info: Dict[str, Any]) -> None:
+        # A5: atomic write — temp file in the same dir + os.replace, with a
+        # context manager (no leaked handle). A crash or overlapping ingest
+        # leaves the manifest as the complete old OR complete new file, never
+        # a truncated half-write.
         self.entries[sha] = info
+        tmp = self.path + ".tmp"
         try:
-            json.dump(self.entries, open(self.path, "w", encoding="utf-8"))
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.entries, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.path)
         except Exception:
-            pass
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
 
     def list(self) -> List[Dict[str, Any]]:
         rows = list(self.entries.values())

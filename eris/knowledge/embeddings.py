@@ -159,9 +159,16 @@ def _post_json(url: str, payload: dict, timeout: float) -> dict:
         return r.json()
 
 
+# A3: track whether the configured embedding provider actually WORKED on its last
+# call, so is_semantic() reflects a successful probe rather than merely that a URL
+# string is set (it could be down and silently falling back to hashed embeddings).
+_PROVIDER_HEALTHY = None   # None = not yet attempted; True/False after a real call
+
+
 def _provider_embeddings(texts):
     """POST many texts to the configured /embeddings service (OpenAI shape).
     Returns a list of float32 vectors, or None to signal 'fall back'."""
+    global _PROVIDER_HEALTHY
     from eris.config import CONFIG
     base = (CONFIG.embed_base_url or "").rstrip("/")
     if not base:
@@ -176,6 +183,7 @@ def _provider_embeddings(texts):
         if len(vecs) != len(texts):
             _warn_once(f"[embeddings] provider returned {len(vecs)} of {len(texts)} "
                        f"vectors; falling back to in-process.")
+            _PROVIDER_HEALTHY = False
             return None
         # Dimension guard: a different-dim model would corrupt retrieval.
         if vecs and vecs[0].shape[0] != EMBED_DIM:
@@ -183,11 +191,14 @@ def _provider_embeddings(texts):
                 f"[embeddings] provider dim {vecs[0].shape[0]} != EMBED_DIM {EMBED_DIM}. "
                 f"Falling back. Set ERIS_EMBED_DIM to match the served model AND run "
                 f"reembed_memory() once — stored vectors were made by another model.")
+            _PROVIDER_HEALTHY = False
             return None
+        _PROVIDER_HEALTHY = True
         return vecs
     except Exception as e:
         _warn_once(f"[embeddings] provider error ({e}); falling back to in-process. "
                    "(logged once)")
+        _PROVIDER_HEALTHY = False
         return None
 
 
@@ -220,10 +231,18 @@ def get_embedding(text: str) -> np.ndarray:
 
 
 def is_semantic() -> bool:
-    """True if a real semantic source is active (external provider or local model)."""
+    """True only if a real semantic source is ACTIVE — a working external provider
+    or a loaded local model. A configured-but-down provider that has silently
+    fallen back to hashed embeddings reports False (A3: honest state)."""
     from eris.config import CONFIG
     if CONFIG.embed_base_url:
-        return True
+        global _PROVIDER_HEALTHY
+        if _PROVIDER_HEALTHY is None:
+            try:                         # one real probe to learn provider health
+                _provider_embeddings(["probe"])
+            except Exception:
+                _PROVIDER_HEALTHY = False
+        return bool(_PROVIDER_HEALTHY)
     return _use_real_model() and _model() is not None
 
 
