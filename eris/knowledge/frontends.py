@@ -31,8 +31,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Tuple, Optional
 import numpy as np
-import scipy.signal
-import scipy.fft
+# scipy is imported lazily inside the audio/sensor stubs that use it, so the
+# image and text frontends (pure NumPy) import even where scipy isn't installed.
 
 from eris.computation.activations import BVec
 
@@ -128,6 +128,7 @@ class AudioFrontend(ModalityFrontend):
         data = data.flatten()
         
         # Extract spectrogram (STFT)
+        import scipy.signal
         f, t, Zxx = scipy.signal.stft(data, nperseg=min(256, len(data)))
         mag = np.abs(Zxx)
         phase = np.angle(Zxx)
@@ -146,51 +147,79 @@ class AudioFrontend(ModalityFrontend):
         return phi, theta
 
 
+def _to_gray(data: np.ndarray) -> np.ndarray:
+    """Any image array → float grayscale in [0,1]."""
+    a = np.asarray(data, dtype=np.float64)
+    if a.ndim == 3:
+        a = (0.299 * a[..., 0] + 0.587 * a[..., 1] + 0.114 * a[..., 2]
+             if a.shape[-1] >= 3 else a.mean(axis=-1))
+    if a.size and a.max() > 1.5:        # looks like 0-255
+        a = a / 255.0
+    return a
+
+
+def _resize(gray: np.ndarray, size: int) -> np.ndarray:
+    """Bilinear resize to (size, size) with pure NumPy (torch-free)."""
+    H, W = gray.shape
+    if (H, W) == (size, size):
+        return gray
+    yi = np.linspace(0, H - 1, size)
+    xi = np.linspace(0, W - 1, size)
+    y0 = np.floor(yi).astype(int); x0 = np.floor(xi).astype(int)
+    y1 = np.minimum(y0 + 1, H - 1); x1 = np.minimum(x0 + 1, W - 1)
+    wy = (yi - y0)[:, None]; wx = (xi - x0)[None, :]
+    top = gray[np.ix_(y0, x0)] * (1 - wx) + gray[np.ix_(y0, x1)] * wx
+    bot = gray[np.ix_(y1, x0)] * (1 - wx) + gray[np.ix_(y1, x1)] * wx
+    return top * (1 - wy) + bot * wy
+
+
+def image_density_phase(gray: np.ndarray):
+    """ρ, θ per the canonical glossary: ρ = 0.65·gray + 0.35·‖∇gray‖ (min-max to
+    [0,1]); θ = arctan2(∂gray/∂y, ∂gray/∂x). The spatial-gradient spinor, NOT FFT."""
+    gy, gx = np.gradient(np.asarray(gray, dtype=np.float64))
+    grad_mag = np.hypot(gx, gy)
+    rho = 0.65 * gray + 0.35 * grad_mag
+    lo, hi = float(rho.min()), float(rho.max())
+    rho = (rho - lo) / (hi - lo + 1e-9)
+    theta = np.arctan2(gy, gx)
+    return rho, theta
+
+
+def torsion(rho: np.ndarray, theta: np.ndarray) -> np.ndarray:
+    """τ = ∇ρ × ∇θ on UNWRAPPED θ (RULE 3) — the z-component of the cross product
+    (∂ρ/∂x)(∂θ/∂y) − (∂ρ/∂y)(∂θ/∂x). NOT the Laplacian. tanh-stabilized.
+
+    This is where the density and phase landscapes twist relative to each other —
+    true structural coupling/vorticity. erisv4 found this gives ~28× better class
+    discrimination than the Laplacian τ the Chimera prototype used."""
+    th = np.unwrap(np.unwrap(np.asarray(theta, dtype=np.float64), axis=0), axis=1)
+    ry, rx = np.gradient(np.asarray(rho, dtype=np.float64))   # (∂/∂y, ∂/∂x)
+    ty, tx = np.gradient(th)
+    tau = rx * ty - ry * tx                                   # ∇ρ × ∇θ
+    return np.tanh(tau)
+
+
 class ImageFrontend(ModalityFrontend):
-    """Image → field state. STUB for v6.0 integration.
+    """Image → coherence field, ZERO learned weights (RULE 1).
 
-    Planned pipeline:
-        Image → grayscale + edge detection
-        → 2D FFT → spatial frequency spectrum
-        → map to BLECD:
-            Low frequencies → Boundary (large-scale structure)
-            High frequencies → Emergence (fine detail/novelty)
-            Edge density → Criticality (transitions between regions)
-            Texture entropy → Decay (information dissipation)
-            Symmetry score → Feedback (self-similar patterns)
-            Pixel saturation → Saturation (intensity limits)
-        → φ field = amplitude of spatial frequency components
-        → θ field = phase of spatial frequency components
+    Pipeline (v2, Chimera-aligned spatial gradient spinor, NOT FFT):
+        image → grayscale → ρ (density) , θ (phase) per glossary
+        → return (mag = √ρ, θ) matching the (phi, theta) field contract so the
+          two-channel coupling and LAF signature operate on it identically to a
+          word field. τ = ∇ρ×∇θ is available via `torsion(rho, theta)`.
 
-    The zero-weight prototype used a version of this for cats vs dogs:
-    70-80% accuracy on a tiny dataset, no learned weights, first pass.
-    That prototype proved the BLECD field analysis extracts classifiable
-    structure from images without any neural network training.
+    The 2025 prototype proved BLECD field analysis extracts classifiable structure
+    from images with no neural-network training (~70-80% cats-vs-dogs, first pass).
     """
 
     def to_field(self, data: Any, size: int = 64) -> Tuple[np.ndarray, np.ndarray]:
         if not isinstance(data, np.ndarray):
-            # Mock 2D image data if not provided correctly
             y, x = np.ogrid[:size, :size]
-            data = np.sin(x/5) * np.cos(y/5)
-            
-        # 2D FFT to extract spatial frequency spectrum
-        fft_data = scipy.fft.fft2(data)
-        fft_shifted = scipy.fft.fftshift(fft_data)
-        
-        mag = np.abs(fft_shifted)
-        phase = np.angle(fft_shifted)
-        
-        from scipy.ndimage import zoom
-        zoom_factors = (size / mag.shape[0], size / mag.shape[1])
-        
-        phi = zoom(mag, zoom_factors, mode='nearest')
-        theta = zoom(phase, zoom_factors, mode='nearest')
-        
-        phi = np.clip(phi / (np.max(phi) + 1e-10), 0.0, 1.0).astype(np.float32)
-        theta = ((theta + np.pi) % (2 * np.pi)).astype(np.float32)
-        
-        return phi, theta
+            data = np.sin(x / 5) * np.cos(y / 5)
+        gray = _resize(_to_gray(data), size)
+        rho, theta = image_density_phase(gray)
+        mag = np.sqrt(np.clip(rho, 0.0, 1.0))        # phi = √ρ per the field API
+        return mag.astype(np.float32), theta.astype(np.float32)
 
 
 class SensorFrontend(ModalityFrontend):
@@ -225,6 +254,7 @@ class SensorFrontend(ModalityFrontend):
         field_data = data.reshape((size, size))
         
         # Hilbert transform to get phase
+        import scipy.signal
         analytic_signal = scipy.signal.hilbert(field_data, axis=1)
         
         phi = np.abs(analytic_signal)
