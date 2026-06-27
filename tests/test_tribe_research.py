@@ -118,6 +118,29 @@ class TestTribeResearch(unittest.TestCase):
         self.assertTrue(any("empirical validation" in g for g in gaps))
         self.assertTrue(any("sign convention" in g for g in gaps))
 
+    def test_empty_sources_short_circuits_hive_no_scaffolding(self):
+        # 0 sources → ONE honest refusal, NOT 2000 chars of [s:nil] scaffolding from 5
+        # specialists. The model must never even be called (nothing to ground in).
+        calls = {"n": 0}
+        def model(prompt):
+            calls["n"] += 1
+            return "fabricated structure [s:nil]"
+        res = run_two_cycle_research("obscure topic", retriever=lambda q: [], model=model,
+                                     specialists=TRIBE[:5], goal_bvec=GOAL)
+        self.assertEqual(res.n_sources, 0)
+        self.assertEqual(res.cycles, 0)
+        self.assertIsNone(res.thought_id)              # never canonized
+        self.assertNotIn("[s:nil]", res.synthesis)     # no fabricated citation token
+        self.assertLess(len(res.synthesis), 400)       # a sentence, not a scaffold
+        self.assertEqual(calls["n"], 0)                # didn't spin up the specialists
+
+    def test_empty_sources_short_circuits_single_pass(self):
+        res = run_two_cycle_research("obscure topic", retriever=lambda q: [],
+                                     model=lambda p: "should not be called",
+                                     specialists=TRIBE[:2], goal_bvec=GOAL, single_pass=True)
+        self.assertEqual(res.n_sources, 0)
+        self.assertLess(len(res.synthesis), 400)
+
     def test_single_pass_control_is_one_call_no_specialists(self):
         # the A/B control: single-pass RAG summary — no specialists, no second cycle, but the
         # same retrieval + citation grounding so the delta isolates what the hive adds

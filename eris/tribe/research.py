@@ -90,6 +90,19 @@ def _distinct(sources: List[str]) -> List[str]:
     return out
 
 
+_NO_SOURCES_MSG = ("I don't have any source material on this in memory, so I can't make a "
+                   "grounded statement about it. (Retrieved 0 sources — try a different "
+                   "scope, name the document, or ingest the text first.)")
+
+
+def _no_sources_result(topic: str, *, cycles: int = 0, n_active: int = 0) -> "ResearchResult":
+    """The honest empty-input result — one clean refusal, no fabricated scaffolding, never
+    canonized. Shared by the single-pass control and the hive so both decline identically."""
+    return ResearchResult(topic=topic, synthesis=_NO_SOURCES_MSG, synthesis_pre_ground=_NO_SOURCES_MSG,
+                          n_sources=0, sources=[], n_active=n_active, n_contributors=0,
+                          stripped_claims=0, cycles=cycles, thought_id=None)
+
+
 def resonance_rerank(goal_bvec: BVec, texts: List[str], *, top_k: Optional[int] = None,
                      blend: float = 0.5, bvec_of: Optional[Callable[[str], BVec]] = None
                      ) -> List[str]:
@@ -225,6 +238,8 @@ def run_two_cycle_research(
     # honest A/B baseline that isolates what the multi-specialist two-cycle engine adds. ──
     if single_pass:
         ctx = _distinct(list(retriever(topic) or []))
+        if not ctx:
+            return _no_sources_result(topic, cycles=0)
         _log(f"single-pass RAG control — {len(ctx)} source(s), one summary call…")
         pre = (synth(
             f"Summarize what the sources establish about '{topic}'. Ground every claim with "
@@ -243,6 +258,12 @@ def run_two_cycle_research(
 
     # ── Cycle 1 — broad: RAG → each active specialist reasons → post to hub ──
     ctx1 = _distinct(list(retriever(topic) or []))
+    if not ctx1:
+        # No sources → decline honestly, exactly like the control. Do NOT spin up 5
+        # specialists and 2 cycles to elaborately document that there's nothing there
+        # (the [s:nil]-scaffolding failure mode). (Review feedback #3.)
+        _log("cycle 1 — retrieved 0 source(s); declining (no grounded basis).")
+        return _no_sources_result(topic, cycles=0, n_active=len(active))
     _log(f"cycle 1 — retrieved {len(ctx1)} source(s); specialists reasoning…")
     for i, s in enumerate(ctx1):                       # show WHAT was retrieved (diagnose RAG)
         _log(f"    [s:{i}] {' '.join((s or '').split())[:80]}…")
