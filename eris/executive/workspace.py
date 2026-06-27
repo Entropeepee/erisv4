@@ -269,6 +269,30 @@ class SharedCognitiveWorkspace:
         self.current: Optional[Broadcast] = None
         self._history: deque[Broadcast] = deque(maxlen=100)
         self._listeners: List[Any] = []
+        self.goal_text: str = ""
+        self.goal_bvec: Optional[BVec] = None
+
+    def set_goal(self, text: str, bvec: Optional[BVec] = None) -> None:
+        """Record the active goal so the working-memory frame (working_set) carries it."""
+        self.goal_text = text
+        self.goal_bvec = bvec
+
+    def working_set(self, k: int = 3) -> Dict[str, Any]:
+        """Bounded working-memory frame (§B1): the active goal + the last k broadcasts —
+        the in-the-moment frame that conditions the prompt and the next retrieval (GWT).
+        BOUNDED (k) and STRUCTURED — a list of compact records, NEVER a concatenated string
+        (that concatenation was the original runaway-loop bug)."""
+        recent = list(self._history)[-max(0, k):]
+        return {
+            "goal": self.goal_text,
+            "goal_bvec": self.goal_bvec,
+            "broadcasts": [
+                {"source": b.source, "thought": b.thought,
+                 "dominant": b.bvec.dominant_domains(2) if b.bvec else [],
+                 "coherence": round(b.coherence, 4)}
+                for b in recent
+            ],
+        }
 
     def broadcast(self, thought: str, bvec: BVec, source: str,
                   coherence: float = 0.0, dCdX: float = 0.0) -> Broadcast:
