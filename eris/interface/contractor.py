@@ -44,13 +44,14 @@ class ContractorRouter:
         return self.TIER_FOR_DECISION.get(str(decision_name).upper(), "local")
 
     def _local_backend(self) -> Any:
-        backends = list(getattr(self.local, "_backends", []) or [])
-        for b in backends:
+        # ONLY a genuinely-local backend qualifies — no "accept backends[0] anyway" escape hatch
+        # (that could return a cloud backend that happens to be first). Fail closed if none.
+        for b in getattr(self.local, "_backends", []) or []:
             if is_local_backend(b):
                 return b
-        if backends:                              # configured local (e.g. ollama) — accept it
-            return backends[0]
-        raise RuntimeError("ContractorRouter: no local backend configured")
+        raise RuntimeError(
+            "ContractorRouter: no local backend available (fail-closed). A direct Ollama/vLLM "
+            "backend must be configured; a local serving backend must be name-tagged local.")
 
     def resolve(self, sensitivity: Any, tier: str) -> Any:
         """Pick the backend for this call. Raises SovereigntyError if a sovereign call cannot
@@ -81,20 +82,53 @@ class ContractorRouter:
         if tier in _PAID_TIERS:
             self.costs["_paid_calls"] = self.costs.get("_paid_calls", 0) + 1
 
+    # OPEN-path cost-tiered failover order. free escalates to cheap before giving up to local
+    # (mirrors the LiteLLM `fallbacks: [{free-pool: [cheap-paid]}]`); every chain ends at local
+    # so research never dies on a flaky pool.
+    _OPEN_FAILOVER = {"free": ["free", "cheap"], "cheap": ["cheap"],
+                      "synth": ["synth"], "local": []}
+
+    def _open_chain(self, tier: str):
+        """Ordered [(backend, tier_label)] to attempt for an OPEN call, gateway tiers (available
+        only) first, always ending at the local backend."""
+        chain = []
+        for t in self._OPEN_FAILOVER.get(tier, []):
+            b = self.gateway.tier(t) if self.gateway is not None else None
+            if b is None:
+                continue
+            try:
+                ok = b.is_available()
+            except Exception:
+                ok = False
+            if ok:
+                chain.append((b, t))
+        try:
+            chain.append((self._local_backend(), "local"))
+        except RuntimeError:
+            pass
+        return chain
+
     async def generate(self, sensitivity: Any, tier: str, prompt: str, system: str = "",
                        max_tokens: int = 8192, temperature: float = 0.7):
-        """Resolve + generate. Sovereignty violations propagate (never caught). On the OPEN
-        path, an upstream failure falls back to the local backend so research never dies on a
-        flaky free-pool — except sovereign, which must not fall back to anything non-local."""
+        """Resolve + generate. SOVEREIGN: local only, raises on failure (NEVER falls back to a
+        non-local backend). OPEN: walk the cost-tiered failover chain (e.g. free → cheap → local)
+        so a 429/outage on one tier advances to the next, ending at local. Billed on success."""
         sens = Sensitivity.coerce(sensitivity)
-        backend = self.resolve(sens, tier)
-        self._bill(backend, tier if not is_local_backend(backend) else "local")
-        try:
-            return await backend.generate(prompt, system, max_tokens, temperature)
-        except Exception:
-            if sens is Sensitivity.SOVEREIGN or is_local_backend(backend):
-                raise
-            local = self._local_backend()
-            assert_backend_allowed(sens, local)
-            self._bill(local, "local")
-            return await local.generate(prompt, system, max_tokens, temperature)
+        if sens is Sensitivity.SOVEREIGN:
+            backend = self.resolve(sens, tier)                 # local, fail-closed
+            resp = await backend.generate(prompt, system, max_tokens, temperature)  # raises, no fallback
+            self._bill(backend, "local")
+            return resp
+        last_err = None
+        for backend, label in self._open_chain(tier):
+            assert_backend_allowed(sens, backend)              # open allows any; defense in depth
+            try:
+                resp = await backend.generate(prompt, system, max_tokens, temperature)
+            except Exception as e:                             # 429/outage → advance to next tier
+                last_err = e
+                continue
+            self._bill(backend, label)                         # bill on success only
+            return resp
+        if last_err is not None:
+            raise last_err
+        raise RuntimeError("ContractorRouter: no backend available for OPEN call")

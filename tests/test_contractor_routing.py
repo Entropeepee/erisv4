@@ -56,17 +56,24 @@ class TestRouting(unittest.TestCase):
         resp = _run(r.generate(Sensitivity.OPEN, "free", "hi"))
         self.assertEqual(resp.text, "gateway-free:ok")
 
-    def test_open_falls_back_to_local_when_tier_unavailable(self):
-        gw = _gateway(free=_Stub("gateway-free", available=False))
+    def test_free_unavailable_advances_to_cheap(self):
+        gw = _gateway(free=_Stub("gateway-free", available=False))   # cheap still available
         r = ContractorRouter(gw, _local_mediator())
         resp = _run(r.generate(Sensitivity.OPEN, "free", "hi"))
-        self.assertEqual(resp.text, "ollama:ok")          # graceful local fallback
+        self.assertEqual(resp.text, "gateway-cheap:ok")   # free→cheap failover, not straight to local
 
-    def test_open_generate_failure_falls_back_to_local(self):
+    def test_free_429_advances_to_cheap(self):
         gw = _gateway(free=_Stub("gateway-free", fail=True))
         r = ContractorRouter(gw, _local_mediator())
         resp = _run(r.generate(Sensitivity.OPEN, "free", "hi"))
-        self.assertEqual(resp.text, "ollama:ok")
+        self.assertEqual(resp.text, "gateway-cheap:ok")   # 429 on free → cheap
+
+    def test_both_tiers_down_falls_back_to_local(self):
+        gw = _gateway(free=_Stub("gateway-free", fail=True),
+                      cheap=_Stub("gateway-cheap", fail=True))
+        r = ContractorRouter(gw, _local_mediator())
+        resp = _run(r.generate(Sensitivity.OPEN, "free", "hi"))
+        self.assertEqual(resp.text, "ollama:ok")          # free→cheap→local, all the way down
 
     def test_sovereign_always_resolves_local(self):
         r = ContractorRouter(_gateway(), _local_mediator())

@@ -35,33 +35,41 @@ class CachingBackend(LLMBackend):
     Keyed on normalized (system, prompt). `hits`/`misses` are exposed for assertions."""
 
     def __init__(self, inner: LLMBackend, max_entries: int = 1024):
+        import threading
         self.inner = inner
         self.name = f"cached:{getattr(inner, 'name', 'backend')}"
         self.model = getattr(inner, "model", "")
         self._cache: "Dict[str, LLMResponse]" = {}
         self._order: List[str] = []
         self.max_entries = max_entries
+        self._lock = threading.Lock()              # hive runs under to_thread + run_blocking pools
         self.hits = 0
         self.misses = 0
 
-    @staticmethod
-    def _key(prompt: str, system: str) -> str:
+    def _key(self, prompt: str, system: str, max_tokens: int, temperature: float) -> str:
+        # include max_tokens/temperature/model — same prompt at different sampling is a DIFFERENT
+        # request and must NOT collide (the adversarial review caught this stale-response bug).
         norm = lambda s: " ".join((s or "").lower().split())
-        return norm(system) + "\x00" + norm(prompt)
+        return "\x00".join((norm(system), norm(prompt), str(max_tokens),
+                            f"{temperature:.4f}", str(self.model)))
 
     async def generate(self, prompt: str, system: str = "", max_tokens: int = 8192,
                        temperature: float = 0.7) -> LLMResponse:
-        k = self._key(prompt, system)
-        cached = self._cache.get(k)
-        if cached is not None:
-            self.hits += 1
-            return cached
-        self.misses += 1
+        k = self._key(prompt, system, max_tokens, temperature)
+        with self._lock:
+            cached = self._cache.get(k)
+            if cached is not None:
+                self.hits += 1
+                return cached
+            self.misses += 1
         resp = await self.inner.generate(prompt, system, max_tokens, temperature)
-        self._cache[k] = resp
-        self._order.append(k)
-        if len(self._order) > self.max_entries:
-            self._cache.pop(self._order.pop(0), None)
+        if getattr(resp, "text", "").strip():      # never cache an empty/degenerate response
+            with self._lock:
+                if k not in self._cache:
+                    self._cache[k] = resp
+                    self._order.append(k)
+                    if len(self._order) > self.max_entries:
+                        self._cache.pop(self._order.pop(0), None)
         return resp
 
     def is_available(self) -> bool:
@@ -123,11 +131,30 @@ class ClaudeAgentSDKBackend(LLMBackend):
         full = (f"{sys_text}\n\n{prompt}" if sys_text else prompt)
         chunks: List[str] = []
         async for msg in query(prompt=full):           # one-shot synthesis agent
-            text = getattr(msg, "text", None) or getattr(msg, "content", None)
-            if isinstance(text, str):
-                chunks.append(text)
+            chunks.extend(self._extract_text(msg))
         return LLMResponse(text="".join(chunks).strip(), provider="claude-agent-sdk",
                            model=self.model or "claude", latency_ms=(time.time() - t0) * 1000)
+
+    @staticmethod
+    def _extract_text(msg) -> List[str]:
+        """Pull text from a claude-agent-sdk message across its real shapes: a `.text` str, a
+        `.content` str, or a `.content` LIST of blocks each with a `.text`/`["text"]` (the actual
+        AssistantMessage shape — handling only `.text`/str returned EMPTY synthesis)."""
+        out: List[str] = []
+        text = getattr(msg, "text", None)
+        if isinstance(text, str):
+            out.append(text)
+        content = getattr(msg, "content", None)
+        if isinstance(content, str):
+            out.append(content)
+        elif isinstance(content, (list, tuple)):
+            for block in content:
+                bt = getattr(block, "text", None)
+                if bt is None and isinstance(block, dict):
+                    bt = block.get("text")
+                if isinstance(bt, str):
+                    out.append(bt)
+        return out
 
 
 # ─── The gateway wiring ────────────────────────────────────────────────────

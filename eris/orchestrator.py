@@ -252,10 +252,15 @@ class ErisOrchestrator:
 
         def _make_local_backend():
             if self._llm_base_url:
-                return OpenAIBackend(
+                b = OpenAIBackend(
                     model=self._local_model,
                     api_key=os.environ.get("ERIS_LLM_API_KEY", "local"),
                     base_url=self._llm_base_url)
+                # Tag it as LOCAL so the sovereignty guard recognizes the on-box vLLM/TensorRT
+                # server (OpenAIBackend defaults name="openai", which is_local_backend rejects).
+                # is_local_backend still verifies the base_url is loopback before trusting it.
+                b.name = "local"
+                return b
             return OllamaBackend(model=self._local_model)
 
         if self._llm_base_url:
@@ -922,14 +927,17 @@ class ErisOrchestrator:
 
         sens = Sensitivity.coerce(sensitivity)
         # Bind the router to the LIVE mediator (not the init-time one) so a swapped backend is
-        # honored, and share the per-run cost log.
+        # honored. Per-run cost log (NOT the shared instance dict — that races across concurrent
+        # hive_research calls; the adversarial review flagged it).
         from eris.interface.contractor import ContractorRouter as _CR
-        contractor = _CR(self.gateway, self.mediator, cost_log=self._contractor_costs)
+        run_costs: Dict[str, int] = {}
+        contractor = _CR(self.gateway, self.mediator, cost_log=run_costs)
 
         def _gen(tier: str, prompt: str) -> str:
             """Generate via the Contractor Router at `tier`, enforcing sovereignty. SOVEREIGN
-            stays local (fail-closed); OPEN may use the gateway tier with a local fallback.
-            A SovereigntyError is NEVER swallowed — a misroute must surface, not degrade."""
+            stays local (fail-closed) and NEVER falls back to the unguarded mediator — a local
+            failure on a sovereign call RAISES, it does not silently degrade to a cloud backend
+            that may be sitting in self.mediator. OPEN may fall back to direct local."""
             from eris.interface.sovereignty import SovereigntyError
             try:
                 resp = run_blocking(contractor.generate(sens, tier, prompt, system=sys_prompt))
@@ -937,7 +945,11 @@ class ErisOrchestrator:
             except SovereigntyError:
                 raise
             except Exception:
-                try:                                   # last-ditch: direct local (never for sovereign cloud)
+                # Fail-closed: a sovereign call must NOT touch the unguarded mediator on failure
+                # (it could hold a cloud backend). Surface the failure instead of leaking IP.
+                if sens is Sensitivity.SOVEREIGN:
+                    raise
+                try:                                   # OPEN only: last-ditch direct local
                     resp = run_blocking(self.mediator.generate(prompt=prompt, system=sys_prompt))
                     return getattr(resp, "text", "") or ""
                 except Exception:
@@ -972,7 +984,6 @@ class ErisOrchestrator:
             print(f"[hive] {m}", flush=True)
 
         def _run():
-            self._contractor_costs.clear()              # per-run tier tally (cost observability)
             res = run_two_cycle_research(
                 topic, retriever=_rag, model=_reason, moe_gate=self.moe_gate, hub=self.hub,
                 thought_stream=self.thought_stream, embed_fn=_embed,
@@ -983,7 +994,7 @@ class ErisOrchestrator:
                     "n_sources": res.n_sources, "stripped_claims": res.stripped_claims,
                     "cycles": res.cycles, "canonized": res.thought_id is not None,
                     "sources": res.sources, "sensitivity": str(sens.value),
-                    "tier_calls": dict(self._contractor_costs),   # per-tier call counts + paid
+                    "tier_calls": dict(run_costs),   # per-tier call counts + paid (per-run, no race)
                     "synthesis": res.synthesis[:2000],      # the actual reasoning, visible
                     "synthesis_pre_ground": res.synthesis_pre_ground[:2000]}
 

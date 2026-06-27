@@ -110,6 +110,17 @@ set ERIS_HIVE_SYNTH_CLOUD=1
 ## Tests
 
 - `test_sovereignty.py` — fail-closed routing + egress guard (14)
-- `test_gateway.py` — tiers, failover cascade, caching, key-bypass guard (6)
-- `test_contractor_routing.py` — `(sensitivity,tier)` resolution, sovereign-never-cloud, cost log, Hermes (12)
-- `test_hive_contractor_wiring.py` — open→free, sovereign stays local, synth flag gates synth (3)
+- `test_gateway.py` — tiers, caching (key includes sampling, skips empty), key-bypass guard (6)
+- `test_contractor_routing.py` — `(sensitivity,tier)` resolution, free→cheap→local failover, sovereign-never-cloud, cost log, Hermes (14)
+- `test_hive_contractor_wiring.py` — open→free, sovereign stays local even when local fails (no cloud leak), synth flag gates synth (4)
+
+## Adversarial review (swarm) — fixes applied
+
+A three-agent adversarial swarm reviewed the security-critical paths; confirmed findings are fixed:
+- **CRITICAL:** the hive `_gen` fallback could hand a *sovereign* call to the unguarded mediator on a local failure → now re-raises for sovereign (never falls back to cloud). Test: `test_sovereign_never_touches_cloud_even_when_local_fails`.
+- a vLLM local backend was named `"openai"` and rejected as non-local → `_make_local_backend` now tags it `"local"` (still loopback-verified).
+- `_local_backend` had a `return backends[0]` escape hatch that could return a cloud backend → removed; only genuinely-local backends qualify, else fail-closed.
+- live failover did free→local (skipping cheap) → real **free→cheap→local** chain in `ContractorRouter.generate`.
+- the cost log was a shared instance dict that raced across concurrent runs → per-run dict.
+- `CachingBackend` key ignored `max_tokens`/`temperature` (stale-response collisions) and wasn't thread-safe → key includes sampling+model, lock added, empty responses not cached.
+- `ClaudeAgentSDKBackend` only read `.text`/str and would return empty for the SDK's list-of-content-blocks messages → `_extract_text` handles all shapes.

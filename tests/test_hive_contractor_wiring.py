@@ -70,6 +70,36 @@ class TestHiveContractorWiring(unittest.TestCase):
         self.assertNotIn("gateway-free", out["tier_calls"])
         self.assertIn("ollama", out["tier_calls"])        # local only
 
+    def test_sovereign_never_touches_cloud_even_when_local_fails(self):
+        # the CRITICAL fix: if a sovereign run's LOCAL backend fails, it must RAISE — never
+        # silently fall back to a cloud backend that happens to be in self.mediator.
+        from eris.orchestrator import ErisOrchestrator
+
+        class _Failing(LLMBackend):
+            name = "ollama"; model = "ollama"
+            async def generate(self, *a, **k): raise RuntimeError("local down")
+            def is_available(self): return True
+
+        class _Cloud(LLMBackend):
+            def __init__(self): self.name = "openai"; self.model = "gpt"; self.calls = 0
+            async def generate(self, *a, **k):
+                self.calls += 1
+                return LLMResponse(text="LEAKED", provider="openai", model="gpt", latency_ms=1.0)
+            def is_available(self): return True
+
+        orch = ErisOrchestrator(field_size=16, data_dir=tempfile.mkdtemp())
+        cloud = _Cloud()
+        m = LLMMediator(); m.add_backend(_Failing()); m.add_backend(cloud)
+        orch.mediator = m
+        rec = MemoryRecord(text="BLECD boundary coupling.", bvec=BVec(B=.5, F=.5, E=.4, C=.5, D=.2, S=.3),
+                           embedding=np.ones(8, dtype=np.float32),
+                           source="reading:Abstract", metadata={"title": "Abstract"})
+        orch.memory.ltm.store(rec)
+        out = asyncio.run(orch.hive_research("BLECD coupling", scope="doc", document="BLECD",
+                                             sensitivity="sovereign"))
+        self.assertEqual(cloud.calls, 0)              # cloud NEVER called on a sovereign run
+        self.assertIn("error", out)                   # local failure surfaced, not leaked to cloud
+
     def test_synth_flag_gates_synth_tier(self):
         from eris.config import CONFIG
         orch = self._orch()
