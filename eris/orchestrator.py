@@ -801,6 +801,22 @@ class ErisOrchestrator:
 
         def _rag(query: str):
             try:
+                # Diagnostics: a bare 'return []' on any failure makes an empty store, an
+                # embedding error, and a hybrid_search/rerank crash all look identical to
+                # "no sources". Log what the pool actually looks like so 0-results is never
+                # a silent mystery (review feedback #1).
+                if scope != "web":
+                    try:
+                        n_all = len(self.memory.all_records(limit=2000)) \
+                            if hasattr(self.memory, "all_records") else -1
+                    except Exception:
+                        n_all = -1
+                    try:
+                        n_ts = len(list(self.thought_stream.all()))
+                    except Exception:
+                        n_ts = -1
+                    _log(f"_rag: scope={scope} all_records={n_all} thought_stream={n_ts} "
+                         f"semantic={is_semantic()} doc={document!r}")
                 # scope=web → fresh external research (the cascade), not memory
                 if scope == "web":
                     from eris.knowledge import research as _rc
@@ -850,7 +866,11 @@ class ErisOrchestrator:
                 if _resonance_on and rest:
                     rest = resonance_rerank(goal_bvec, rest, bvec_of=_text_to_bvec)
                 return (led + rest)[:6]
-            except Exception:
+            except Exception as e:
+                import traceback
+                _log(f"_rag FAILED ({type(e).__name__}: {e}) — returning 0 sources")
+                if os.environ.get("ERIS_BACKEND_TRACE") == "1":
+                    traceback.print_exc()
                 return []
 
         def _local(prompt: str) -> str:

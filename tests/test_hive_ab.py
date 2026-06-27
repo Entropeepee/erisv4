@@ -48,6 +48,22 @@ class TestHiveAB(unittest.TestCase):
         self.assertTrue(m["canonized"])
         self.assertGreater(m["synthesis_len"], 0)
 
+    def test_no_data_run_is_inconclusive_not_a_hive_sweep(self):
+        # both arms 0 sources → INCONCLUSIVE, never a 4/4 hive verdict (the 0.0>=0.0 tie bug)
+        import asyncio
+        from eris.experiments.hive_ab import run_ab
+
+        class _Orch:
+            async def hive_research(self, topic, *, max_specialists=5, mode="hive",
+                                    scope="memory", document=""):
+                return {"topic": topic, "n_sources": 0, "synthesis": "no sources",
+                        "synthesis_pre_ground": "no sources", "sources": [],
+                        "n_contributors": (5 if mode == "hive" else 0), "cycles": 0,
+                        "n_active": (5 if mode == "hive" else 0), "canonized": False}
+        out = asyncio.run(run_ab(_Orch(), "obscure"))
+        self.assertIsInstance(out["verdict"], str)
+        self.assertIn("INCONCLUSIVE", out["verdict"])
+
     def test_metrics_from_falls_back_when_no_pre_ground(self):
         # single-pass control may not carry a separate pre-ground draft → use final text
         summary = {"n_sources": 1, "synthesis": "A claim [s:0].", "sources": ["A claim source."]}

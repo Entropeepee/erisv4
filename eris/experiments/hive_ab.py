@@ -119,12 +119,26 @@ async def run_ab(orchestrator, topic: str, max_specialists: int = 5, *,
         return {"error": "control failed: " + ctrl["error"], "traceback": ctrl.get("traceback")}
 
     tm, cm = metrics_from(treat), metrics_from(ctrl)
+    # No-data guard: if BOTH arms retrieved 0 sources, neither had anything to work with —
+    # this is a plumbing/retrieval failure, NOT a quality result. Don't emit a verdict (a
+    # 0.0 >= 0.0 tie would otherwise falsely credit the hive a clean sweep). (Review #2.)
+    if treat.get("n_sources", 0) == 0 and ctrl.get("n_sources", 0) == 0:
+        return {
+            "topic": topic,
+            "verdict": "INCONCLUSIVE — both arms retrieved 0 sources (retrieval/harness "
+                       "issue, not a quality signal). Check scope/document/library, then re-run.",
+            "control_single_pass_rag": cm,
+            "treatment_hive": tm,
+            "treatment_raw": treat,
+            "control_raw": ctrl,
+        }
     return {
         "topic": topic,
         "control_single_pass_rag": cm,
         "treatment_hive": tm,
         "verdict": {
-            "hive_more_source_grounded": tm["source_alignment"] >= cm["source_alignment"],
+            # strict >: a tie is NOT a hive win (0.0 >= 0.0 used to credit it falsely)
+            "hive_more_source_grounded": tm["source_alignment"] > cm["source_alignment"],
             "hive_more_diverse": tm["domain_diversity"] > cm["domain_diversity"],
             "hive_deeper": tm["cycles"] > cm["cycles"],
             "hive_synthesis_longer": tm["synthesis_len"] > cm["synthesis_len"],
