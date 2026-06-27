@@ -774,29 +774,69 @@ class ErisOrchestrator:
                            field_state_fn=_field_state, max_steps=max_steps)
         return await agent.run(goal)
 
-    async def hive_research(self, topic: str, max_specialists: int = 5) -> Dict[str, Any]:
-        """Run the two-cycle hive research engine (§A2) over a topic, using her REAL
-        seams: RAG = hybrid search over the library she has read (local, no network); the
-        local model = self.mediator; canonized to her thought-stream with citation grounding.
+    async def hive_research(self, topic: str, max_specialists: int = 5, *,
+                            scope: str = "memory", document: str = "",
+                            mode: str = "hive") -> Dict[str, Any]:
+        """Run the two-cycle hive research engine (§A2) over a topic, using her REAL seams.
 
-        A deep cycle — run on the research trigger (behind ERIS_HIVE_RESEARCH) or called
-        explicitly for an A/B. Runs in a worker thread (the engine is sync and the model
-        seam is async-via-run_blocking), so it never blocks the event loop. Best-effort:
-        returns a compact summary dict, or {'error': ...} on failure — never raises."""
+        scope:
+          • "memory" (default) — search ALL of her memory (papers/docs + thought-stream +
+            STM/MTM/LTM); if `document` is named, those chunks LEAD but related memory rides along.
+          • "doc"    — ONLY the named `document`'s chunks (nothing else).
+          • "web"    — fetch fresh from the web/arXiv/Wikipedia via the research cascade.
+        Comprehension boosters: sources are pre-digested into atomic propositions (Stage-2),
+        and the synthesis/canonize steps use the DEEP model when a cloud expert is configured
+        (else local). Runs in a worker thread; best-effort — returns a summary dict or {'error'}."""
         from eris.tribe.research import run_two_cycle_research
         from eris.interface.mediator import run_blocking
-        from eris.knowledge.embeddings import get_embedding
+        from eris.knowledge.embeddings import get_embedding, is_semantic
         from eris.retrieval.hybrid import hybrid_search
 
         sys_prompt = self._default_system_prompt()
 
         def _rag(query: str):
             try:
-                recs = self.memory.all_records(limit=400) if hasattr(self.memory, "all_records") else []
+                # scope=web → fresh external research (the cascade), not memory
+                if scope == "web":
+                    from eris.knowledge import research as _rc
+                    rep = run_blocking(_rc.gather(query, max_results=4))
+                    txt = getattr(rep, "text", None) or (rep if isinstance(rep, str) else "")
+                    return [p.strip()[:1400] for p in str(txt).split("\n\n") if p.strip()][:6]
+                # A named document leads (or is the ONLY pool when scope='doc') — so asking
+                # about a paper primarily sees THAT paper (documents_matching by title/filename).
+                lead = []
+                if document or scope == "doc":
+                    q = document or query
+                    if hasattr(self.memory, "documents_matching"):
+                        lead = list(self.memory.documents_matching(q, max_chunks=6))
+                    if scope == "doc":
+                        recs = lead
+                    else:
+                        recs = lead + list(self.memory.all_records(limit=2000))
+                else:
+                    # default: ALL memory — papers/docs + every tier + her own thought-stream
+                    recs = list(self.memory.all_records(limit=2000)) \
+                        if hasattr(self.memory, "all_records") else []
+                    try:
+                        recs = recs + list(self.thought_stream.all())
+                    except Exception:
+                        pass
                 if not recs:
                     return []
-                hits = hybrid_search(query, recs, query_embedding=get_embedding(query), top_k=4)
-                return [(getattr(h, "text", "") or "")[:600] for h in hits]
+                # With hashed (non-semantic) embeddings the dense ranking is noise — use pure
+                # BM25 instead of polluting RRF (the lexical match is what actually works then).
+                qe = get_embedding(query) if is_semantic() else None
+                ranked = hybrid_search(query, recs, query_embedding=qe, top_k=16)
+                hits = lead + [h for h in ranked if h not in lead]   # named-doc chunks first
+                out, seen = [], set()
+                for h in hits:
+                    t = (getattr(h, "text", "") or "").strip()
+                    key = " ".join(t.lower().split())[:300]   # wider key → fewer false dedups
+                    if key and key not in seen:
+                        seen.add(key); out.append(t[:1400])
+                    if len(out) >= 6:
+                        break
+                return out
             except Exception:
                 return []
 
@@ -806,6 +846,28 @@ class ErisOrchestrator:
                 return getattr(resp, "text", "") or ""
             except Exception:
                 return ""
+
+        # Deep model for the comprehension-heavy synthesis/canonize steps, IF a cloud expert
+        # is configured; otherwise this is just the local model (no behavior change, no cost).
+        def _deep(prompt: str) -> str:
+            if getattr(self, "_cloud_experts", 0) >= 1:
+                try:
+                    resp = run_blocking(self.deep_mediator.generate(prompt=prompt, system=sys_prompt))
+                    return getattr(resp, "text", "") or ""
+                except Exception:
+                    return _local(prompt)
+            return _local(prompt)
+        synth_model = _deep if getattr(self, "_cloud_experts", 0) >= 1 else None
+
+        # Stage-2 comprehension: pre-digest each source into atomic propositions so the
+        # specialists reason over distilled facts, not raw chunks (default ON; cheap, local).
+        def _digester(text: str):
+            try:
+                from eris.knowledge.comprehend import propositions
+                return propositions(text, _local, n=4, max_chars=1400)
+            except Exception:
+                return []
+        digester = None if os.environ.get("ERIS_HIVE_DIGEST") == "0" else _digester
 
         def _embed(text: str):
             try:
@@ -820,12 +882,15 @@ class ErisOrchestrator:
             res = run_two_cycle_research(
                 topic, retriever=_rag, model=_local, moe_gate=self.moe_gate, hub=self.hub,
                 thought_stream=self.thought_stream, embed_fn=_embed,
+                synth_model=synth_model, digester=digester, single_pass=(mode == "single"),
                 max_specialists=max_specialists, log=_log)
             return {"topic": res.topic, "thought_id": res.thought_id, "gaps": res.gaps,
                     "n_contributors": res.n_contributors, "n_active": res.n_active,
                     "n_sources": res.n_sources, "stripped_claims": res.stripped_claims,
                     "cycles": res.cycles, "canonized": res.thought_id is not None,
-                    "synthesis": res.synthesis[:2000]}      # the actual reasoning, visible
+                    "sources": res.sources,
+                    "synthesis": res.synthesis[:2000],      # the actual reasoning, visible
+                    "synthesis_pre_ground": res.synthesis_pre_ground[:2000]}
 
         try:
             return await asyncio.to_thread(_run)

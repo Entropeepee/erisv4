@@ -243,10 +243,13 @@ def make_reasoned_finding(specialist: Specialist, goal: str, retrieved_context: 
     base = (
         f"{PONDER_CONTRACT}\n\n"
         f"You are {specialist.name}, the {specialist.domain} specialist "
-        f"({specialist.description}). Through your domain lens ONLY, give ONE concrete, "
-        f"specific finding about the topic below, grounded STRICTLY in the provided "
-        f"sources. Do NOT restate the question or the sources verbatim — add {specialist.domain} "
-        f"analysis the sources support. 2-4 sentences.\n\n"
+        f"({specialist.description}).\n"
+        f"FIRST, read the sources for what they ACTUALLY say about the topic — the key "
+        f"mechanism, claim, or relationship, together with its conditions and limits. THEN, "
+        f"through your {specialist.domain} lens, give ONE specific, non-obvious finding that "
+        f"this understanding supports: name the mechanism and why it matters, cite the "
+        f"source(s) you rely on as [s:i], and explicitly flag anything the sources do NOT "
+        f"establish. Do not restate the question or quote verbatim. 2-4 sentences.\n\n"
         f"TOPIC: {goal}\n\nSOURCES:\n{context}\n\n{specialist.name}'s finding:"
     )
     reasoning, echoed = "", False
