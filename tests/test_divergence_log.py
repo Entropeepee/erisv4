@@ -71,12 +71,24 @@ class TestDivergenceLog(unittest.TestCase):
         self.assertEqual(_verdict(0.1, 0.9), "novel_wins")
         self.assertEqual(_verdict(0.5, 0.5), "tie")
 
-    def test_error_row(self):
+    def test_error_row_is_idempotent(self):
         log = DivergenceLog(self.path)
-        log.record_error("retrieval", "boom", RuntimeError("nope"))
-        rows = log.rows()
-        self.assertEqual(len(rows), 1)
-        self.assertIn("error", rows[0])
+        for _ in range(3):                                  # same error 3×
+            log.record_error("retrieval", "boom", RuntimeError("nope"))
+        errs = [r for r in log.rows() if "error" in r]
+        self.assertEqual(len(errs), 1)                      # deduped, not 3
+        # A fresh instance reloads the error-seen set and still de-dupes.
+        DivergenceLog(self.path).record_error("retrieval", "boom", RuntimeError("nope"))
+        self.assertEqual(len([r for r in DivergenceLog(self.path).rows() if "error" in r]), 1)
+
+    def test_error_does_not_block_later_success(self):
+        # An errored query that later SUCCEEDS must still log its verdict row.
+        log = DivergenceLog(self.path)
+        log.record_error("retrieval", "same query", RuntimeError("transient"))
+        row = log.record("retrieval", "same query", _res(["b"]), _res(["a"]),
+                         _Arbiter(), gold="a")
+        self.assertIsNotNone(row)                           # retry success logged
+        self.assertEqual(len([r for r in log.rows() if "verdict" in r]), 1)
 
 
 if __name__ == "__main__":

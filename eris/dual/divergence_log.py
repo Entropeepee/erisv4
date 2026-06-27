@@ -45,7 +45,8 @@ class DivergenceLog:
     def __init__(self, path: str = "eris_data/dual/divergence.jsonl", counters=None):
         self.path = path
         self.counters = counters        # optional DualCounters (cumulative /vitals tally)
-        self._seen = set()
+        self._seen = set()              # query_hashes with a logged VERDICT row
+        self._seen_err = set()          # query_hashes with a logged ERROR row
         self._load_seen()
 
     def _load_seen(self) -> None:
@@ -57,10 +58,17 @@ class DivergenceLog:
                         continue
                     try:
                         row = json.loads(line)
-                        if row.get("query_hash"):
-                            self._seen.add(row["query_hash"])
                     except (json.JSONDecodeError, ValueError):
                         continue
+                    qh = row.get("query_hash")
+                    if not qh:
+                        continue
+                    # A verdict row blocks re-logging (resume idempotency); an error
+                    # row dedups itself but must NOT block a later success retry.
+                    if "verdict" in row:
+                        self._seen.add(qh)
+                    elif "error" in row:
+                        self._seen_err.add(qh)
         except (FileNotFoundError, OSError):
             pass
 
@@ -126,9 +134,12 @@ class DivergenceLog:
 
     def record_error(self, subsystem: str, query: str, err: Exception) -> None:
         qh = query_hash(query)
+        if qh in self._seen_err:        # idempotent — same error already logged
+            return
         self._append({"ts": round(time.time(), 3), "subsystem": subsystem,
                       "query_hash": qh, "query": query[:500],
                       "error": f"{type(err).__name__}: {err}"})
+        self._seen_err.add(qh)
         if self.counters is not None:
             self.counters.novel_errors += 1
 

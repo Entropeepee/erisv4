@@ -1011,9 +1011,13 @@ class ErisOrchestrator:
             return list(res.records), list(res.tension or [])
         except Exception as e:
             print(f"[DualPath] retrieval shadow failed ({e}); using resonant path")
-            return self.memory.retrieve_resonant(
-                query_bvec=input_bvec, query_embedding=q_embedding,
-                top_k=8, tension_k=3, query_text=user_message)
+            try:
+                return self.memory.retrieve_resonant(
+                    query_bvec=input_bvec, query_embedding=q_embedding,
+                    top_k=8, tension_k=3, query_text=user_message)
+            except Exception as e2:                 # truly never raise into process()
+                print(f"[DualPath] resonant fallback also failed ({e2}); empty retrieval")
+                return [], []
 
     async def retrospect(self, topic: str) -> Dict[str, Any]:
         """Look back over her OWN past thoughts on a topic and synthesize how her
