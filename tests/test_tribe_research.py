@@ -172,6 +172,18 @@ class TestTribeResearch(unittest.TestCase):
         self.assertFalse(any("six domains" in g for g in gaps))      # body finding, NOT a gap
         self.assertFalse(any("tuning lever" in g for g in gaps))
 
+    def test_gaps_parsing_unwraps_markdown_table_rows(self):
+        # the BLECD run leaked raw '| col | col | gap |' rows; keep the gap cell, not the row
+        from eris.tribe.research import _gaps_from
+        text = ("**Open Gaps**\n"
+                "| Lens | Claim | Uncertainty |\n"
+                "| --- | --- | --- |\n"
+                "| Anthropos | smooth ramp | whether it protects against failure is unverified |")
+        gaps = _gaps_from(text)
+        self.assertTrue(any("unverified" in g for g in gaps))
+        self.assertFalse(any(g.startswith("|") for g in gaps))     # no raw table rows
+        self.assertFalse(any("---" in g for g in gaps))            # no separator rows
+
     def test_gaps_parsing_falls_back_to_gap_language_without_header(self):
         from eris.tribe.research import _gaps_from
         text = ("Integrated view grounded in [s:0].\n"
