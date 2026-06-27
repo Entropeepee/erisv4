@@ -864,12 +864,17 @@ class ErisOrchestrator:
                         seen.add(key); cands.append(t[:1400])
                     if len(cands) >= 12:
                         break
-                # Named-doc chunks LEAD unconditionally; resonance (κ cos + λ sin/torsion) ranks
-                # the rest — so a torsion-coupled chunk can beat a merely word-similar one.
+                # Named-doc chunks LEAD (so a named paper is seen first), but resonance
+                # (κ cos + λ sin/torsion) ranks BOTH groups internally — otherwise scope=doc
+                # (all-lead) and the named-doc lead would fall back to pure embedding-cosine
+                # order, defeating the resonance design for the flagship "read this paper" path.
                 led = [t for t in cands if t in lead_text]
                 rest = [t for t in cands if t not in lead_text]
-                if _resonance_on and rest:
-                    rest = resonance_rerank(goal_bvec, rest, bvec_of=_text_to_bvec)
+                if _resonance_on:
+                    if led:
+                        led = resonance_rerank(goal_bvec, led, bvec_of=_text_to_bvec)
+                    if rest:
+                        rest = resonance_rerank(goal_bvec, rest, bvec_of=_text_to_bvec)
                 return (led + rest)[:6]
             except Exception as e:
                 import traceback

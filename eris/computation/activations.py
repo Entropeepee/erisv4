@@ -243,15 +243,22 @@ def bvec_resonance(a: BVec, b: BVec) -> float:
 
 
 def bvec_resonance_2d(a: BVec, b: BVec) -> dict:
-    """Two-channel BVec resonance — the "never just cosine" form (§B3), the bvec analogue of
-    field_resonance_2d. bvec_resonance() returns the NET (elastic − plastic), which subtracts
-    the torsion channel; for RANKING we want both kept so a neighbor that couples through the
-    plastic/torsion (sine) channel is still surfaced when its elastic/cosine alignment is modest.
+    """Genuinely two-channel BVec resonance — the "never just cosine" form (§B3), the bvec
+    analogue of field_resonance_2d. bvec_resonance() returns the NET (elastic − plastic), which
+    SUBTRACTS the torsion channel; here both are kept so a neighbor that couples through the
+    plastic/torsion (sine) channel is surfaced even when its elastic/cosine alignment is modest.
 
-      R_cos (κ)   = Σ elastic·w / Σ total·w      — aligned/constructive channel
-      R_sin (λ)   = Σ plastic·w / Σ total·w      — the torsion/sine channel (kept, not discarded)
-      magnitude   = √(R_cos² + R_sin²)           — total resonance → the ranking score
-      mixing_angle= atan2(R_sin, R_cos)          — torsion diagnostic (grows as λ carries more)
+    The two channels are made INDEPENDENT (not R_sin ≡ 1−R_cos): the per-pair coupling STRENGTH
+    multiplies the elastic/plastic MIX, so magnitude varies in true 2-D — a pair that couples
+    strongly through torsion outranks a weakly-coupled, purely-aligned pair, and two pairs with
+    the same mix but different coupling strength get different magnitudes.
+
+      strength    = weighted-mean per-domain coupling √(a·b)   — how much shared structure (varies)
+      mix_cos     = Σ elastic·w / Σ total·w                    — fraction in the κ/aligned channel
+      mix_sin     = Σ plastic·w / Σ total·w                    — fraction in the λ/torsion channel
+      R_cos       = strength · mix_cos,   R_sin = strength · mix_sin   (independent — sum varies)
+      magnitude   = √(R_cos² + R_sin²)                         — the ranking score (cos AND sin)
+      mixing_angle= atan2(R_sin, R_cos)                        — torsion diagnostic
     Same Davidian-shrinkage weighting and CuPy-safe to_numpy() as bvec_resonance."""
     from eris.computation.shrinkage import davidian_weight
     va = a.as_array().astype(np.float64)
@@ -265,11 +272,15 @@ def bvec_resonance_2d(a: BVec, b: BVec) -> dict:
     mean_c = max(float(np.mean(total)), 1e-10)
     weights = to_numpy(davidian_weight(total / mean_c, alpha=1.0, beta=0.5,
                                        gamma=1.0, delta=0.0)).ravel()
+    w_sum = float(np.sum(weights))
     norm = float(np.sum(total * weights))
-    if norm < 1e-10:
+    if norm < 1e-10 or w_sum < 1e-10:
         return {"R_cos": 0.0, "R_sin": 0.0, "magnitude": 0.0, "mixing_angle": 0.0}
-    r_cos = float(np.sum(elastic * weights) / norm)
-    r_sin = float(np.sum(plastic * weights) / norm)
+    mix_cos = float(np.sum(elastic * weights) / norm)        # fraction of coupling, aligned
+    mix_sin = float(np.sum(plastic * weights) / norm)        # fraction of coupling, torsion
+    strength = norm / w_sum                                  # coupling MAGNITUDE (varies per pair)
+    r_cos = strength * mix_cos
+    r_sin = strength * mix_sin
     return {"R_cos": r_cos, "R_sin": r_sin,
             "magnitude": float(np.hypot(r_cos, r_sin)),
             "mixing_angle": float(np.arctan2(r_sin, r_cos))}

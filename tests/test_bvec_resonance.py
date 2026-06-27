@@ -69,19 +69,39 @@ class TestBvecResonance(unittest.TestCase):
 
 
 class TestBvecResonance2D(unittest.TestCase):
-    def test_keeps_both_channels_magnitude_geq_abs_net(self):
-        # the 2D form must NOT discard the sine: magnitude √(κ²+λ²) ≥ |net elastic−plastic|
-        rng = np.random.RandomState(1)
-        for _ in range(50):
-            a = BVec(*rng.rand(6)); g = BVec(*rng.rand(6))
-            r2 = bvec_resonance_2d(a, g)
-            self.assertGreaterEqual(r2["magnitude"] + 1e-9, abs(bvec_resonance(a, g)))
-
     def test_torsion_channel_nonzero_on_mismatch(self):
         # a partially-aligned neighbor carries signal in the λ/sine (torsion) channel
         goal = BVec(B=0.8, F=0.7, E=0.2, C=0.2, D=0.1, S=0.3)
         mixed = BVec(B=0.8, F=0.1, E=0.2, C=0.8, D=0.1, S=0.3)   # half aligned, half opposed
         self.assertGreater(abs(bvec_resonance_2d(mixed, goal)["R_sin"]), 0.0)
+
+    def test_channels_are_independent_not_one_minus_the_other(self):
+        # the bug the adversarial swarm caught: R_sin must NOT be a mechanical 1−R_cos (which
+        # would make magnitude a 1-D function of a single variable). Across random pairs the
+        # channel SUM (R_cos+R_sin = coupling strength) must VARY — proof of a real 2nd DOF.
+        rng = np.random.RandomState(3)
+        sums = set()
+        for _ in range(50):
+            r = bvec_resonance_2d(BVec(*rng.rand(6)), BVec(*rng.rand(6)))
+            sums.add(round(r["R_cos"] + r["R_sin"], 4))
+        self.assertGreater(len(sums), 10)        # the sum varies → genuinely 2-D, not normalized to 1
+
+    def test_strength_scales_magnitude_at_fixed_mix(self):
+        # two pairs with the SAME elastic/plastic mix but different coupling STRENGTH must get
+        # different magnitudes (strength is the independent channel the degenerate form lacked)
+        goal = BVec(B=0.9, F=0.9, E=0.9, C=0.9, D=0.9, S=0.9)
+        strong = bvec_resonance_2d(BVec(B=0.9, F=0.9, E=0.9, C=0.9, D=0.9, S=0.9), goal)
+        weak = bvec_resonance_2d(BVec(B=0.3, F=0.3, E=0.3, C=0.3, D=0.3, S=0.3), goal)
+        self.assertGreater(strong["magnitude"], weak["magnitude"])   # aligned mix, more coupling → higher
+
+    def test_torsion_coupled_pair_is_not_discarded(self):
+        # a pair coupling mostly through the torsion channel must still earn real magnitude
+        # (the whole point: don't throw the sine away)
+        goal = BVec(B=0.8, F=0.7, E=0.2, C=0.2, D=0.1, S=0.3)
+        torsioned = BVec(B=0.2, F=0.2, E=0.8, C=0.8, D=0.7, S=0.7)
+        r = bvec_resonance_2d(torsioned, goal)
+        self.assertGreater(r["magnitude"], 0.0)
+        self.assertGreater(r["R_sin"], 0.0)
 
     def test_is_gpu_safe_uses_to_numpy(self):
         import inspect
