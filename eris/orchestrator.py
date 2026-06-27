@@ -807,10 +807,17 @@ class ErisOrchestrator:
             except Exception:
                 return ""
 
+        def _embed(text: str):
+            try:
+                return get_embedding(text)
+            except Exception:
+                return None
+
         def _run():
             res = run_two_cycle_research(
                 topic, retriever=_rag, model=_local, moe_gate=self.moe_gate, hub=self.hub,
-                thought_stream=self.thought_stream, max_specialists=max_specialists)
+                thought_stream=self.thought_stream, embed_fn=_embed,
+                max_specialists=max_specialists)
             return {"topic": res.topic, "thought_id": res.thought_id, "gaps": res.gaps,
                     "n_contributors": res.n_contributors, "n_active": res.n_active,
                     "stripped_claims": res.stripped_claims, "cycles": res.cycles}

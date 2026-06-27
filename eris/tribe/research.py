@@ -47,20 +47,33 @@ def _format_sources(sources: List[str]) -> str:
     return "\n".join(f"[s:{i}] {s}" for i, s in enumerate(sources)) or "(no sources)"
 
 
-def _ground_citations(text: str, n_sources: int) -> tuple:
-    """Strip any sentence that cites a source id which does not resolve (a fabricated
-    citation) — mirrors retrospect.unresolved_ids/_strip_unsupported for [s:id]. Returns
-    (grounded_text, n_stripped)."""
+def _ground_citations(text: str, n_sources: int, *, strict: bool = True) -> tuple:
+    """Citation grounding for canonized research (mirrors retrospect's strip-if-unresolved
+    discipline for [s:id]). Returns (grounded_text, n_stripped). Per sentence:
+      • only-fabricated cites (a [s:i] that doesn't resolve, no valid cite) → DROP the sentence;
+      • mixed valid+fabricated → strip just the fabricated token(s), KEEP the valid claim;
+      • strict & a long uncited assertion (>10 words, no citation) → DROP it (a naked claim the
+        sources don't support); short framing/transitions are kept.
+    """
+    text = re.sub(r"\[s:\s*(\d+)\s*\]", r"[s:\1]", text or "")   # normalize multiline cites
     allowed = {str(i) for i in range(n_sources)}
-    bad = set(_SRC_RE.findall(text or "")) - allowed
-    if not bad:
-        return (text or "").strip(), 0
     keep, stripped = [], 0
-    for sent in re.split(r"(?<=[.!?])\s+", text or ""):
-        if set(_SRC_RE.findall(sent)) & bad:
+    for sent in re.split(r"(?<=[.!?])\s+", text):
+        cites = set(_SRC_RE.findall(sent))
+        bad = cites - allowed
+        good = cites & allowed
+        if cites and not good:                       # only fabricated → drop whole sentence
             stripped += 1
             continue
-        keep.append(sent)
+        if bad:                                       # mixed → strip bad token(s), keep claim
+            sent = _SRC_RE.sub(lambda m: "" if m.group(1) in bad else m.group(0), sent)
+            sent = re.sub(r"\s{2,}", " ", sent).strip()
+            stripped += 1
+        elif not cites and strict and len(sent.split()) > 10:
+            stripped += 1                             # long, unsupported, uncited → drop
+            continue
+        if sent.strip():
+            keep.append(sent.strip())
     return " ".join(keep).strip(), stripped
 
 
@@ -78,7 +91,7 @@ def run_two_cycle_research(
     topic: str, *, retriever: Retriever, model: Model,
     specialists: Optional[List[Specialist]] = None,
     hub: Optional[CrossAttentionHub] = None,
-    moe_gate=None, thought_stream=None,
+    moe_gate=None, thought_stream=None, embed_fn: Optional[Callable[[str], Any]] = None,
     goal_bvec: Optional[BVec] = None, max_specialists: int = 5,
     regime: str = "research",
 ) -> ResearchResult:
@@ -98,8 +111,6 @@ def run_two_cycle_research(
     for s in active:
         f = make_reasoned_finding(s, topic, src1, model)
         hub.post(f); c1.append(f)
-    # contributors = specialists whose finding is genuine (not echo / not empty)
-    contributors = [f for f in c1 if not f.metadata.get("echo") and not f.metadata.get("empty")]
 
     # ── Synthesis: Kairos integrates; MoEGate weights; hub cross-pollinates; Elos falsifies ──
     if moe_gate is not None:
@@ -144,17 +155,24 @@ def run_two_cycle_research(
     final = (model(canon_prompt) or synthesis).strip()
     grounded, stripped = _ground_citations(final, len(all_sources))
 
+    # diversity = distinct specialists that genuinely contributed across BOTH cycles
+    contributors = {f.specialist_id for f in (c1 + c2)
+                    if not f.metadata.get("echo") and not f.metadata.get("empty")}
+
     thought_id = None
     if thought_stream is not None and grounded:
         try:
             from eris.memory.thought_stream import link_and_store
-            t = link_and_store(thought_stream, topic, regime, grounded)
+            # store WITH a semantic embedding (else thought_stream.retrieve skips it and the
+            # canonized synthesis is invisible to introspection/retrospection)
+            emb = embed_fn(grounded) if embed_fn else None
+            t = link_and_store(thought_stream, topic, regime, grounded, embedding=emb)
             thought_id = getattr(t, "id", None)
         except Exception:
             thought_id = None
 
     return ResearchResult(
         topic=topic, synthesis=grounded, thought_id=thought_id, gaps=gaps,
-        n_contributors=len({f.specialist_id for f in contributors}),
+        n_contributors=len(contributors),
         n_active=len(active), stripped_claims=stripped,
         elos_critique=elos_critique, cycles=2 if gaps else 1)

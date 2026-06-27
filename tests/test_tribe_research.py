@@ -56,6 +56,32 @@ class TestTribeResearch(unittest.TestCase):
         self.assertIn("[s:0]", out); self.assertIn("[s:1]", out)
         self.assertNotIn("[s:42]", out)
 
+    def test_ground_citations_keeps_valid_claim_in_mixed_sentence(self):
+        # mixed valid+fabricated cite in one sentence → strip the bad token, KEEP the claim
+        out, n = _ground_citations("Source shows X [s:0] but also [s:99] elsewhere.", n_sources=1)
+        self.assertIn("[s:0]", out)
+        self.assertNotIn("[s:99]", out)
+        self.assertIn("Source shows X", out)        # the valid claim survived
+
+    def test_ground_citations_strict_drops_long_naked_claim(self):
+        # a long uncited assertion the sources don't support is dropped; framing survives
+        text = ("In summary. The hidden cabal secretly controls every market on earth "
+                "through invisible means nobody can detect. The data [s:0] supports growth.")
+        out, n = _ground_citations(text, n_sources=1, strict=True)
+        self.assertNotIn("cabal", out)              # naked unsupported claim stripped
+        self.assertIn("[s:0]", out)                 # cited claim kept
+
+    def test_canonized_thought_has_embedding_when_embed_fn_given(self):
+        import numpy as np
+        path = os.path.join(tempfile.mkdtemp(), "t.jsonl")
+        ts = ThoughtStream(path=path)
+        res = run_two_cycle_research("emergence", retriever=_retriever,
+                                     model=lambda p: "Grounded [s:0].", specialists=TRIBE[:2],
+                                     goal_bvec=GOAL, thought_stream=ts,
+                                     embed_fn=lambda t: np.array([0.1, 0.2, 0.3], dtype=np.float32))
+        stored = ts.get(res.thought_id)
+        self.assertIsNotNone(stored.embedding)       # retrievable, not invisible
+
     def test_canonizes_into_thought_stream(self):
         path = os.path.join(tempfile.mkdtemp(), "thoughts.jsonl")
         ts = ThoughtStream(path=path)

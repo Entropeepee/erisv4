@@ -32,7 +32,7 @@ import numpy as np
 from eris.config import to_numpy, xp
 import math
 
-from eris.computation.activations import BVec, bvec_cosine, bvec_distance, bvec_resonance
+from eris.computation.activations import BVec, bvec_resonance
 from eris.computation.sgt import SGTGate
 from eris.computation.shrinkage import davidian_weight
 from eris.tribe.specialists import SpecialistFinding

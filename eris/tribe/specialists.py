@@ -34,7 +34,7 @@ from typing import List, Dict, Optional, Any, Callable
 import re
 import time
 
-from eris.computation.activations import BVec, bvec_cosine, bvec_resonance
+from eris.computation.activations import BVec, bvec_resonance
 from eris.computation.sgt import SGTGate
 
 Model = Callable[[str], str]            # prompt -> text (injected; stub in tests)
@@ -70,9 +70,9 @@ class Specialist:
         relevance = bvec_resonance(self.sensitivity_bvec, goal_bvec)
         should_fire, _ = self.activation_gate.update(relevance)
         # The SGT gate (adaptive z-score) is the primary, scale-free authority. The absolute
-        # fallback is calibrated to the RESONANCE scale (≈[-0.8,+0.5], the relevant domains
-        # cluster ~0.3-0.5), NOT cosine's compressed ~[0.8,0.99] where >0.6 fired for nearly
-        # everything. 0.3 keeps a sparse cold-start set (the top few domains), not all eleven.
+        # fallback is calibrated to the RESONANCE scale (empirically ≈[-0.92,+0.74]; the
+        # relevant domains cluster ~0.3-0.5), NOT cosine's compressed ~[0.8,0.99] where >0.6
+        # fired for nearly everything. 0.3 keeps a sparse cold-start set (the top few domains).
         return should_fire or relevance > 0.3
 
 
