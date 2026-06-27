@@ -189,6 +189,18 @@ def _gaps_from(text: str) -> List[str]:
     def _clean(s: str) -> str:
         return re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", s.strip()).strip("*").strip()
 
+    def _detable(s: str) -> str:
+        """A model often emits gaps as markdown TABLE rows ('| col | col | the actual gap |').
+        Keep the most informative cell (the longest) rather than the raw '| … | … |' row; drop
+        pure separator rows ('|---|:--:|')."""
+        if "|" not in s:
+            return s
+        cells = [c.strip().strip("*").strip() for c in s.split("|")]
+        cells = [c for c in cells if c and not re.fullmatch(r"[-:\s]+", c)]
+        if not cells:
+            return ""
+        return max(cells, key=len)
+
     lines = (text or "").splitlines()
     out, in_section = [], False
     for raw in lines:
@@ -203,6 +215,7 @@ def _gaps_from(text: str) -> List[str]:
             if re.match(r"^[A-Z][A-Za-z ]{2,40}:?$", line) and not line.endswith((".", ";")):
                 in_section = False
                 continue
+            line = _detable(line)                # unwrap markdown table rows → the gap cell
             if len(line.split()) >= 2:
                 out.append(line)
     if out:
@@ -213,8 +226,10 @@ def _gaps_from(text: str) -> List[str]:
                          r"lacks?|absent)\b", re.I)
     for raw in lines:
         line = _clean(raw)
-        if len(line.split()) >= 2 and not _is_gap_header(line) and _GAPISH.search(line):
-            out.append(line)
+        if not _is_gap_header(line) and _GAPISH.search(line):
+            line = _detable(line)
+            if len(line.split()) >= 2:
+                out.append(line)
     return out[:5]
 
 
