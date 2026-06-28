@@ -389,7 +389,10 @@ def run_two_cycle_research(
     if any(s.id == "elos" for s in active):
         elos_critique = (model(
             f"As Elos (adversarial), try to FALSIFY this synthesis using ONLY the sources. "
-            f"Identify the SINGLE weakest claim — the one least supported by the sources. "
+            f"Identify the SINGLE weakest claim — the one least supported by the sources. This "
+            f"INCLUDES unsupported COMPARATIVE or NEGATIVE claims (e.g. 'beyond standard "
+            f"practice', 'no better than prior art', 'nothing novel'): a comparison to things "
+            f"NOT in the sources is itself unsupported. "
             f"State it verbatim, then rule: either (a) it CAN be defended — name the specific "
             f"[s:i] that grounds it; or (b) it must be STRUCK — no source supports it. Be "
             f"decisive; pick exactly one claim and one ruling.\n\n"
