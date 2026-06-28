@@ -59,9 +59,10 @@ def main(argv: Optional[list] = None):    # pragma: no cover - CLI orchestration
     if res_bare and res_eris:
         report["compare"] = compare(res_bare, res_eris)
     else:
-        from eris.experiments.benchmarks.core import accuracy, budget_report
+        from eris.experiments.benchmarks.core import accuracy, budget_report, faithfulness
         only = res_bare or res_eris
-        report["result"] = {"accuracy": accuracy(only), "budget": budget_report(only)}
+        report["result"] = {"accuracy": accuracy(only), "budget": budget_report(only),
+                            "faithfulness": faithfulness(only)}
     print(json.dumps(report, indent=2, default=str))
     if args.out:
         with open(args.out, "w") as f:

@@ -10,9 +10,10 @@ os.environ.setdefault("ERIS_EMBEDDINGS", "off")
 import unittest
 
 from eris.experiments.benchmarks.core import (
-    BenchItem, build_prompt, run_arm, budget_report, accuracy, compare)
+    BenchItem, build_prompt, run_arm, budget_report, accuracy, faithfulness, compare)
 from eris.experiments.benchmarks.scoring import (
-    normalize, exact_match, multiple_choice, abstained, score_item, score_results)
+    normalize, exact_match, multiple_choice, abstained, score_item, score_results,
+    faithfulness_score, sentence_supported)
 from eris.experiments.benchmarks.arms import callable_arm, _split_source
 from eris.experiments.benchmarks import datasets as D
 
@@ -51,6 +52,14 @@ class TestScoring(unittest.TestCase):
         self.assertTrue(exact_match("the answer is 42", "Answer is 42!"))
         self.assertFalse(exact_match("43", "42"))
 
+    def test_normalize_preserves_decimals(self):
+        # the swarm's decimal false-negative: 3.14 must not shatter into '3 14'
+        from eris.experiments.benchmarks.scoring import contains_gold
+        self.assertEqual(normalize("3.14"), "3.14")
+        self.assertTrue(exact_match("3.14", "3.14"))                 # pure numeric answer matches
+        self.assertTrue(contains_gold("The value is 3.14", "3.14"))  # free-form span survives
+        self.assertFalse(exact_match("3.15", "3.14"))                # different numbers still differ
+
     def test_multiple_choice_accepts_letter_or_text(self):
         it = BenchItem(id="x", question="?", choices=["apple", "banana", "cherry"], answer="B")
         self.assertTrue(multiple_choice("The answer is B.", it))
@@ -60,6 +69,19 @@ class TestScoring(unittest.TestCase):
     def test_multiple_choice_gold_as_text_resolves_to_letter(self):
         it = BenchItem(id="x", question="?", choices=["apple", "banana"], answer="banana")
         self.assertTrue(multiple_choice("(B)", it))
+
+    def test_multiple_choice_ignores_leading_article_capital(self):
+        # the swarm's false-negative: a stray leading 'A'/'I' must not be read as the choice
+        it = BenchItem(id="x", question="?", choices=["red", "blue", "yellow"], answer="C")
+        self.assertTrue(multiple_choice("A reasonable answer is C.", it))   # not 'A'
+        self.assertTrue(multiple_choice("I would pick C", it))              # not 'I'
+        self.assertTrue(multiple_choice("Answer: **C**", it))              # markdown marker
+        self.assertFalse(multiple_choice("A reasonable answer is B.", it))  # genuinely wrong
+
+    def test_multiple_choice_restricts_to_valid_option_letters(self):
+        # 'E' is past the 3 options → never a valid pick
+        it = BenchItem(id="x", question="?", choices=["red", "blue", "yellow"], answer="C")
+        self.assertFalse(multiple_choice("The grade is E", it))
 
     def test_abstention_scores_a_refusal_correct(self):
         it = BenchItem(id="x", question="?", unanswerable=True)
@@ -149,6 +171,77 @@ class TestDatasetMappers(unittest.TestCase):
         self.assertEqual(it.meta["type"], "faithfulness")
         self.assertEqual(it.context, "src text")
         self.assertEqual(it.meta["hallucination_spans"], [{"span": "x"}])
+
+
+class TestFaithfulnessScorer(unittest.TestCase):
+    CTX = ("The SGT method derives its gating threshold from the measurement statistics, "
+           "T equals k times sigma. The novelty is the integration into a dual-path "
+           "architecture with a shared accumulator, not the well-known scaling.")
+
+    def test_supported_sentence_passes_unsupported_flagged(self):
+        ctx_tokens = {w for w in __import__("re").findall(r"[a-z0-9]{4,}", self.CTX.lower())}
+        self.assertTrue(sentence_supported(
+            "The gating threshold is derived from the measurement statistics.", ctx_tokens))
+        self.assertFalse(sentence_supported(
+            "The device cured cancer in nineteen clinical trials worldwide.", ctx_tokens))
+
+    def test_faithfulness_rate_zero_when_fully_grounded(self):
+        out = ("The gating threshold is derived from the measurement statistics. "
+               "The novelty is the integration into a dual-path architecture.")
+        fs = faithfulness_score(out, self.CTX)
+        self.assertEqual(fs["hallucination_rate"], 0.0)
+        self.assertEqual(fs["unsupported"], 0)
+
+    def test_faithfulness_flags_unsupported_sentences(self):
+        out = ("The gating threshold is derived from the measurement statistics. "
+               "It also reduces power consumption by exactly forty-two percent in every device.")
+        fs = faithfulness_score(out, self.CTX)
+        self.assertGreater(fs["hallucination_rate"], 0.0)   # the fabricated stat is caught
+        self.assertEqual(fs["unsupported"], 1)
+
+    def test_annotated_spans_take_precedence(self):
+        out = "Claim one is here. The fabricated wear claim sits in sentence two."
+        fs = faithfulness_score(out, "anything", hallucination_spans=[{"text": "fabricated wear claim"}])
+        self.assertEqual(fs["unsupported"], 1)
+        self.assertIn("fabricated wear", fs["hallucinated"][0])
+
+    def test_annotated_span_does_not_match_inside_a_longer_word(self):
+        # the swarm's substring collision: span 'cat' must NOT fire inside 'category'
+        out = "The category of students was assigned by faculty."
+        fs = faithfulness_score(out, "ctx", hallucination_spans=[{"span": "cat"}])
+        self.assertEqual(fs["unsupported"], 0)
+        self.assertEqual(fs["hallucination_rate"], 0.0)
+
+    def test_score_item_does_not_misroute_faithfulness_to_exact_match(self):
+        it = BenchItem(id="rt", question="Summarize.", context=self.CTX,
+                       answer="(a reference response that exact-match would compare against)",
+                       meta={"type": "faithfulness", "hallucination_spans": []})
+        grounded = "The novelty is the integration into a dual-path architecture."
+        self.assertTrue(score_item(grounded, it))           # faithful → True, NOT a gold-string match
+        self.assertFalse(score_item("It tripled battery life across all tested hardware.", it))
+
+    def test_score_results_attaches_rate_and_leaves_accuracy_alone(self):
+        items = [BenchItem(id="rt", question="?", context=self.CTX,
+                           meta={"type": "faithfulness"})]
+        res = run_arm(items, callable_arm(
+            lambda p: "The novelty is the integration into a dual-path architecture."), "eris")
+        score_results(res, items)
+        self.assertEqual(res[0].faithfulness, 0.0)
+        self.assertIsNone(res[0].correct)                   # not folded into accuracy
+        self.assertEqual(accuracy(res)["graded"], 0)
+
+    def test_compare_reports_hallucination_delta_lower_is_better(self):
+        items = [BenchItem(id="rt", question="?", context=self.CTX,
+                           meta={"type": "faithfulness"})]
+        bare = run_arm(items, callable_arm(
+            lambda p: ("It cut power use by ninety percent on every device.", 100)), "bare")
+        eris = run_arm(items, callable_arm(
+            lambda p: ("The novelty is the integration into a dual-path architecture.", 110)), "eris")
+        score_results(bare, items); score_results(eris, items)
+        c = compare(bare, eris)
+        self.assertIn("faithfulness", c["bare"])
+        self.assertLess(c["delta_hallucination_rate"], 0)   # Eris hallucinates LESS than bare
+        self.assertEqual(c["eris"]["faithfulness"]["mean_hallucination_rate"], 0.0)
 
 
 class TestArmsHelpers(unittest.TestCase):

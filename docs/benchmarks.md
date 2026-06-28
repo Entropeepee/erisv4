@@ -52,40 +52,34 @@ python -m eris.experiments.benchmarks.run --benchmark mmlu_pro --arm bare --limi
 python -m eris.experiments.benchmarks.run --benchmark quality  --arm bare --limit 50 --hard-only
 ```
 
-Both arms head-to-head — wire the Eris arm with a factory that returns an `answer_fn`:
+Both arms head-to-head — a **turnkey** Eris-arm factory ships with the package, so no extra code
+is needed:
 
 ```bash
 python -m eris.experiments.benchmarks.run --benchmark frames --arm both --limit 50 \
-    --eris-factory my_bench:make_eris_arm
+    --eris-factory eris.experiments.benchmarks.eris_arm:make_eris_arm
 ```
 
-### Wiring the Eris arm
+### The built-in Eris arm (`eris_arm.py::make_eris_arm`)
 
-`eris/experiments/benchmarks/arms.py::eris_pipeline_arm` is the intended shape. For each question
-it splits the provided SOURCE back out, ingests it into a **scratch** Eris memory, then asks the
-full pipeline. A minimal factory:
+For each question it splits the provided SOURCE back out, ingests it into a **scratch** Eris memory
+(`web_reader.ingest_text(..., title="bench")`), runs the hive over just that document
+(`hive_research(q, scope="doc", document="bench")`), and returns `(synthesis, real_tokens)`.
 
-```python
-# my_bench.py
-from eris.orchestrator import ErisOrchestrator
-from eris.knowledge import web_reader
-from eris.experiments.benchmarks.arms import eris_pipeline_arm
+It is safe by construction:
+- builds `ErisOrchestrator(data_dir="eris_bench_data")` — a **scratch** dir; it *refuses* to run
+  against `eris_data`;
+- sets `ERIS_ROUTE_GAPS=0` and `ERIS_SYNTHESIS_WRITEBACK=0`, so a benchmark run can't write
+  syntheses into, or queue study topics from, the real store;
+- `reset()` wipes the scratch MTM/LTM/STM + thought-stream between items, so item N+1 can never
+  retrieve item N's passage;
+- **real token cost** — a meter wraps the local backend(s)' `generate()` and sums
+  `LLMResponse.tokens_used` (Ollama/vLLM `/v1` report `usage`). If a backend reports no usage it
+  falls back to the hive's LLM call count, printed to stderr as a labeled PROXY (so an approximate
+  equal-budget comparison is never mistaken for an exact one).
 
-def make_eris_arm():
-    orch = ErisOrchestrator(data_dir="eris_bench_data")   # NOT your real eris_data
-    def reset():  ...   # clear the scratch MTM/LTM between items
-    def ingest(ctx): web_reader.ingest_text(orch.memory, ctx, title="bench")
-    def ask(q):
-        import asyncio
-        r = asyncio.run(orch.hive_research(q, scope="doc", document="bench"))
-        # token cost = sum of tier calls if you want strict equal-budget accounting
-        return (r.get("synthesis_full") or r.get("synthesis") or ""), 0
-    return eris_pipeline_arm(ingest, ask, reset)
-```
-
-Use a **separate `data_dir`** so benchmarking never writes into your live `eris_data`. The A/B
-harness (`hive_ab.py`) already sets `ERIS_ROUTE_GAPS=0` and `ERIS_SYNTHESIS_WRITEBACK=0`; set the
-same here if you reuse the live orchestrator.
+Override the scratch dir / field size by writing a one-line factory that calls
+`make_eris_arm(data_dir=..., field_size=...)` and pointing `--eris-factory` at it.
 
 ## Suite (recommended order)
 
@@ -98,10 +92,22 @@ same here if you reuse the live orchestrator.
 | 2 (control) | MMLU-Pro | `mmlu_pro` | general-reasoning bare-model ceiling |
 | 2 (control) | GPQA-Diamond | `gpqa` | the one Gemini leads; sizes the deficit |
 
-**RAGTruth is faithfulness, not accuracy** — its items are `meta["type"]=="faithfulness"` with
-annotated hallucination spans. Score it with span overlap / RAGChecker / RAGAS layered on the
-arm's output, not exact-match. The other five score with the built-in exact-match / multiple-choice
-/ abstention scorers.
+**RAGTruth is faithfulness, not accuracy** — its items are `meta["type"]=="faithfulness"`. The
+scorer (`scoring.faithfulness_score`) produces a per-item **hallucination rate** (fraction of the
+arm's output sentences not supported by the provided source; lower = more faithful), using the
+annotated `hallucination_spans` as the reference where present and a content-overlap entailment
+proxy otherwise. `score_results` attaches the rate per item (and leaves it OUT of accuracy);
+`compare()` reports each arm's `mean_hallucination_rate` and `delta_hallucination_rate` — **negative
+means Eris hallucinates less than the bare arm**, which is the whole point of running RAGTruth (the
+hive's Elos pass should suppress unsupported claims). For claim-level precision, install RAGAS and
+wire `scoring.ragchecker_faithfulness` (optional, guarded). The other five benchmarks score with the
+built-in exact-match / multiple-choice / abstention scorers.
+
+> **Trust which faithfulness numbers:** RAGTruth items carry annotated hallucination spans, so the
+> rate there is well-grounded. With no spans, the scorer falls back to a **crude content-word
+> overlap proxy** (it can miss a fluent paraphrase that flips a fact, or flag a faithful reword), so
+> treat a faithfulness overlay on FRAMES/QuALITY as a *rough* signal only — or install RAGAS for
+> claim-level entailment.
 
 ## Cross-check
 
