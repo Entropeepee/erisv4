@@ -47,6 +47,44 @@ from eris.computation.sgt import SGTGate
 from eris.config import CONFIG
 
 
+import re as _re_mod
+
+
+def _dedupe_near_records(records: List[Any], threshold: float = 0.92,
+                         max_keep: Optional[int] = None) -> List[Any]:
+    """Collapse near-DUPLICATE records (the SAME file ingested twice under different temp names),
+    keeping the first (highest-ranked) of each cluster. Two guards keep it from eating genuinely
+    distinct sections that merely share boilerplate (e.g. a patent's Claim 1 vs the dependent
+    Claim 2, or chunks sharing the 'Title › Section' contextual header):
+      • content-word Jaccard ≥ `threshold` (0.92 — a true re-ingest is ~identical), AND
+      • a LENGTH-RATIO gate (near-identical length) — a claim and its dependent claim differ.
+    Stops once `max_keep` survivors are found, so it never runs the full O(n²) over a large pool
+    (the caller slices to max_chunks anyway)."""
+    def _cw(t: str) -> set:
+        return {w for w in _re_mod.findall(r"[a-z0-9]{4,}", (t or "").lower())}
+    kept, kept_sets = [], []
+    for r in records:
+        if max_keep is not None and len(kept) >= max_keep:
+            break
+        s = _cw(getattr(r, "text", ""))
+        if not s:
+            kept.append(r); kept_sets.append(s); continue
+        dup = False
+        for ks in kept_sets:
+            if not ks:
+                continue
+            lo, hi = sorted((len(s), len(ks)))
+            if lo / hi < 0.8:                      # length differs too much to be a re-ingest
+                continue
+            u = s | ks
+            if u and len(s & ks) / len(u) >= threshold:
+                dup = True
+                break
+        if not dup:
+            kept.append(r); kept_sets.append(s)
+    return kept
+
+
 # ─── Memory Record ────────────────────────────────────────────────────────
 
 @dataclass
@@ -561,29 +599,79 @@ class MemorySystem:
             return []
         pool = (list(self.stm.get_all()) + list(self.mtm._records)
                 + list(self.ltm._records))
-        hits = []
+
+        def _is_doc(rec) -> bool:
+            return bool((rec.metadata or {}).get("title")) or str(rec.source).lower().startswith(
+                ("reading:", "exploration:", "research:", "ponder:", "study:", "deepread"))
+
+        # 1) SEEDS — is_doc records whose NAME matches (title/source any token = a STRONG match,
+        # or the full name appears in the body = a weak match). PDFs/docx are ingested with the
+        # FILENAME as the title, so an acronym like "SGT" often lives only in the body.
+        seeds = []   # (record, source, strong_name_hit)
         for rec in pool:
+            if not _is_doc(rec):
+                continue
             title = str((rec.metadata or {}).get("title", "")).lower()
             src = str(rec.source).lower()
-            is_doc = bool((rec.metadata or {}).get("title")) or src.startswith(
-                ("reading:", "exploration:", "research:", "ponder:", "study:", "deepread"))
-            if not is_doc:
-                continue
-            # A name can match the title/filename (any token) OR appear in the chunk BODY.
-            # PDFs are ingested with per-SECTION-HEADING titles, not the filename — so an
-            # acronym like "BLECD" lives in the text, not the title; matching title/source
-            # alone misses most of the paper. Restricting to is_doc records keeps this from
-            # pulling in conversation that merely mentions the name.
             text = str(getattr(rec, "text", "") or "").lower()
             name_hit = any(t in title or t in src for t in toks)
-            body_hit = all(t in text for t in toks)        # FULL name present in the body
-            if name_hit or body_hit:
-                hits.append(rec)
-        if not hits:
+            if name_hit or all(t in text for t in toks):
+                seeds.append((rec, str(rec.source), name_hit))
+        if not seeds:
             return []
+
+        # 2) Resolve the DOCUMENT(S) the name refers to by their source-group. A whole file is
+        # ingested under ONE source ("reading:<filename>"), so every section of the named
+        # document shares it — that is the document id. PREFER actual files over web-note
+        # ("exploration:"/"study:") records that merely MENTION the name (the self-study
+        # breadcrumb + USPTO/PATENTSCOPE boilerplate that was poisoning SGT runs).
+        def _is_file(src: str) -> bool:
+            return src.lower().startswith(("reading:", "deepread", "research:"))
+        by_src: Dict[str, Dict[str, Any]] = {}
+        for rec, src, nh in seeds:
+            g = by_src.setdefault(src, {"count": 0, "name": False})
+            g["count"] += 1
+            g["name"] = g["name"] or nh
+        cand_srcs = [s for s in by_src if _is_file(s)] or list(by_src)
+        # CAP the expansion: a common single token can seed many documents → ranking by
+        # (strong-name-hit, seed-count) keeps the few most-likely-intended docs, so the result
+        # never blows up into a top-k over the whole store (adversarial review finding #1).
+        cand_srcs.sort(key=lambda s: (by_src[s]["name"], by_src[s]["count"]), reverse=True)
+        doc_srcs = set(cand_srcs[:6])
+
+        # 3) EXPAND to the whole document(s): every chunk sharing those sources — INCLUDING
+        # sections that don't themselves contain the name (Summary, Distinction-from-Prior-Art,
+        # Claims). This is what surfaces the conceptual body, not just the name-bearing abstract.
+        members = [rec for rec in pool if str(rec.source) in doc_srcs]
+
+        # 4) Rank by the QUESTION (not the doc name) so the most relevant sections lead.
         if query_embedding is not None:
-            hits.sort(key=lambda r: cosine(query_embedding, r.embedding), reverse=True)
-        return hits[:max_chunks]
+            members.sort(key=lambda r: cosine(query_embedding, r.embedding), reverse=True)
+        # 5) Collapse near-duplicate chunks (same file ingested twice), lazily to max_chunks —
+        # so the O(n²) compare never runs over the whole expanded pool (review finding #2).
+        return _dedupe_near_records(members, max_keep=max_chunks)
+
+    def list_documents(self) -> List[Dict[str, Any]]:
+        """The distinct INGESTED DOCUMENTS in memory (one entry per source-group), for a UI
+        document picker and for store diagnostics. Each dict has a display `name`, the `source`
+        id, a `chunks` count, and `kind` ('file' = an ingested document, 'note' = a web/study
+        record). Sorted by chunk count. A document ingested twice under different temp names
+        shows as TWO entries — which is exactly what you want to SEE when diagnosing the store."""
+        pool = (list(self.stm.get_all()) + list(self.mtm._records) + list(self.ltm._records))
+        groups: Dict[str, Dict[str, Any]] = {}
+        for rec in pool:
+            src = str(rec.source)
+            if not src.lower().startswith(
+                    ("reading:", "exploration:", "research:", "ponder:", "study:", "deepread")):
+                continue
+            g = groups.get(src)
+            if g is None:
+                title = str((rec.metadata or {}).get("title", "")) or src.split(":", 1)[-1]
+                kind = "file" if src.lower().startswith(("reading:", "deepread", "research:")) \
+                    else "note"
+                g = groups[src] = {"name": title, "source": src, "kind": kind, "chunks": 0}
+            g["chunks"] += 1
+        return sorted(groups.values(), key=lambda x: -x["chunks"])
 
     def max_similarity(self, embedding) -> float:
         """Highest cosine similarity of `embedding` to anything stored, across
