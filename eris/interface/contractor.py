@@ -36,9 +36,11 @@ class ContractorRouter:
     TIER_FOR_DECISION = {"CONTINUE": "local", "SWITCH": "free", "ESCALATE": "cheap"}
 
     def __init__(self, gateway, local_mediator, *, cost_log: Optional[Dict[str, int]] = None):
+        import threading
         self.gateway = gateway
         self.local = local_mediator
         self.costs = cost_log if cost_log is not None else {}
+        self._cost_lock = threading.Lock()        # specialists may bill concurrently (parallel hive)
 
     def tier_for_decision(self, decision_name: str) -> str:
         return self.TIER_FOR_DECISION.get(str(decision_name).upper(), "local")
@@ -78,9 +80,10 @@ class ContractorRouter:
 
     def _bill(self, backend: Any, tier: str) -> None:
         name = str(getattr(backend, "name", "?"))
-        self.costs[name] = self.costs.get(name, 0) + 1
-        if tier in _PAID_TIERS:
-            self.costs["_paid_calls"] = self.costs.get("_paid_calls", 0) + 1
+        with self._cost_lock:                     # atomic under concurrent specialist calls
+            self.costs[name] = self.costs.get(name, 0) + 1
+            if tier in _PAID_TIERS:
+                self.costs["_paid_calls"] = self.costs.get("_paid_calls", 0) + 1
 
     # OPEN-path cost-tiered failover order. free escalates to cheap before giving up to local
     # (mirrors the LiteLLM `fallbacks: [{free-pool: [cheap-paid]}]`); every chain ends at local
