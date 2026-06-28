@@ -276,6 +276,18 @@ def create_app(
                     "message": "Nothing to dream about yet — no recent conversation or tension."}
         return d
 
+    @app.post("/api/dream/reconsider")
+    async def api_reconsider(req: PonderRequest):
+        """Step 5: have her compare her naive first impression of a topic against her post-hive
+        conclusion and write a calibration lesson. Optional question = the topic to reconsider;
+        empty = let her pick a topic where both views exist."""
+        mc = await orchestrator.metacognitive_review(req.question.strip())
+        if not mc:
+            return {"reconsidered": False,
+                    "message": "No topic yet has both a first impression and an analyzed "
+                               "conclusion to compare."}
+        return mc
+
     @app.post("/api/retrospect")
     async def api_retrospect(req: PonderRequest):
         """Look back over her own past thoughts on a topic and synthesize them."""
@@ -726,6 +738,15 @@ def create_app(
                         print(f"[Dream] subjective ({d.get('regime')}): {d.get('chars', 0)} chars")
                 except Exception as e:
                     print(f"[Dream Error] {e}")
+                # Sleep also RECONSIDERS: compare a naive first impression against the post-hive
+                # conclusion on the same topic and write a calibration lesson (step 5).
+                try:
+                    mc = await asyncio.to_thread(orchestrator.metacognitive_review)
+                    if mc:
+                        print(f"[Metacognition] reconsidered '{mc.get('topic')}' — "
+                              f"view moved {mc.get('moved')} ({mc.get('revision')})")
+                except Exception as e:
+                    print(f"[Metacognition Error] {e}")
             await asyncio.sleep(300)  # check every 5 min
 
     def _study_throttle() -> int:

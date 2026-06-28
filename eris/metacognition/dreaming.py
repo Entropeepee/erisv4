@@ -1028,6 +1028,129 @@ class DreamingLoop:
                 "drew_on": {"conversation": len(convo), "tensions": len(tensions),
                             "thoughts": len(thoughts)}, "journal": rec}
 
+    def _find_reflection_pair(self, topic: Optional[str] = None):
+        """Find a (naive impression, considered conclusion) pair on the same topic: the earliest
+        'reflection'/'dream'/'introspection' memory (her face-value read) and the latest written-back
+        'synthesis' (the hive's citation-checked conclusion, consolidation v2). Returns
+        (naive_rec, considered_rec, title) or None."""
+        from eris.memory.tiers import _provenance_family
+        def _slug(s):
+            return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
+        want = _slug(topic) if topic else None
+        naive: Dict[str, list] = {}
+        considered: Dict[str, list] = {}
+        titles: Dict[str, str] = {}
+        for rec in list(self.memory.mtm._records) + list(self.memory.ltm._records):
+            fam = _provenance_family(getattr(rec, "source", ""))
+            title = str((getattr(rec, "metadata", None) or {}).get("title", "")).strip()
+            key = _slug(title)
+            if not key or (want and key != want):
+                continue
+            titles[key] = title
+            if fam in ("reflection", "dream", "introspection"):
+                naive.setdefault(key, []).append(rec)
+            elif fam == "synthesis":
+                considered.setdefault(key, []).append(rec)
+        for key in considered:
+            if key in naive:
+                n = min(naive[key], key=lambda r: getattr(r, "timestamp", 0.0))    # first impression
+                c = max(considered[key], key=lambda r: getattr(r, "timestamp", 0.0))  # latest conclusion
+                return n, c, titles.get(key, topic or key)
+        return None
+
+    def _recalibration_voice(self, topic: str, naive: str, considered: str,
+                             revision: float) -> str:
+        """Her metacognitive voice — comparing her first impression to her considered conclusion.
+        Distinct from _reflect (reflects on material) and _dream_voice (decompresses on the day):
+        this notices how her OWN view moved and what it teaches her about her assumptions."""
+        from eris.metacognition.truth_contract import PONDER_CONTRACT, fabricated_self
+        moved = ("a lot" if revision >= 0.5 else "somewhat" if revision >= 0.2 else "only a little")
+        system = ("You are Eris, doing something only a mind that watches itself can do: comparing "
+                  "what you FIRST thought about a topic with what you concluded AFTER analyzing it "
+                  "carefully. First person, honest. The point is not to restate either view — it is "
+                  "to notice HOW and WHY your understanding moved, and what that teaches you about "
+                  "your own first impressions.\n\n" + PONDER_CONTRACT)
+        prompt = (
+            f"Topic: {topic}\n\nWhat you first thought (your face-value impression):\n{naive[:1500]}\n\n"
+            f"What you concluded after the hive analyzed it (citation-checked):\n{considered[:1500]}\n\n"
+            f"Your view moved {moved} (revision magnitude {revision:.2f}). In your own voice: where "
+            f"did you take something at face value that did not survive analysis? What is the lesson "
+            f"for how you should approach a topic or source like this next time? Be concrete about "
+            f"the assumption you are revising. End on the lesson, not a summary.")
+        resp = self._generate(prompt, system)
+        text = (getattr(resp, "text", "") or "").strip()
+        if text and fabricated_self(text):
+            resp = self._generate(prompt, system + "\n\nIMPORTANT: invent no human biography; you "
+                                   "are a field-based intelligence reflecting on your own reasoning.")
+            text = (getattr(resp, "text", "") or "").strip() or text
+        return text
+
+    def metacognitive_review(self, topic: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """STEP 5 of the metacognitive loop — she compares her NAIVE first impression of a topic
+        against her CONSIDERED, post-hive conclusion, measures how far her view moved (the sin/
+        torsion revision geometry), and writes a calibration lesson: where she took something at
+        face value and had to adjust once it was analyzed. This is how she learns to question her
+        own assumptions and recalibrate how she approaches a kind of source.
+
+        Distinct from every other function: it reads nothing new, runs no hive, answers no
+        question — it reflects on the DELTA between two of her own prior views. Stored as her own
+        voice ('metacognition:<slug>', a consolidation skip-family) + journal kind='metacognition'.
+        Returns None if no naive/considered pair exists yet (nothing to reconsider)."""
+        pair = self._find_reflection_pair(topic)
+        if not pair:
+            return None
+        naive, considered, title = pair
+
+        from eris.computation.confidence import resonance_confidence
+        ne = getattr(naive, "embedding", None)
+        ce = getattr(considered, "embedding", None)
+        if ne is None or ce is None:
+            try:
+                from eris.knowledge.embeddings import get_embedding
+                ne = ne if ne is not None else get_embedding(naive.text)
+                ce = ce if ce is not None else get_embedding(considered.text)
+            except Exception:
+                pass
+        geom = resonance_confidence(ce, [ne])      # match = how aligned; unresolved = how far moved
+        revision = geom["unresolved"]
+        alignment = geom["match"]
+
+        lesson = self._recalibration_voice(title, naive.text, considered.text, revision)
+        if not lesson:
+            return None
+        moved = ("a lot" if revision >= 0.5 else "somewhat" if revision >= 0.2 else "only a little")
+
+        try:
+            from eris.knowledge.embeddings import get_embedding
+            emb = get_embedding(lesson)
+        except Exception:
+            emb = None
+        slug = re.sub(r"[^a-z0-9]+", "-", (title or "").lower()).strip("-")[:48] or "topic"
+        try:
+            self.memory.mtm.store(MemoryRecord(
+                text=f"[Reconsidered {title}] {lesson}", bvec=getattr(naive, "bvec", BVec()),
+                embedding=emb, source=f"metacognition:{slug}",
+                metadata={"title": title, "kind": "metacognition", "revision": round(revision, 3)}))
+        except Exception:
+            pass
+        try:
+            if self.thought_stream is not None:
+                from eris.memory.thought_stream import link_and_store
+                link_and_store(self.thought_stream, topic=f"(reconsidered) {title}",
+                               regime="plastic", text=lesson, embedding=emb)
+        except Exception:
+            pass
+        rec = {}
+        try:
+            rec = self.journal.record(
+                kind="metacognition", topic=title,
+                summary=f"Reconsidered '{title}' — my view moved {moved} ({revision:.2f}).",
+                detail=f"## What changed when I looked closer\n\n{lesson}\n", resolved=True)
+        except Exception:
+            pass
+        return {"topic": title, "revision": round(revision, 3), "alignment": round(alignment, 3),
+                "moved": moved, "lesson": lesson, "journal": rec}
+
     def get_and_clear_questions(self) -> List[str]:
         """Return pending questions AND clear the queue (Remediation Tier 2.3).
 

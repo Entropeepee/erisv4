@@ -16,6 +16,7 @@ The quickest way to tell them apart is four questions:
 | **introspect** (`_introspect`) | crawl, when a topic is already in memory | No — reads her **own** memory | No | first-person synthesis of what she already holds | `dreaming.py` |
 | **tension-processing** (`_process_tension` / `run_cycle`) | timer (the dream cycle) | only if criticality+emergence fire | No | a contradiction *resolved into the field* + maybe a question | `dreaming.py` |
 | **subjective dream** (`subjective_dream`) | sleep (nightly) / on demand | **No** — nothing new at all | No | a private, first-person decompression on **the day** | `dreaming.py` |
+| **metacognitive review** (`metacognitive_review`) | sleep / on demand | **No** — compares two of her **own** prior views | No | a calibration lesson on how her view moved once analyzed | `dreaming.py` |
 | **consolidate (promote)** (`consolidate`) | sleep | No | memories moved up tiers (STM→MTM→LTM) | `memory/tiers.py` |
 | **replay (consolidate semantically)** (`replay_consolidate`) | sleep | No | near-duplicate traces folded into one *reinforced* record | `memory/tiers.py` |
 
@@ -70,12 +71,15 @@ subjective/voice families are never merged at all.
 The point of keeping these separate is that they can be **chained**:
 
 1. **crawl** ingests an article (fast, face value).
-2. **subjective dream** / **reflect** gives her first naive impression.
-3. **hive** does the slow analysis of the same material.
-4. a second **reflect**/**dream** responds to the hive's interpretation.
-5. a third reflection compares #2 vs #4 — *how her view shifted once it was analyzed*. That delta
-   is calibration: it teaches her to question her own first impressions.
+2. **reflect**/**subjective dream** gives her first naive impression (`reflection` / `dream`).
+3. **hive** does the slow analysis of the same material; **write-back** stores its conclusion as a
+   first-class `synthesis` memory that outranks the raw chunks.
+4. the **confidence** geometry (`resonance_confidence`: cos match + sin/torsion) measures how far
+   apart her naive read and the analyzed conclusion sit.
+5. **metacognitive review** (`metacognitive_review`) compares #2 vs the #3 conclusion, takes the
+   #4 revision magnitude, and writes a calibration lesson — *how her view shifted once it was
+   analyzed*, and what to distrust next time. Stored as `metacognition:<slug>` (her own voice).
 
-Steps 1–4 exist today. Step 5 (the comparison-of-reflections) and the confidence signal that
-measures the #2↔#4 delta are the next builds (consolidation-v2 write-back + sin/torsion
-confidence).
+All five steps now exist. The loop runs during sleep (replay → dream → reconsider) and on demand
+(`POST /api/dream/reconsider`). This is the mechanism by which she learns to question her own
+first impressions.
