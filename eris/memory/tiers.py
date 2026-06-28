@@ -85,6 +85,87 @@ def _dedupe_near_records(records: List[Any], threshold: float = 0.92,
     return kept
 
 
+def _provenance_family(source: str) -> str:
+    """Consolidation group key: the source NAMESPACE (the token before the first colon). Re-ingests
+    of the same document (reading:tmpA.docx, reading:tmpB.docx → 'reading') and near-duplicate web
+    notes (exploration:url1, exploration:url2 → 'exploration') share a family, but distinct
+    provenance classes never do — a 'reflection' can never join a 'reading'. Splitting on the FIRST
+    colon only keeps it URL-safe (exploration:https://… → 'exploration', not 'exploration:https').
+    Genuinely distinct same-namespace content is still protected by the Jaccard + length gate."""
+    return str(source or "").split(":", 1)[0]
+
+
+# Provenance families that are her own first-person voice / audit trail — NEVER merged, even if
+# two reflections rhyme. Consolidation reinforces the library; it must not flatten her thinking.
+_CONSOLIDATE_SKIP_FAMILIES = {"reflection", "introspection", "dream", "ponder", "expert"}
+
+
+def _fold_duplicate(rep: Any, other: Any) -> None:
+    """Fold a near-duplicate into its representative so the surviving trace gets STRONGER, not
+    forgotten: summed reinforcement (it was genuinely seen more than once), newest timestamp (stays
+    fresh, won't be pruned), and the longer/more-complete text+embedding of the pair."""
+    try:
+        rep.access_count = (int(getattr(rep, "access_count", 0))
+                            + int(getattr(other, "access_count", 0)) + 1)
+        rep.last_accessed = max(getattr(rep, "last_accessed", 0.0),
+                                getattr(other, "last_accessed", 0.0))
+        rep.timestamp = max(getattr(rep, "timestamp", 0.0), getattr(other, "timestamp", 0.0))
+        if len(getattr(other, "text", "") or "") > len(getattr(rep, "text", "") or ""):
+            rep.text = other.text
+            if getattr(other, "embedding", None) is not None:
+                rep.embedding = other.embedding
+    except Exception:
+        pass
+
+
+def consolidate_records(records: List[Any], threshold: float = 0.92):
+    """Offline semantic consolidation (memory REPLAY): within each provenance family, collapse
+    near-duplicate traces into ONE reinforced record. NEVER merges across families and NEVER
+    touches the subjective/audit families (her reflections, dreams, ponders). Same Jaccard +
+    length-ratio test as _dedupe_near_records, but it FOLDS duplicates (summing reinforcement)
+    instead of just dropping them. Pure (no I/O) → directly unit-testable. Returns
+    (kept_records, n_merged)."""
+    def _cw(t: str) -> set:
+        return {w for w in _re_mod.findall(r"[a-z0-9]{4,}", (t or "").lower())}
+    families: Dict[str, List[Any]] = {}
+    order: List[str] = []
+    for r in records:
+        fam = _provenance_family(getattr(r, "source", ""))
+        if fam not in families:
+            families[fam] = []
+            order.append(fam)
+        families[fam].append(r)
+    kept_all: List[Any] = []
+    n_merged = 0
+    for fam in order:
+        recs = families[fam]
+        if fam in _CONSOLIDATE_SKIP_FAMILIES or len(recs) < 2:
+            kept_all.extend(recs)
+            continue
+        reps: List[Any] = []
+        rep_sets: List[set] = []
+        for r in recs:
+            s = _cw(getattr(r, "text", ""))
+            hit = None
+            if s:
+                for i, ks in enumerate(rep_sets):
+                    if not ks:
+                        continue
+                    lo, hi = sorted((len(s), len(ks)))
+                    if lo / hi < 0.8:                  # length differs too much to be a re-ingest
+                        continue
+                    u = s | ks
+                    if u and len(s & ks) / len(u) >= threshold:
+                        hit = i
+                        break
+            if hit is None:
+                reps.append(r); rep_sets.append(s)
+            else:
+                _fold_duplicate(reps[hit], r); n_merged += 1
+        kept_all.extend(reps)
+    return kept_all, n_merged
+
+
 # ─── Memory Record ────────────────────────────────────────────────────────
 
 @dataclass
@@ -686,6 +767,32 @@ class MemorySystem:
                 if s > best:
                     best = s
         return best
+
+    def replay_consolidate(self) -> Dict[str, int]:
+        """Memory REPLAY — the second half of sleep, complementary to consolidate()'s tier-promotion.
+
+        Where consolidate() moves memories UP the tiers (STM→MTM→LTM) by novelty, this pass works
+        WITHIN a tier: it folds near-duplicate library traces of the same provenance into ONE
+        reinforced record. That is what removes re-ingest junk (the patent ingested twice) WITHOUT
+        deleting content — the survivor carries it and gets stronger — and what turns a fact seen
+        many times into a higher-salience memory ("knows what it learned", not just "stored it").
+
+        Provenance-safe by construction: it never merges across families, never touches her
+        subjective/audit families (reflection / dream / ponder / introspection), never touches the
+        thought-stream, and leaves STM (ephemeral turns) alone. Returns merge counts per tier.
+        """
+        out = {"mtm_merged": 0, "ltm_merged": 0}
+        mtm_kept, mtm_merged = consolidate_records(self.mtm._records)
+        if mtm_merged:
+            self.mtm._records = mtm_kept
+            self.mtm._save()
+            out["mtm_merged"] = mtm_merged
+        ltm_kept, ltm_merged = consolidate_records(self.ltm._records)
+        if ltm_merged:
+            self.ltm._records = ltm_kept
+            self.ltm._save()
+            out["ltm_merged"] = ltm_merged
+        return out
 
     def consolidate(self) -> Dict[str, int]:
         """SGT-gated consolidation: promote worthy memories up tiers.
