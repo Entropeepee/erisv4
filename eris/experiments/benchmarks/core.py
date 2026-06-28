@@ -37,8 +37,12 @@ class ArmResult:
 
 def build_prompt(item: BenchItem) -> str:
     """Compose the user prompt. Grounded tasks lead with the provided document; multiple-choice
-    appends lettered options and asks for a single letter. Identical for both arms — the only
-    difference between arms is WHO answers it, so the comparison stays fair."""
+    appends lettered options and asks for a single letter.
+
+    Both arms receive the SAME prompt text, but interpret it differently: the bare arm reads the
+    source inline in its context window; the Eris arm extracts the source and ingests it for
+    RETRIEVAL. Both see the same information, so the comparison is fair — but it is a full-hive vs
+    bare-model comparison, not an identical-pipeline one (the retrieval path is architectural)."""
     parts = []
     if item.context:
         parts.append("Read the following source material and answer ONLY from it.\n\n"
@@ -65,13 +69,15 @@ def run_arm(items: List[BenchItem], answer_fn: Callable[[str], Any], arm: str) -
         except Exception as e:                       # a failed item scores as wrong, never crashes
             out.append(ArmResult(it.id, arm, f"[error: {e}]", 0, correct=None))
             continue
+        detail = {}
         if isinstance(resp, tuple):
             text, tokens = resp[0], int(resp[1] or 0)
         elif isinstance(resp, dict):
             text, tokens = resp.get("text", ""), int(resp.get("tokens", 0) or 0)
+            detail = resp.get("detail") or {}        # arm-specific diagnostics (e.g. full synthesis)
         else:
             text, tokens = str(resp), 0
-        out.append(ArmResult(it.id, arm, (text or "").strip(), tokens))
+        out.append(ArmResult(it.id, arm, (text or "").strip(), tokens, detail=detail))
     return out
 
 
@@ -88,9 +94,14 @@ def budget_report(results: List[ArmResult]) -> Dict[str, Any]:
 
 def accuracy(results: List[ArmResult]) -> Dict[str, Any]:
     graded = [r for r in results if r.correct is not None]
+    errored = [r for r in results if (r.text or "").startswith("[error:")]
     n_correct = sum(1 for r in graded if r.correct)
     return {"graded": len(graded), "correct": n_correct,
-            "accuracy": round(n_correct / len(graded), 4) if graded else 0.0}
+            "accuracy": round(n_correct / len(graded), 4) if graded else 0.0,
+            # errored items are NOT in the accuracy denominator — surface the count so a reliability
+            # problem (an arm that times out) can't hide as if it were an accuracy result.
+            "errored": len(errored),
+            "error_rate": round(len(errored) / len(results), 4) if results else 0.0}
 
 
 def item_details(items: List[BenchItem],
@@ -101,17 +112,23 @@ def item_details(items: List[BenchItem],
     by = {label: {r.item_id: r for r in res} for label, res in results_by_arm.items()}
     rows = []
     for it in items:
-        row = {"id": it.id, "question": it.question[:240],
+        # NO truncation — in dev/testing we read every reply in full (a 0% with only the first
+        # 300 chars of a 5000-char answer is still a black box). Full question, full answer.
+        row = {"id": it.id, "question": it.question,
                "gold": it.answer or ("UNANSWERABLE" if it.unanswerable else "")}
+        if (it.meta or {}).get("fetch"):           # FRAMES: how many linked articles actually loaded
+            row["source_fetch"] = it.meta["fetch"]
         for label, m in by.items():
             r = m.get(it.id)
             if r is None:
                 continue
-            cell = {"answer": (r.text or "")[:300], "tokens": r.tokens}
+            cell = {"answer": (r.text or ""), "tokens": r.tokens}
             if r.correct is not None:
                 cell["correct"] = r.correct
             if r.faithfulness is not None:
                 cell["hallucination_rate"] = r.faithfulness
+            if r.detail:                           # arm diagnostics: full synthesis, extraction_ok…
+                cell.update(r.detail)
             row[label] = cell
         rows.append(row)
     return rows

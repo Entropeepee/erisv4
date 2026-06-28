@@ -12,9 +12,11 @@ Safety: a benchmark must never touch or steer the live store, so this arm
     so a run can't write syntheses into, or queue study topics from, the real store.
 
 Cost: the equal-budget comparison needs a REAL token count, so a _TokenMeter wraps the local
-backend(s)' generate() and sums LLMResponse.tokens_used (Ollama/vLLM /v1 report usage). If a
-backend reports no usage, it falls back to the hive's LLM call count, clearly labeled as a proxy
-on stderr."""
+backend(s)' generate() and sums LLMResponse.tokens_used (Ollama/vLLM /v1 report usage; Ollama-native
+eval counts read from .raw). If a backend reports no usage, it falls back to the hive's LLM call
+count, clearly labeled as a proxy on stderr. NOTE: the meter counts LLM GENERATION tokens (what
+both arms spend on the model). The local CPU embedding model (bge-m3) used for retrieval is a
+separate, non-LLM cost and is NOT in this number — the comparison is of model-inference tokens."""
 import os
 import sys
 import threading
@@ -200,15 +202,20 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
     def _extract_answer(remainder: str, synthesis: str) -> str:
         """One concise grounded-answer call so Eris emits a SCORABLE answer in the SAME form the
         bare arm uses (a name/number/date, or a single option letter) — fair formatting of the
-        hive's synthesis, NOT a second research pass. Metered like every other call."""
+        hive's synthesis, NOT a second research pass. Metered like every other call. The FULL
+        synthesis is passed (no truncation — it's a few thousand chars and the extractor's context
+        is large; dropping its tail could drop the answer). Returns '' on failure (the caller flags
+        it so a broken extraction never masquerades as a wrong answer)."""
         p = ("Using ONLY the analysis below, give the final answer to the task. Follow the task's "
              "answer format EXACTLY — if it asks for a single letter, output ONLY that letter; "
              "otherwise answer as briefly as possible (a name, number, or date) with no "
-             f"explanation.\n\nANALYSIS:\n{synthesis[:3000]}\n\nTASK:\n{remainder}\n\nFinal answer:")
+             f"explanation.\n\nANALYSIS:\n{synthesis}\n\nTASK:\n{remainder}\n\nFinal answer:")
         try:
             resp = run_blocking(orch.mediator.generate(prompt=p, system=""), timeout=120)
             return (getattr(resp, "text", "") or "").strip()
-        except Exception:
+        except Exception as e:
+            print(f"[eris-arm] extraction call FAILED ({type(e).__name__}: {e}) — flagging item",
+                  file=sys.stderr)
             return ""
 
     def _answer(prompt: str):
@@ -220,10 +227,16 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
             ingest(context)
         meter.reset()                            # count the hive + the extraction call
         res = asyncio.run(orch.hive_research(question, scope="doc", document="bench"))
+        if isinstance(res, dict) and res.get("error"):
+            print(f"[eris-arm] hive_research returned an error: {res.get('error')}", file=sys.stderr)
         synthesis = (res.get("synthesis_full") or res.get("synthesis") or "").strip()
         # Extract a short, scorable answer from the synthesis (the bare arm answers directly; this
         # gives Eris the same answer FORM so exact-match/MC don't penalize the hive for verbosity).
-        answer = (_extract_answer(remainder, synthesis) if synthesis else "") or synthesis
+        # If extraction yields nothing we FALL BACK to the synthesis but FLAG it (extraction_ok=
+        # False), so a broken/empty extraction can't silently read as "the hive answered wrong".
+        extracted = _extract_answer(remainder, synthesis) if synthesis else ""
+        extraction_ok = bool(extracted)
+        answer = extracted or synthesis
         tokens = meter.tokens
         if tokens <= 0:
             # Distinguish "no LLM calls happened" (the hive declined with 0 sources — a legitimate
@@ -237,6 +250,11 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
                       "usage; cost is a CALL-COUNT PROXY, not tokens — equal-budget is approximate. "
                       "Serve via an OpenAI-compatible /v1 endpoint (Ollama/vLLM) for real tokens.",
                       file=sys.stderr)
-        return answer, int(tokens)
+        # Return the FULL diagnostics, not just the scored answer: the complete hive synthesis (read
+        # it in the report, untruncated), whether extraction succeeded, sources retrieved, and the
+        # raw call count — so a 0% is never a black box.
+        return {"text": answer, "tokens": int(tokens),
+                "detail": {"synthesis": synthesis, "extraction_ok": extraction_ok,
+                           "n_sources": res.get("n_sources", 0), "hive_calls": meter.calls}}
 
     return _answer

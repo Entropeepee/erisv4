@@ -131,6 +131,21 @@ built-in exact-match / multiple-choice / abstention scorers.
 Validate the bare arm's closed-book numbers (MMLU-Pro, GPQA) against EleutherAI
 `lm-evaluation-harness` (`local-chat-completions`, same endpoint) to catch prompt/scoring drift.
 
+## No black boxes — what the report shows
+
+Every run prints `report["items"]`: per question, the **full** (untruncated) question, gold answer,
+and each arm's **full** answer + correctness + tokens. For the Eris arm each item also carries:
+- `synthesis` — the complete hive synthesis (read it directly; never truncated),
+- `extraction_ok` — `false` means the short-answer extraction failed and the synthesis was used as
+  a fallback, so a broken extraction can't masquerade as "the hive answered wrong",
+- `n_sources` / `hive_calls` — sources retrieved and LLM calls made.
+
+For FRAMES, each item carries `source_fetch` (`linked` / `fetched` / `failed`) so a **partial**
+Wikipedia fetch is visible — if `fetched < linked`, the question may be unanswerable from the
+incomplete source and a wrong answer is the harness's fault, not the architecture's. Aggregate
+`accuracy` also reports `errored` / `error_rate` so an arm that times out can't hide as low accuracy.
+A too-small `OLLAMA_CONTEXT_LENGTH` prints a loud warning before the run starts.
+
 ## Reading the result
 
 - **Eris wins on grounded tasks, not closed-book** → the *expected and honest* outcome; position

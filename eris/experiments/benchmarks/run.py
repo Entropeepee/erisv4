@@ -12,6 +12,7 @@ eris/experiments/benchmarks/arms.py::eris_pipeline_arm for the intended wiring."
 import argparse
 import importlib
 import json
+import os
 import sys
 from typing import Callable, Optional
 
@@ -37,6 +38,20 @@ def main(argv: Optional[list] = None):    # pragma: no cover - CLI orchestration
                     help="module:function returning the Eris answer_fn (for --arm eris/both)")
     ap.add_argument("--out", default="", help="write the full JSON report here")
     args = ap.parse_args(argv)
+
+    # Loud guard against the #1 silent-truncation footgun: too-small Ollama context window quietly
+    # chops long QuALITY/FRAMES passages, so BOTH arms answer from a partial source and the numbers
+    # look worse than reality with no signal. Warn before a single token is spent.
+    _ctx = os.environ.get("OLLAMA_CONTEXT_LENGTH")
+    try:
+        _ctx_n = int(_ctx) if _ctx else 0
+    except ValueError:
+        _ctx_n = 0
+    if _ctx_n < 22000:
+        print(f"[bench] WARNING: OLLAMA_CONTEXT_LENGTH={_ctx or '(unset → Ollama default ~4096)'} "
+              "— long passages will be SILENTLY TRUNCATED by the model, making both arms look worse "
+              "than they are. Set OLLAMA_CONTEXT_LENGTH>=22000 before serving for grounded runs.",
+              file=sys.stderr)
 
     loader = LOADERS[args.benchmark]
     kw = {"hard_only": True} if (args.benchmark == "quality" and args.hard_only) else {}
