@@ -225,6 +225,14 @@ def _text_to_bvec(text: str, field_size: int = 32):
     return TextFrontend().to_bvec(text, size=field_size)
 
 
+def _text_to_field(text: str, field_size: int = 32):
+    """The EVOLVED (phi, theta) field for a text — same PDE pass as _text_to_bvec but returns
+    the field, so field_resonance_2d can rank on the SIGNED phase torsion λ=sin(Δθ) that the
+    6-vector bvec coarse-grains away (the faithful 'understand by resonance' form, §B3)."""
+    from eris.knowledge.frontends import TextFrontend
+    return TextFrontend().to_field_evolved(text, size=field_size)
+
+
 def make_reasoned_finding(specialist: Specialist, goal: str, retrieved_context: str,
                           model: Model, *, bvec_fn: Optional[Callable[[str], BVec]] = None,
                           field_size: int = 32, max_regens: int = 1) -> SpecialistFinding:

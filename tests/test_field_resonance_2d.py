@@ -76,5 +76,51 @@ class TestResonance2D(unittest.TestCase):
         self.assertGreaterEqual(out["mean_torsion_magnitude"], 0.0)
 
 
+class TestFieldResonanceRerank(unittest.TestCase):
+    """field_resonance_rerank ranks retrieved chunks by the genuine phase-based field resonance
+    (signed sin Δθ torsion), not bvec/cosine. Fields injected via field_of — no PDE."""
+    def setUp(self):
+        self.phi = np.ones((8, 8)); self.zero = np.zeros((8, 8))
+        self.fields = {
+            "aligned": (self.phi, self.zero),                       # same phase → strong R_cos
+            "torsion": (self.phi, np.full((8, 8), np.pi / 2)),      # π/2 offset → strong R_sin
+            "weak":    (self.phi * 0.05, self.zero),               # tiny φ → ~0 magnitude
+        }
+
+    def _rerank(self, texts, blend=1.0):
+        from eris.tribe.research import field_resonance_rerank
+        return field_resonance_rerank((self.phi, self.zero), texts, blend=blend,
+                                      field_of=lambda t: self.fields[t])
+
+    def test_promotes_field_resonant_chunk(self):
+        self.assertEqual(self._rerank(["weak", "aligned"])[0], "aligned")
+
+    def test_torsion_coupled_chunk_beats_weak(self):
+        # a π/2-out-of-phase but high-φ chunk resonates through the SIGNED sine channel and
+        # outranks a weak in-phase one — the whole point of phase-based field resonance
+        self.assertEqual(self._rerank(["weak", "torsion"])[0], "torsion")
+
+    def test_blend_zero_preserves_incoming_order(self):
+        self.assertEqual(self._rerank(["weak", "aligned", "torsion"], blend=0.0),
+                         ["weak", "aligned", "torsion"])
+
+    def test_empty_and_bad_field_are_safe(self):
+        from eris.tribe.research import field_resonance_rerank
+        self.assertEqual(field_resonance_rerank((self.phi, self.zero), []), [])
+        def _boom(t):
+            raise ValueError("no field")
+        out = field_resonance_rerank((self.phi, self.zero), ["a", "b"], field_of=_boom)
+        self.assertEqual(out, ["a", "b"])              # falls back to incoming order
+
+
+class TestTextToFieldEvolved(unittest.TestCase):
+    def test_returns_two_same_shape_fields(self):
+        from eris.tribe.specialists import _text_to_field
+        phi, theta = _text_to_field("boundary limited exchange critical dynamics", field_size=16)
+        self.assertEqual(phi.shape, (16, 16))
+        self.assertEqual(theta.shape, (16, 16))
+        self.assertEqual(str(phi.dtype), "float32")
+
+
 if __name__ == "__main__":
     unittest.main()
