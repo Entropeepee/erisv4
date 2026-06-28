@@ -42,6 +42,32 @@ def _cited_ids(text: str) -> set:
     return ids
 
 
+# Content-word helper for OUTCOME metrics (specialist divergence, gap closure, Elos edit).
+# NOTE: hive_ab.py has an identical _content_words/_STOP, but tribe/ cannot import experiments/
+# (hive_ab imports this module → circular). Kept in sync by hand; a shared util is a future tidy.
+_STOP = frozenset(
+    "the a an and or but of to in on at by for with from into over under as is are was were be "
+    "been being this that these those it its their there here then than thus so we you they he she "
+    "i not no nor can could will would shall should may might must do does did has have had not "
+    "which who whom whose what when where why how all any both each few more most other some such "
+    "only own same too very s t can".split())
+
+
+def _content_words(text: str) -> set:
+    return {w for w in re.findall(r"[a-z][a-z0-9]{3,}", (text or "").lower()) if w not in _STOP}
+
+
+def _jaccard(a: set, b: set) -> float:
+    u = a | b
+    return (len(a & b) / len(u)) if u else 0.0
+
+
+def _mean_pairwise_jaccard(texts: List[str]) -> float:
+    sets = [_content_words(t) for t in texts]
+    pairs = [_jaccard(sets[i], sets[j]) for i in range(len(sets)) for j in range(i + 1, len(sets))]
+    return (sum(pairs) / len(pairs)) if pairs else 0.0
+
+
 @dataclass
 class ResearchResult:
     topic: str
@@ -56,6 +82,10 @@ class ResearchResult:
     stripped_claims: int = 0         # uncited/unresolved claims removed at canonize
     elos_critique: str = ""
     cycles: int = 0
+    # ── OUTCOME measures (do the lenses actually diverge / close gaps / does Elos bite) ──
+    specialist_divergence: float = 0.0   # 1 − mean pairwise content-word Jaccard over cycle-1
+    gaps_closed: int = 0                 # named gaps a cycle-2 finding genuinely addressed
+    elos_changed: bool = False           # did the synthesis change from cycle-1 to final
 
 
 def _format_sources(sources: List[str], digester: Optional[Callable[[str], List[str]]] = None
@@ -329,6 +359,12 @@ def run_two_cycle_research(
         _map(lambda s: make_reasoned_finding(s, topic, src1, model), active))
     for f in c1:                                       # post to the hub AFTER the gather (no race)
         hub.post(f)
+    # OUTCOME measure: did the lenses actually DIVERGE, or all say the same thing? 1 − mean
+    # pairwise content-word Jaccard over the cycle-1 findings (only non-echo/non-empty count).
+    _real_c1 = [f.content for f in c1
+                if not f.metadata.get("echo") and not f.metadata.get("empty") and f.content.strip()]
+    specialist_divergence = round(1.0 - _mean_pairwise_jaccard(_real_c1), 4) if len(_real_c1) >= 2 else 0.0
+    _log(f"  specialist divergence: {specialist_divergence}")
 
     # ── Synthesis: Kairos integrates; MoEGate weights; hub cross-pollinates; Elos falsifies ──
     if moe_gate is not None:
@@ -352,8 +388,12 @@ def run_two_cycle_research(
     elos_critique = ""
     if any(s.id == "elos" for s in active):
         elos_critique = (model(
-            f"As Elos (adversarial), try to FALSIFY this synthesis using only the sources. "
-            f"Name its weakest unsupported claim.\n\nSYNTHESIS:\n{synthesis}\n\nSOURCES:\n{src1}"
+            f"As Elos (adversarial), try to FALSIFY this synthesis using ONLY the sources. "
+            f"Identify the SINGLE weakest claim — the one least supported by the sources. "
+            f"State it verbatim, then rule: either (a) it CAN be defended — name the specific "
+            f"[s:i] that grounds it; or (b) it must be STRUCK — no source supports it. Be "
+            f"decisive; pick exactly one claim and one ruling.\n\n"
+            f"SYNTHESIS:\n{synthesis}\n\nSOURCES:\n{src1}"
         ) or "").strip()
     gaps = _gaps_from(synthesis)
 
@@ -371,6 +411,13 @@ def run_two_cycle_research(
         _log(f"  {len(active)} specialist(s) closing gaps…")
         c2 = list(_map(lambda s: make_reasoned_finding(s, gap_goal, src2, model), active))
 
+    # OUTCOME measure: how many NAMED gaps did a cycle-2 finding genuinely address? A gap counts
+    # as closed if some non-echo cycle-2 finding shares ≥2 content words with the gap text.
+    _c2_words = [_content_words(f.content) for f in c2
+                 if not f.metadata.get("echo") and f.content.strip()]
+    gaps_closed = sum(1 for g in gaps
+                      if any(len(_content_words(g) & cw) >= 2 for cw in _c2_words))
+
     # ── Canonize: INTEGRATE cycle-2 gap-closures into the cycle-1 synthesis (not regenerate) ──
     all_sources = _distinct(ctx1 + ctx2)
     refinements = "\n".join(f"- {f.content}" for f in c2 if f.content.strip()
@@ -379,7 +426,9 @@ def run_two_cycle_research(
         f"Refine this synthesis on '{topic}' into its final, defensible form. Integrate the "
         f"gap-closures below into ONE coherent passage; ground EVERY claim with [s:i] and assert "
         f"nothing the sources don't support"
-        + (f". Address this critique: {elos_critique}" if elos_critique else "") +
+        + ((f". Address this critique: {elos_critique}"
+            f" — for the claim Elos flagged, EITHER ground it with a specific [s:i] from the "
+            f"sources OR remove it entirely; do not merely restate it.") if elos_critique else "") +
         f".\n\nSYNTHESIS:\n{synthesis}\n\nGAP-CLOSURES:\n{refinements or '(none)'}\n\n"
         f"SOURCES:\n{_format_sources(all_sources, digester)}\n\nFinal synthesis:")
     _log("canonizing — integrating gaps + citation-grounding…")
@@ -394,6 +443,11 @@ def run_two_cycle_research(
     resolved = len(_cited_ids(grounded) & set(range(len(all_sources))))
     _log(f"grounded: {len(grounded)} chars, {resolved} resolved citation(s), "
          f"{stripped} stripped" + ("" if resolved else " — NOT canonized (no grounded support)"))
+
+    # Did the synthesis actually CHANGE from the cycle-1 draft to the final? Coarse proxy for
+    # "Elos bit": content-word symmetric difference above a small floor. CAVEAT: this also
+    # reflects gap-integration, so it over-attributes to Elos; a clean per-claim ablation is v2.
+    elos_changed = len(_content_words(synthesis) ^ _content_words(synthesis_out)) > 5
 
     # diversity = distinct specialists that genuinely contributed across BOTH cycles
     contributors = {f.specialist_id for f in (c1 + c2)
@@ -417,4 +471,6 @@ def run_two_cycle_research(
         sources=[c[:300] for c in all_sources],
         synthesis_pre_ground=synthesis_pre_ground,
         n_active=len(active), stripped_claims=stripped,
-        elos_critique=elos_critique, cycles=2 if gaps else 1)
+        elos_critique=elos_critique, cycles=2 if gaps else 1,
+        specialist_divergence=specialist_divergence, gaps_closed=gaps_closed,
+        elos_changed=elos_changed)

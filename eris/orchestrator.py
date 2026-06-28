@@ -1071,6 +1071,13 @@ class ErisOrchestrator:
                     "cycles": res.cycles, "canonized": res.thought_id is not None,
                     "sources": res.sources, "sensitivity": str(sens.value),
                     "tier_calls": dict(run_costs),   # per-tier call counts + paid (per-run, no race)
+                    # OUTCOME measures (graded by hive_ab, not tautologies)
+                    "specialist_divergence": res.specialist_divergence,
+                    "gaps_closed": res.gaps_closed, "elos_changed": res.elos_changed,
+                    "elos_critique": res.elos_critique,
+                    # FULL text feeds the metrics (source_alignment must NOT be scored on a
+                    # truncated synthesis); the truncated fields are for DISPLAY only.
+                    "synthesis_full": res.synthesis, "synthesis_pre_ground_full": res.synthesis_pre_ground,
                     "synthesis": res.synthesis[:2000],      # the actual reasoning, visible
                     "synthesis_pre_ground": res.synthesis_pre_ground[:2000]}
 

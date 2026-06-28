@@ -118,6 +118,64 @@ class TestTribeResearch(unittest.TestCase):
         self.assertTrue(any("empirical validation" in g for g in gaps))
         self.assertTrue(any("sign convention" in g for g in gaps))
 
+    def test_specialist_divergence_low_when_findings_identical(self):
+        from eris.tribe.research import _mean_pairwise_jaccard
+        same = ["the boundary coupling mechanism governs critical dynamics"] * 4
+        self.assertAlmostEqual(1.0 - _mean_pairwise_jaccard(same), 0.0, places=6)   # identical → ~0
+
+    def test_specialist_divergence_high_when_findings_distinct(self):
+        from eris.tribe.research import _mean_pairwise_jaccard
+        distinct = ["boundary coupling governs criticality transitions",
+                    "thermodynamic entropy production drives dissipation",
+                    "topological invariants classify protected edge modes",
+                    "stochastic resonance amplifies subthreshold signals"]
+        self.assertGreater(1.0 - _mean_pairwise_jaccard(distinct), 0.7)             # distinct → high
+
+    def test_divergence_surfaced_on_result(self):
+        # distinct per-specialist findings → result carries a meaningful divergence number
+        seen = {"i": 0}
+        bodies = ["boundary coupling grounds criticality [s:0]",
+                  "entropy dissipation drives instability [s:0]",
+                  "topological invariants protect modes [s:0]"]
+        def model(prompt):
+            if "Kairos" in prompt or "Final synthesis" in prompt or "FALSIFY" in prompt:
+                return "Integrated [s:0]."
+            b = bodies[seen["i"] % len(bodies)]; seen["i"] += 1
+            return b
+        res = run_two_cycle_research("topic", retriever=_retriever, model=model,
+                                     specialists=TRIBE[:3], goal_bvec=GOAL)
+        self.assertGreater(res.specialist_divergence, 0.4)
+
+    def test_gaps_closed_counts_addressed_gaps(self):
+        # cycle-1 names a gap about "empirical validation"; a cycle-2 finding addresses it
+        def model(prompt):
+            if "Kairos" in prompt:
+                return "Synthesis [s:0].\n**Open Gaps**\n- empirical validation evidence is missing"
+            if "FALSIFY" in prompt:
+                return "weakest claim: X [s:0]"
+            if "Close these GAPS" in prompt:
+                return "The empirical validation evidence appears in [s:0] after all."
+            return "Domain finding [s:0]."
+        res = run_two_cycle_research("topic", retriever=_retriever, model=model,
+                                     specialists=TRIBE[:3], goal_bvec=GOAL)
+        self.assertEqual(res.cycles, 2)
+        self.assertGreaterEqual(res.gaps_closed, 1)
+
+    def test_elos_changed_flips_when_final_differs_from_draft(self):
+        # canonize returns text very different from the cycle-1 synthesis → elos_changed True
+        def model(prompt):
+            if "Final synthesis" in prompt:
+                return ("Completely revised conclusion citing wavelength dispersion phonon "
+                        "lattice anharmonicity thermal transport [s:0].")
+            if "Kairos" in prompt:
+                return "Short initial synthesis [s:0]."
+            if "FALSIFY" in prompt:
+                return "weakest claim: the causal direction is unsupported [s:0]"
+            return "Domain finding [s:0]."
+        res = run_two_cycle_research("topic", retriever=_retriever, model=model,
+                                     specialists=[TRIBE[3]], goal_bvec=GOAL)   # Elos active
+        self.assertTrue(res.elos_changed)
+
     def test_parallel_map_fn_matches_sequential_and_preserves_order(self):
         # specialist reasoning via a concurrent map_fn must produce the same findings as the
         # sequential default (order preserved, all contributors present, hub populated)

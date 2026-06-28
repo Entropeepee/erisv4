@@ -84,22 +84,47 @@ def verbatim_overlap(synthesis: str, sources: List[str]) -> float:
 
 def metrics_from(summary: Dict[str, Any]) -> Dict[str, Any]:
     """Honest grounded-quality metrics from a hive_research summary dict (works for both the
-    hive treatment and the single-pass control)."""
+    hive treatment and the single-pass control). Metrics are scored on the FULL synthesis
+    (summary['synthesis_full'] when present) — never the display-truncated text."""
     n = max(1, summary.get("n_sources", 0))
-    pre = summary.get("synthesis_pre_ground", "") or summary.get("synthesis", "")
-    final = summary.get("synthesis", "") or ""
+    pre = summary.get("synthesis_pre_ground_full") or summary.get("synthesis_pre_ground") \
+        or summary.get("synthesis_full") or summary.get("synthesis") or ""
+    final = summary.get("synthesis_full") or summary.get("synthesis") or ""
     srcs = summary.get("sources", [])
     return {
         "citation_resolution_pre_ground": round(citation_resolution_rate(pre, n), 4),
         "source_alignment": round(source_alignment(final, srcs), 4),       # grounded (paraphrase-ok)
         "verbatim_overlap": round(verbatim_overlap(final, srcs), 4),       # how extractive/copied
+        # OUTCOME measures — do the lenses diverge / close gaps / does Elos bite (not tautologies)
+        "specialist_divergence": round(summary.get("specialist_divergence", 0.0), 4),
+        "gaps_closed": summary.get("gaps_closed", 0),
+        "elos_changed": bool(summary.get("elos_changed", False)),
+        "elos_critique": (summary.get("elos_critique", "") or "")[:300],
+        # neutral reported stats (NOT verdict criteria)
         "domain_diversity": summary.get("n_contributors", 0),
         "n_active": summary.get("n_active", 0),
         "cycles": summary.get("cycles", 0),
         "stripped_claims": summary.get("stripped_claims", 0),
         "canonized": bool(summary.get("canonized")),
-        "synthesis_len": len(final),
+        "synthesis_len": len(final),                                       # length is NOT a virtue
     }
+
+
+# A lens-divergence floor: below this the "specialists" largely said the same thing.
+DIVERGENCE_FLOOR = 0.4
+
+
+def make_blind_pair(treatment_synth: str, control_synth: str, *, rng=None) -> Dict[str, Any]:
+    """Build a BLIND A/B pair: the treatment/control assignment is RANDOMIZED so the reader
+    ranks A vs B on quality BEFORE seeing which arm is which. The mapping is recorded in `_key`
+    (the harness prints it LAST). `rng` is injectable for deterministic tests."""
+    import random
+    rng = rng or random.Random()
+    if rng.random() < 0.5:
+        return {"blind_pair": {"A": treatment_synth, "B": control_synth},
+                "_key": {"A": "treatment", "B": "control"}}
+    return {"blind_pair": {"A": control_synth, "B": treatment_synth},
+            "_key": {"A": "control", "B": "treatment"}}
 
 
 async def run_ab(orchestrator, topic: str, max_specialists: int = 5, *,
@@ -132,20 +157,34 @@ async def run_ab(orchestrator, topic: str, max_specialists: int = 5, *,
             "treatment_raw": treat,
             "control_raw": ctrl,
         }
-    return {
+    out = {
         "topic": topic,
+        # Blind pair FIRST so the reader can rank A vs B before scrolling to the metrics.
+        **make_blind_pair(treat.get("synthesis_full") or treat.get("synthesis", ""),
+                          ctrl.get("synthesis_full") or ctrl.get("synthesis", "")),
         "control_single_pass_rag": cm,
         "treatment_hive": tm,
         "verdict": {
-            # strict >: a tie is NOT a hive win (0.0 >= 0.0 used to credit it falsely)
-            "hive_more_source_grounded": tm["source_alignment"] > cm["source_alignment"],
-            "hive_more_diverse": tm["domain_diversity"] > cm["domain_diversity"],
-            "hive_deeper": tm["cycles"] > cm["cycles"],
-            "hive_synthesis_longer": tm["synthesis_len"] > cm["synthesis_len"],
+            # OUTCOMES, not tautologies. The hive activates specialists / runs cycles / writes
+            # more BY CONSTRUCTION — those are not wins. These ask whether it actually helped:
+            "hive_more_source_grounded": tm["source_alignment"] > cm["source_alignment"],  # strict >
+            "hive_lenses_diverged": tm["specialist_divergence"] >= DIVERGENCE_FLOOR,   # not "ran ≥1"
+            "hive_closed_gaps": tm["gaps_closed"] >= 1,                                # not "cycles>0"
+            "hive_elos_bit": tm["elos_changed"],                                       # critique forced an edit
         },
+        # Reported stats that are NOT verdict criteria (length, cycle count, etc. are descriptive).
+        "stats": {"treatment_synthesis_len": tm["synthesis_len"],
+                  "control_synthesis_len": cm["synthesis_len"],
+                  "treatment_cycles": tm["cycles"],
+                  "treatment_specialist_divergence": tm["specialist_divergence"],
+                  "treatment_gaps_closed": tm["gaps_closed"]},
         "treatment_raw": treat,
         "control_raw": ctrl,
     }
+    # Re-insert _key LAST so the human reads the blind pair before the assignment is revealed.
+    key = out.pop("_key")
+    out["_key"] = key
+    return out
 
 
 def main(argv=None):   # pragma: no cover
