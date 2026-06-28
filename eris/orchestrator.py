@@ -1071,8 +1071,11 @@ class ErisOrchestrator:
                     "cycles": res.cycles, "canonized": res.thought_id is not None,
                     "sources": res.sources, "sensitivity": str(sens.value),
                     "tier_calls": dict(run_costs),   # per-tier call counts + paid (per-run, no race)
-                    "synthesis": res.synthesis[:2000],      # the actual reasoning, visible
-                    "synthesis_pre_ground": res.synthesis_pre_ground[:2000]}
+                    # FULL synthesis — never truncated. If a reader (David) or Eris herself can't
+                    # see the whole reasoning, we're missing part of the work. Metrics also score
+                    # the full text (a prior 2000-char cap silently truncated both).
+                    "synthesis": res.synthesis,
+                    "synthesis_pre_ground": res.synthesis_pre_ground}
 
         try:
             return await asyncio.to_thread(_run)

@@ -136,6 +136,16 @@ class TestTribeResearch(unittest.TestCase):
         self.assertEqual(par.n_contributors, seq.n_contributors)
         self.assertGreaterEqual(par.n_contributors, 2)
 
+    def test_sources_are_not_truncated(self):
+        # the work display must show the FULL retrieved chunk, not a 300-char preview (and
+        # source_alignment must score against the full text)
+        long_src = "boundary " * 100 + "UNIQUE_TAIL_TOKEN"   # > 300 chars, marker at the end
+        res = run_two_cycle_research("topic", retriever=lambda q: [long_src, "second source"],
+                                     model=lambda p: "Grounded [s:0].",
+                                     specialists=TRIBE[:2], goal_bvec=GOAL)
+        self.assertTrue(any("UNIQUE_TAIL_TOKEN" in s for s in res.sources))   # tail survived
+        self.assertTrue(any(len(s) > 300 for s in res.sources))
+
     def test_empty_sources_short_circuits_hive_no_scaffolding(self):
         # 0 sources → ONE honest refusal, NOT 2000 chars of [s:nil] scaffolding from 5
         # specialists. The model must never even be called (nothing to ground in).
