@@ -1110,6 +1110,27 @@ class ErisOrchestrator:
                         result["gaps_routed"] = routed
             except Exception:
                 pass
+
+        # Consolidation write-back (v2): a canonized, grounded synthesis becomes a first-class
+        # memory that outranks the raw chunks it summarized — she retrieves what she LEARNED, not
+        # a re-derivation. Gated by ERIS_SYNTHESIS_WRITEBACK (default on) so the offline A/B
+        # harness never writes into the live store. Best-effort, never fatal.
+        if (isinstance(result, dict) and "error" not in result and result.get("canonized")
+                and os.environ.get("ERIS_SYNTHESIS_WRITEBACK", "1") not in ("0", "off", "false")):
+            try:
+                syn = (result.get("synthesis_full") or result.get("synthesis") or "").strip()
+                if syn:
+                    from eris.knowledge.embeddings import get_embedding
+                    try:
+                        emb = get_embedding(syn)
+                    except Exception:
+                        emb = None
+                    wb = self.memory.write_back_synthesis(
+                        result.get("topic", topic), syn, embedding=emb,
+                        n_sources=int(result.get("n_sources", 0) or 0))
+                    result["synthesis_written_back"] = str(getattr(wb, "source", ""))
+            except Exception:
+                pass
         return result
 
     def _assemble_prompt(self, user_message: str,

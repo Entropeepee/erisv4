@@ -530,6 +530,28 @@ class MemorySystem:
         self.ltm.store(record)
         return record
 
+    def write_back_synthesis(self, topic: str, text: str,
+                             embedding: Optional[np.ndarray] = None,
+                             bvec: Optional[BVec] = None,
+                             n_sources: int = 0) -> MemoryRecord:
+        """Consolidation write-back (v2): store a canonized, citation-grounded hive synthesis as a
+        FIRST-CLASS memory that outranks the raw chunks it summarized. The 'knows what it learned'
+        step — later retrieval returns her resolved conclusion instead of re-deriving it from
+        scattered sources. Tagged consolidated=True (a small retrieval salience lift) under the
+        'synthesis' provenance family, which is foldable: a re-run on the same topic REINFORCES
+        rather than duplicates."""
+        if embedding is not None and not isinstance(embedding, np.ndarray):
+            embedding = np.asarray(embedding, dtype=np.float32)
+        slug = _re_mod.sub(r"[^a-z0-9]+", "-", (topic or "").lower()).strip("-")[:48] or "topic"
+        rec = MemoryRecord(
+            text=text, bvec=bvec or BVec(), embedding=embedding,
+            source=f"synthesis:{slug}",
+            metadata={"title": topic, "kind": "synthesis", "grounds": int(n_sources),
+                      "consolidated": True},
+            access_count=3)        # reads as already-reinforced — it distills many sources into one
+        self.ltm.store(rec)
+        return rec
+
     def retrieve(self, query_bvec: Optional[BVec] = None,
                  query_embedding: Optional[np.ndarray] = None,
                  top_k: int = 5,
@@ -587,9 +609,15 @@ class MemorySystem:
                 score = freshness * 0.8  # Slight discount vs BFECDS
                 candidates.append((rec, score))
 
-        # Boost memories whose title/source matches the query wording.
-        if qtokens:
-            candidates = [(rec, score * _title_boost(rec)) for rec, score in candidates]
+        # Boost: title/source token match (when a query names a doc) AND consolidated syntheses —
+        # her canonized, citation-grounded conclusions outrank the raw chunks they summarized, so
+        # retrieval returns what she LEARNED, not a re-derivation from scattered sources.
+        def _salience(rec: MemoryRecord) -> float:
+            b = _title_boost(rec)
+            if (rec.metadata or {}).get("consolidated"):
+                b *= 1.5
+            return b
+        candidates = [(rec, score * _salience(rec)) for rec, score in candidates]
 
         # Deduplicate (same text = same memory)
         seen_texts = set()
