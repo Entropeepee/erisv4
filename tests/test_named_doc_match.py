@@ -43,6 +43,21 @@ class TestNamedDocMatch(unittest.TestCase):
                                         bvec=GOAL, source="conversation"))
         self.assertEqual(self.mem.documents_matching("BLECD"), [])
 
+    def test_short_acronym_name_matches(self):
+        # the SGT bug: a 3-char acronym doc name was dropped by the old 4-char token floor
+        self.mem.ltm.store(_doc("Statistical Gating Technology\n\nThe SGT method gates on a "
+                                "running statistical outlier.", title="sgtpatent",
+                                source="reading:sgtpatent"))
+        hits = self.mem.documents_matching("SGT")
+        self.assertEqual(len(hits), 1)
+        # filename substring also works (sgt ∈ sgtpatent)
+        self.assertEqual(len(self.mem.documents_matching("sgtpatent")), 1)
+
+    def test_common_short_word_does_not_overmatch(self):
+        # lowering the floor must NOT make "the" match every document
+        self.mem.ltm.store(_doc("The contents of an unrelated paper.", source="reading:other"))
+        self.assertEqual(self.mem.documents_matching("the"), [])
+
     def test_multiword_name_requires_all_tokens_in_body(self):
         self.mem.ltm.store(_doc("This paper covers resonance coupling in detail.",
                                 source="reading:sec"))
