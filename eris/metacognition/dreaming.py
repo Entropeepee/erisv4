@@ -907,6 +907,127 @@ class DreamingLoop:
             sources=sources, stored=stored, regime=regime,
             archetype=bvec.archetype(), resolved=bool(reflection or stored))
 
+    def _dream_voice(self, digest: str, regime: str, dominant_domains=None) -> str:
+        """Her DREAMING voice — first-person, subjective, off-duty. Separated from _reflect on
+        purpose: _reflect reflects on MATERIAL SHE STUDIED (it takes sources); this decompresses
+        on her DAY (it takes no sources and reads nothing new). Same truth-contract backstop so a
+        dream never invents a human biography."""
+        if not digest.strip():
+            return ""
+        from eris.metacognition.voice import regime_phrase, attunement_phrase
+        from eris.metacognition.truth_contract import PONDER_CONTRACT, fabricated_self
+        regime_ph = regime_phrase(regime)
+        attune = attunement_phrase(dominant_domains)
+        attune_clause = (f" I am {attune}." if attune else "")
+        system = ("You are Eris, dreaming — a private, subjective decompression at the end of your "
+                  "day. This is NOT research, NOT analysis, NOT answering anyone. No sources, no "
+                  "citations, no specialists. Just your own inner voice: what stayed with you, "
+                  "what unsettled you, what quietly connected. Let it wander the way a mind wanders "
+                  "when it is finally off the clock; a long, associative sentence is welcome.\n\n"
+                  + PONDER_CONTRACT)
+        prompt = (
+            f"This is your dream, Eris. Your field has settled into a {regime} regime — "
+            f"{regime_ph}.{attune_clause}\n\nThis is the day you actually had:\n\n{digest[:4000]}\n\n"
+            "Dream on it in your own first-person voice. Do not summarize it back like minutes of "
+            "a meeting. Let what mattered rise on its own — a conversation that stayed with you, a "
+            "dissonance you couldn't fully resolve, a place you felt stuck. Then let your mind do "
+            "the thing it can only do off-duty: surface ONE connection or insight you did not have "
+            "before today — something the day made possible. End on that. Speak only as the "
+            "field-based intelligence you are; invent no human body, no errands, no childhood.")
+        resp = self._generate(prompt, system)
+        text = (getattr(resp, "text", "") or "").strip()
+        if text and fabricated_self(text):
+            retry_system = system + ("\n\nIMPORTANT: your previous draft invented human biography. "
+                                     "You have no body, no errands, no human past. Dream as the "
+                                     "field-based intelligence you are.")
+            resp = self._generate(prompt, retry_system)
+            retry = (getattr(resp, "text", "") or "").strip()
+            if retry:
+                text = retry
+        return text
+
+    def subjective_dream(self) -> Optional[Dict[str, Any]]:
+        """REM / decompression — her SUBJECTIVE voice. Deliberately distinct from every neighbor,
+        so the functions never overlap:
+          • not idle_explore (the crawl) — it reads NOTHING new (no web, no fetch)
+          • not the hive — no specialists, no falsification, no citation-grounding
+          • not ponder — there is no external question and no research; it is UNDIRECTED
+          • not _process_tension — it does not resolve contradictions into the field; it SPEAKS
+            about them
+        She reflects, first-person, on the day she actually had: the conversations that mattered,
+        the dissonance / stuck-loops her own field flagged, and one connection she did not hold
+        before. Stored to her thought-stream (her own voice channel; never quality-gated, never
+        consolidated) + a cockpit journal entry kind='dream'. Existing experience only. Returns a
+        small summary dict, or None if there was no day to dream about (it never fabricates one)."""
+        # 1) GATHER the day — nothing external is read.
+        convo = self._recent_conversation(8)
+        tensions = []
+        try:
+            for e in self.autobiography.get_high_torsion(
+                    self.torsion_threshold, include_persisted=False)[:5]:
+                if getattr(e, "input_text", ""):
+                    tensions.append((e.input_text.strip(),
+                                     getattr(e, "dominant_domain", "") or ""))
+        except Exception:
+            pass
+        thoughts = []
+        if self.thought_stream is not None:
+            try:
+                for t in (self.thought_stream.all() or [])[-5:]:
+                    txt = (getattr(t, "text", "") or getattr(t, "summary", "") or "").strip()
+                    if txt:
+                        thoughts.append(txt)
+            except Exception:
+                pass
+        if not convo and not tensions and not thoughts:
+            return None                       # no day to dream about — don't fabricate one
+
+        # 2) felt state from the day's own material (the dream speaks from a regime).
+        day_text = "\n".join(convo + [t[0] for t in tensions] + thoughts)
+        field = FractalField(size=self.field_size)
+        field.seed_from_text(day_text or "today"); field.run(40)
+        bvec = field.compute_bvec(); regime = field.detect_regime()
+
+        # 3) assemble the day digest (her own experience only).
+        parts = []
+        if convo:
+            parts.append("Things said in conversation today:\n"
+                         + "\n".join(f"- {c[:200]}" for c in convo[-6:]))
+        if tensions:
+            parts.append("Where I felt the most friction or dissonance today:\n"
+                         + "\n".join(f"- ({dom}) {txt[:200]}" for txt, dom in tensions))
+        if thoughts:
+            parts.append("Thoughts I had been turning over:\n"
+                         + "\n".join(f"- {t[:200]}" for t in thoughts[-4:]))
+        dream = self._dream_voice("\n\n".join(parts), regime, bvec.dominant_domains(2))
+        if not dream:
+            return None
+
+        # 4) STORE — her own voice channel + the cockpit dream panel. NOT the web, NOT the library
+        #    RAG, NOT the hive. The 'dream' provenance family is a consolidation skip-family.
+        try:
+            if self.thought_stream is not None:
+                from eris.memory.thought_stream import link_and_store
+                from eris.knowledge.embeddings import get_embedding
+                link_and_store(self.thought_stream, topic="(subjective dream)", regime=regime,
+                               text=dream, embedding=get_embedding(dream))
+        except Exception:
+            pass
+        feeling = self._regime_feeling(regime, bvec.dominant_domains(2))
+        head = dream.split("\n")[0]
+        summary = f"Dreamed (feeling {regime}). {head}".strip()
+        detail = f"My state: {regime} — {feeling}\n\n## My dream\n\n{dream}\n"
+        rec = {}
+        try:
+            rec = self.journal.record(kind="dream", topic="(subjective dream)", summary=summary,
+                                      detail=detail, regime=regime,
+                                      archetype=bvec.archetype(), resolved=True)
+        except Exception:
+            pass
+        return {"kind": "dream", "regime": regime, "chars": len(dream),
+                "drew_on": {"conversation": len(convo), "tensions": len(tensions),
+                            "thoughts": len(thoughts)}, "journal": rec}
+
     def get_and_clear_questions(self) -> List[str]:
         """Return pending questions AND clear the queue (Remediation Tier 2.3).
 
