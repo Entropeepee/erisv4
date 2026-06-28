@@ -97,7 +97,8 @@ def _provenance_family(source: str) -> str:
 
 # Provenance families that are her own first-person voice / audit trail — NEVER merged, even if
 # two reflections rhyme. Consolidation reinforces the library; it must not flatten her thinking.
-_CONSOLIDATE_SKIP_FAMILIES = {"reflection", "introspection", "dream", "ponder", "expert"}
+_CONSOLIDATE_SKIP_FAMILIES = {"reflection", "introspection", "dream", "ponder", "expert",
+                              "metacognition"}
 
 
 def _fold_duplicate(rep: Any, other: Any) -> None:

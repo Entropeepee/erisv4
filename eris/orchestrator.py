@@ -1395,6 +1395,11 @@ class ErisOrchestrator:
         Distinct from ponder (which answers a question) and from the crawl. Offloaded."""
         return await asyncio.to_thread(self.dreaming_loop.subjective_dream)
 
+    async def metacognitive_review(self, topic: str = "") -> Optional[Dict[str, Any]]:
+        """Step 5 — compare her naive first impression of a topic against her post-hive conclusion,
+        measure the revision, and write a calibration lesson. Offloaded."""
+        return await asyncio.to_thread(self.dreaming_loop.metacognitive_review, topic or None)
+
     def _dual_retrieve(self, user_message, input_bvec, q_embedding):
         """Run the retrieval DualPath (shadow/novel modes). Returns (aligned,
         tension) for the rest of the pipeline. In SHADOW the floor (hybrid RAG) is
