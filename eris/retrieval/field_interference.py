@@ -64,6 +64,45 @@ def _analytic(phi, theta) -> np.ndarray:
     return np.asarray(phi, dtype=np.float64) * np.exp(1j * np.asarray(theta, dtype=np.float64))
 
 
+def analytic_resonance_magnitudes(query_field, cand_fields, *, denoise: bool = True):
+    """Pool-level field-resonance magnitudes with optional COMMON-MODE (nullspace) removal —
+    the GLNCS / S1.8 constraint-projection idea applied to retrieval ranking.
+
+    φ is a non-negative coherence amplitude, so every candidate's analytic field z=φ·e^{iθ}
+    shares a large common-mode (DC) component; that shared baseline inflates the resonance of
+    ALL candidates roughly equally and compresses the discriminative part the rerank sorts on.
+    Removing the rank-1 common mode (the pool mean field) projects onto the bias-annihilated
+    subspace, so candidates are ranked by how they resonate DIFFERENTLY — a coherence win, not
+    a speed trade. Both κ and signed-λ channels are preserved (the subtraction is linear on the
+    complex field, so the torsion channel is kept and in fact sharpened).
+
+    Returns a list of magnitudes aligned with `cand_fields` (None where a field is None)."""
+    if not query_field:
+        return [None] * len(cand_fields)
+    zq = _analytic(*query_field).ravel()
+    zs = []
+    for f in cand_fields:
+        zs.append(None if f is None else _analytic(*f).ravel())
+    valid = [z for z in zs if z is not None]
+    if not valid:
+        return [None] * len(cand_fields)
+    # Estimating a common mode from <3 candidates is degenerate (a 2-element pool collapses to
+    # ±the same residual → all magnitudes tie). Only project when the pool can support it.
+    denoise = denoise and len(valid) >= 3
+    L = min([zq.size] + [z.size for z in valid])        # common grid length (defensive)
+    zq = zq[:L]
+    if denoise:
+        zbar = np.mean(np.stack([z[:L] for z in valid]), axis=0)   # rank-1 common mode
+        zq = zq - zbar
+    out = []
+    for z in zs:
+        if z is None:
+            out.append(None); continue
+        ze = z[:L] - zbar if denoise else z[:L]
+        out.append(float(abs(np.mean(zq * np.conj(ze)))))   # |R| with both channels retained
+    return out
+
+
 def field_resonance_2d(phi_q, theta_q, phi_s, theta_s) -> dict:
     """Full two-channel resonance — the "never just cosine" correction (§B3), written as the
     exact complex-exponential form (S1.1 FFT-family): the κ and signed-λ channels are the real

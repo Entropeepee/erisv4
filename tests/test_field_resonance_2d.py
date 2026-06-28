@@ -113,6 +113,54 @@ class TestFieldResonanceRerank(unittest.TestCase):
         self.assertEqual(out, ["a", "b"])              # falls back to incoming order
 
 
+class TestCommonModeRemoval(unittest.TestCase):
+    """GLNCS/S1.8 nullspace projection: removing the candidate pool's common-mode field before
+    resonance sharpens DIFFERENTIAL ranking (coherence), keeping both κ and λ channels."""
+    def setUp(self):
+        self.phi = np.ones((8, 8)); self.zero = np.zeros((8, 8))
+
+    def _grid(self, amp, phase):
+        return (self.phi * amp, np.full((8, 8), phase))
+
+    def test_denoise_changes_scores_and_keeps_nonneg(self):
+        from eris.retrieval.field_interference import analytic_resonance_magnitudes
+        q = (self.phi, self.zero)
+        # ≥3 candidates so the common mode is well-defined: two shared-baseline, one distinctive
+        cands = [self._grid(2.0, 0.0), self._grid(2.0, 0.0), self._grid(1.0, 0.0)]
+        raw = analytic_resonance_magnitudes(q, cands, denoise=False)
+        den = analytic_resonance_magnitudes(q, cands, denoise=True)
+        self.assertTrue(all(s is not None and s >= 0 for s in raw + den))
+        self.assertNotEqual([round(x, 6) for x in raw], [round(x, 6) for x in den])
+
+    def test_denoise_skipped_for_tiny_pool(self):
+        # <3 valid candidates → denoise is a no-op (degenerate), equals the raw scores
+        from eris.retrieval.field_interference import analytic_resonance_magnitudes
+        q = (self.phi, self.zero)
+        cands = [self._grid(1.0, 0.0), self._grid(0.5, 0.0)]
+        self.assertEqual(analytic_resonance_magnitudes(q, cands, denoise=True),
+                         analytic_resonance_magnitudes(q, cands, denoise=False))
+
+    def test_none_fields_pass_through(self):
+        from eris.retrieval.field_interference import analytic_resonance_magnitudes
+        out = analytic_resonance_magnitudes(
+            (self.phi, self.zero),
+            [None, self._grid(1, 0), self._grid(2, 0), self._grid(1, 1)], denoise=True)
+        self.assertIsNone(out[0])
+        self.assertTrue(all(s is not None for s in out[1:]))
+
+    def test_rerank_denoise_promotes_phase_distinct_over_shared_baseline(self):
+        from eris.tribe.research import field_resonance_rerank
+        # three shared-baseline chunks (flat, in-phase, high amplitude = common mode) + one whose
+        # phase actually matches the query; after common-mode removal the phase-matched one wins
+        fields = {
+            "b1": self._grid(3.0, 0.5), "b2": self._grid(3.0, 0.5), "b3": self._grid(3.0, 0.5),
+            "distinct": self._grid(1.0, 0.0),     # in phase with the (theta=0) query
+        }
+        out = field_resonance_rerank((self.phi, self.zero), ["b1", "b2", "b3", "distinct"],
+                                     blend=1.0, denoise=True, field_of=lambda t: fields[t])
+        self.assertEqual(out[0], "distinct")
+
+
 class TestTextToFieldEvolved(unittest.TestCase):
     def test_returns_two_same_shape_fields(self):
         from eris.tribe.specialists import _text_to_field
