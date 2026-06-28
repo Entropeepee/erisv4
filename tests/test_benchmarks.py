@@ -10,7 +10,7 @@ os.environ.setdefault("ERIS_EMBEDDINGS", "off")
 import unittest
 
 from eris.experiments.benchmarks.core import (
-    BenchItem, build_prompt, run_arm, budget_report, accuracy, faithfulness, compare)
+    BenchItem, build_prompt, run_arm, budget_report, accuracy, faithfulness, compare, item_details)
 from eris.experiments.benchmarks.scoring import (
     normalize, exact_match, multiple_choice, abstained, score_item, score_results,
     faithfulness_score, sentence_supported)
@@ -118,6 +118,19 @@ class TestBudgetAndCompare(unittest.TestCase):
         c = compare(a, b)
         self.assertFalse(c["equal_budget"])
         self.assertIn("UNEQUAL", c["note"])
+
+    def test_item_details_pairs_predictions_with_gold(self):
+        items = [BenchItem(id="q1", question="Who wrote it?", answer="Ada")]
+        bare = run_arm(items, callable_arm(lambda p: ("Babbage", 50)), "bare")
+        eris = run_arm(items, callable_arm(lambda p: ("Ada", 900)), "eris")
+        score_results(bare, items); score_results(eris, items)
+        rows = item_details(items, {"bare": bare, "eris": eris})
+        self.assertEqual(rows[0]["gold"], "Ada")
+        self.assertEqual(rows[0]["bare"]["answer"], "Babbage")
+        self.assertFalse(rows[0]["bare"]["correct"])
+        self.assertEqual(rows[0]["eris"]["answer"], "Ada")
+        self.assertTrue(rows[0]["eris"]["correct"])
+        self.assertEqual(rows[0]["eris"]["tokens"], 900)
 
     def test_budget_and_accuracy_helpers(self):
         items = [BenchItem(id=str(i), question="q", answer="x") for i in range(2)]

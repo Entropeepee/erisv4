@@ -93,6 +93,30 @@ def accuracy(results: List[ArmResult]) -> Dict[str, Any]:
             "accuracy": round(n_correct / len(graded), 4) if graded else 0.0}
 
 
+def item_details(items: List[BenchItem],
+                 results_by_arm: Dict[str, List[ArmResult]]) -> List[Dict[str, Any]]:
+    """Per-item breakdown for diagnosis: the question, the gold answer, and each arm's actual
+    prediction + correctness + tokens. Without this a 0% score is a black box — you can't tell a
+    wrong-format answer from a genuinely wrong one or a too-strict scorer."""
+    by = {label: {r.item_id: r for r in res} for label, res in results_by_arm.items()}
+    rows = []
+    for it in items:
+        row = {"id": it.id, "question": it.question[:240],
+               "gold": it.answer or ("UNANSWERABLE" if it.unanswerable else "")}
+        for label, m in by.items():
+            r = m.get(it.id)
+            if r is None:
+                continue
+            cell = {"answer": (r.text or "")[:300], "tokens": r.tokens}
+            if r.correct is not None:
+                cell["correct"] = r.correct
+            if r.faithfulness is not None:
+                cell["hallucination_rate"] = r.faithfulness
+            row[label] = cell
+        rows.append(row)
+    return rows
+
+
 def faithfulness(results: List[ArmResult]) -> Dict[str, Any]:
     """Aggregate faithfulness for an arm: mean per-item hallucination rate (lower = more faithful).
     This is the comparable per-arm number for RAGTruth — NOT pass/fail accuracy."""

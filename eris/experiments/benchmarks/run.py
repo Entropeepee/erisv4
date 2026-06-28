@@ -56,13 +56,19 @@ def main(argv: Optional[list] = None):    # pragma: no cover - CLI orchestration
         eris_fn = _load_factory(args.eris_factory)()
         res_eris = score_results(run_arm(items, eris_fn, "eris"), items)
 
+    from eris.experiments.benchmarks.core import item_details
     if res_bare and res_eris:
         report["compare"] = compare(res_bare, res_eris)
+        arms_for_details = {"bare": res_bare, "eris": res_eris}
     else:
         from eris.experiments.benchmarks.core import accuracy, budget_report, faithfulness
         only = res_bare or res_eris
+        label = "bare" if res_bare else "eris"
         report["result"] = {"accuracy": accuracy(only), "budget": budget_report(only),
                             "faithfulness": faithfulness(only)}
+        arms_for_details = {label: only}
+    # Per-item predictions vs gold — so a 0% score is diagnosable (wrong format? strict scorer?).
+    report["items"] = item_details(items, arms_for_details)
     print(json.dumps(report, indent=2, default=str))
     if args.out:
         with open(args.out, "w") as f:
