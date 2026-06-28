@@ -1110,6 +1110,43 @@ class ErisOrchestrator:
                         result["gaps_routed"] = routed
             except Exception:
                 pass
+
+        # Embed the synthesis ONCE for the two geometry-aware steps below (best-effort).
+        syn = ((result.get("synthesis_full") or result.get("synthesis") or "").strip()
+               if isinstance(result, dict) and "error" not in result else "")
+        syn_emb = None
+        if syn:
+            try:
+                from eris.knowledge.embeddings import get_embedding
+                syn_emb = get_embedding(syn)
+            except Exception:
+                syn_emb = None
+
+        # Confidence as resonance geometry: cos match + sin/torsion of the unresolved part. A
+        # synthesis-level readout — how well the conclusion aligns with the sources it rests on,
+        # how much stays unresolved, and whether that residual is coherent tension or noise.
+        if syn and result.get("sources"):
+            try:
+                from eris.knowledge.embeddings import get_embedding
+                from eris.computation.confidence import resonance_confidence
+                src_embs = [get_embedding(s) for s in (result.get("sources") or [])[:8]]
+                result["confidence"] = resonance_confidence(syn_emb, src_embs)
+            except Exception:
+                pass
+
+        # Consolidation write-back (v2): a canonized, grounded synthesis becomes a first-class
+        # memory that outranks the raw chunks it summarized — she retrieves what she LEARNED, not
+        # a re-derivation. Gated by ERIS_SYNTHESIS_WRITEBACK (default on) so the offline A/B
+        # harness never writes into the live store. Best-effort, never fatal.
+        if (syn and result.get("canonized")
+                and os.environ.get("ERIS_SYNTHESIS_WRITEBACK", "1") not in ("0", "off", "false")):
+            try:
+                wb = self.memory.write_back_synthesis(
+                    result.get("topic", topic), syn, embedding=syn_emb,
+                    n_sources=int(result.get("n_sources", 0) or 0))
+                result["synthesis_written_back"] = str(getattr(wb, "source", ""))
+            except Exception:
+                pass
         return result
 
     def _assemble_prompt(self, user_message: str,

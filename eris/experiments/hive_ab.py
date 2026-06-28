@@ -107,6 +107,9 @@ def metrics_from(summary: Dict[str, Any]) -> Dict[str, Any]:
         "stripped_claims": summary.get("stripped_claims", 0),
         "canonized": bool(summary.get("canonized")),
         "synthesis_len": len(final),                                       # length is NOT a virtue
+        # confidence as resonance geometry (cos match + sin/torsion of the unresolved part);
+        # present only when the orchestrator could embed the synthesis + sources.
+        "confidence": summary.get("confidence", {}),
     }
 
 
@@ -208,9 +211,11 @@ def main(argv=None):   # pragma: no cover
     args = ap.parse_args(argv)
 
     # This is an offline experiment, not live cognition — don't let a benchmark run feed gaps
-    # into the autonomous study queue or clutter the comparison JSON with a routing key.
+    # into the autonomous study queue, write syntheses into the live store, or clutter the
+    # comparison JSON with their keys.
     import os
     os.environ.setdefault("ERIS_ROUTE_GAPS", "0")
+    os.environ.setdefault("ERIS_SYNTHESIS_WRITEBACK", "0")
 
     from eris.orchestrator import ErisOrchestrator
     print(f"[hive-ab] booting Eris (reads ./eris_data, talks to your local Ollama)…")
