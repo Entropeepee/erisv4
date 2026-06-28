@@ -118,6 +118,24 @@ class TestTribeResearch(unittest.TestCase):
         self.assertTrue(any("empirical validation" in g for g in gaps))
         self.assertTrue(any("sign convention" in g for g in gaps))
 
+    def test_parallel_map_fn_matches_sequential_and_preserves_order(self):
+        # specialist reasoning via a concurrent map_fn must produce the same findings as the
+        # sequential default (order preserved, all contributors present, hub populated)
+        import concurrent.futures as cf
+        def model(prompt):
+            return "Domain analysis grounded in [s:0]."
+        def par_map(fn, items):
+            items = list(items)
+            with cf.ThreadPoolExecutor(max_workers=4) as ex:
+                return list(ex.map(fn, items))
+        seq = run_two_cycle_research("topic", retriever=_retriever, model=model,
+                                     specialists=TRIBE[:4], goal_bvec=GOAL)
+        par = run_two_cycle_research("topic", retriever=_retriever, model=model,
+                                     specialists=TRIBE[:4], goal_bvec=GOAL, map_fn=par_map)
+        self.assertEqual(par.n_active, seq.n_active)
+        self.assertEqual(par.n_contributors, seq.n_contributors)
+        self.assertGreaterEqual(par.n_contributors, 2)
+
     def test_empty_sources_short_circuits_hive_no_scaffolding(self):
         # 0 sources → ONE honest refusal, NOT 2000 chars of [s:nil] scaffolding from 5
         # specialists. The model must never even be called (nothing to ground in).

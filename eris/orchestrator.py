@@ -1017,13 +1017,38 @@ class ErisOrchestrator:
 
         # Stage-2 comprehension: pre-digest each source into atomic propositions so the
         # specialists reason over distilled facts, not raw chunks (default ON; cheap, local).
+        # Stage-3 amortization: cache propositions per source — the same chunk is formatted at
+        # cycle-1, cycle-2, and canonize; without this each is RE-digested (an LLM call) up to 3×.
+        _prop_cache: Dict[str, Any] = {}
+        import threading as _th
+        _prop_lock = _th.Lock()
         def _digester(text: str):
+            key = " ".join((text or "").lower().split())[:300]
+            with _prop_lock:
+                cached = _prop_cache.get(key)
+            if cached is not None:
+                return cached
             try:
                 from eris.knowledge.comprehend import propositions
-                return propositions(text, _local, n=4, max_chars=1400)
+                props = propositions(text, _local, n=4, max_chars=1400)
             except Exception:
-                return []
+                props = []
+            with _prop_lock:
+                _prop_cache[key] = props
+            return props
         digester = None if os.environ.get("ERIS_HIVE_DIGEST") == "0" else _digester
+
+        # Parallel specialist reasoning (the Tribe is conceptually concurrent). Default cap 4;
+        # ERIS_HIVE_CONCURRENCY=1 restores fully-sequential. LLM calls are I/O-bound (release the
+        # GIL), so a single Ollama serializes but vLLM/concurrent backends get the full speedup.
+        _conc = max(1, int(os.environ.get("ERIS_HIVE_CONCURRENCY", "4")))
+        def _map_fn(fn, items):
+            items = list(items)
+            if _conc <= 1 or len(items) <= 1:
+                return [fn(x) for x in items]
+            import concurrent.futures as _cf
+            with _cf.ThreadPoolExecutor(max_workers=min(_conc, len(items))) as ex:
+                return list(ex.map(fn, items))    # preserves input order
 
         def _embed(text: str):
             try:
@@ -1039,7 +1064,7 @@ class ErisOrchestrator:
                 topic, retriever=_rag, model=_reason, moe_gate=self.moe_gate, hub=self.hub,
                 thought_stream=self.thought_stream, embed_fn=_embed,
                 synth_model=synth_model, digester=digester, single_pass=(mode == "single"),
-                max_specialists=max_specialists, log=_log)
+                max_specialists=max_specialists, log=_log, map_fn=_map_fn)
             return {"topic": res.topic, "thought_id": res.thought_id, "gaps": res.gaps,
                     "n_contributors": res.n_contributors, "n_active": res.n_active,
                     "n_sources": res.n_sources, "stripped_claims": res.stripped_claims,

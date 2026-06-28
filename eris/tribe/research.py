@@ -276,6 +276,7 @@ def run_two_cycle_research(
     synth_model: Optional[Model] = None, digester: Optional[Callable[[str], List[str]]] = None,
     goal_bvec: Optional[BVec] = None, max_specialists: int = 5, single_pass: bool = False,
     regime: str = "research", log: Optional[Callable[[str], None]] = None,
+    map_fn: Optional[Callable[[Callable, List], List]] = None,
 ) -> ResearchResult:
     """Run the broad→synthesis→refined→canonize cycle. `retriever(query)->[sources]` is the
     existing RAG pipeline; `model(prompt)->text` is the local model. Specialists default to
@@ -283,6 +284,11 @@ def run_two_cycle_research(
     given (citation-grounded)."""
     _log = log or (lambda m: None)
     synth = synth_model or model                       # deep model for comprehension-heavy steps
+    # Specialists reason INDEPENDENTLY → they can run concurrently (the Tribe is conceptually
+    # parallel). map_fn defaults to sequential (deterministic for tests); the orchestrator passes
+    # a thread-pool mapper. Results preserve input order; hub posting happens AFTER the gather so
+    # the shared hub is never mutated concurrently.
+    _map = map_fn or (lambda fn, items: [fn(x) for x in items])
 
     # ── CONTROL: a single-pass RAG summary (same retrieval/model/grounding, NO hive) — the
     # honest A/B baseline that isolates what the multi-specialist two-cycle engine adds. ──
@@ -318,11 +324,11 @@ def run_two_cycle_research(
     for i, s in enumerate(ctx1):                       # show WHAT was retrieved (diagnose RAG)
         _log(f"    [s:{i}] {' '.join((s or '').split())[:80]}…")
     src1 = _format_sources(ctx1, digester)             # propositions distilled in (if available)
-    c1: List[SpecialistFinding] = []
-    for s in active:
-        _log(f"  {s.name} reasoning…")
-        f = make_reasoned_finding(s, topic, src1, model)
-        hub.post(f); c1.append(f)
+    _log(f"  {len(active)} specialist(s) reasoning ({', '.join(s.name for s in active)})…")
+    c1: List[SpecialistFinding] = list(
+        _map(lambda s: make_reasoned_finding(s, topic, src1, model), active))
+    for f in c1:                                       # post to the hub AFTER the gather (no race)
+        hub.post(f)
 
     # ── Synthesis: Kairos integrates; MoEGate weights; hub cross-pollinates; Elos falsifies ──
     if moe_gate is not None:
@@ -362,9 +368,8 @@ def run_two_cycle_research(
         gap_goal = (f"Close these GAPS in our understanding of '{topic}': " + " | ".join(gaps) +
                     f". (Cycle-1 already found: {c1_summary}.) Add only what the sources reveal "
                     f"about the gaps; if a gap is already covered, say so briefly.")
-        for s in active:
-            _log(f"  {s.name} closing gaps…")
-            c2.append(make_reasoned_finding(s, gap_goal, src2, model))
+        _log(f"  {len(active)} specialist(s) closing gaps…")
+        c2 = list(_map(lambda s: make_reasoned_finding(s, gap_goal, src2, model), active))
 
     # ── Canonize: INTEGRATE cycle-2 gap-closures into the cycle-1 synthesis (not regenerate) ──
     all_sources = _distinct(ctx1 + ctx2)
