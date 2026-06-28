@@ -548,7 +548,15 @@ class MemorySystem:
         conversation that merely *mentions* it (e.g. 'tell me about my patent'
         otherwise ranks the chat turns containing 'patent' above the patent)."""
         import re as _re
-        toks = {w for w in _re.findall(r"[a-z0-9]{4,}", (query_text or "").lower())}
+        # 3+ chars (was 4+) so SHORT ACRONYM doc names match — "SGT"/"FFT"/"PDE"/"API" are
+        # exactly the kind of names a user types, and the old 4-char floor silently dropped them
+        # (the token set went empty → returned []). Guard a small set of common 3-letter words so
+        # lowering the floor doesn't make name-matching over-fire on "the"/"and"/etc.
+        _DOC_STOP = {"the", "and", "for", "was", "are", "its", "not", "but", "you", "all", "any",
+                     "has", "had", "her", "his", "our", "out", "who", "why", "how", "can", "may",
+                     "one", "two", "use", "new", "via", "per", "off", "yet", "let", "see", "now"}
+        toks = {w for w in _re.findall(r"[a-z0-9]{3,}", (query_text or "").lower())
+                if not (len(w) == 3 and w in _DOC_STOP)}
         if not toks:
             return []
         pool = (list(self.stm.get_all()) + list(self.mtm._records)
