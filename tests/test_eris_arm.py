@@ -13,18 +13,51 @@ import unittest
 from eris.computation.activations import BVec
 from eris.memory.tiers import MemorySystem, MemoryRecord
 from eris.memory.thought_stream import ThoughtStream
-from eris.experiments.benchmarks.eris_arm import _TokenMeter, _wipe_memory, make_eris_arm
+from eris.experiments.benchmarks.eris_arm import (
+    _TokenMeter, _wipe_memory, make_eris_arm, _resp_tokens, _task_remainder, _question_line)
+from eris.experiments.benchmarks.core import build_prompt, BenchItem
 
 GOAL = BVec(B=0.4, F=0.5, E=0.4, C=0.4, D=0.2, S=0.3)
 
 
 class _Resp:
-    def __init__(self, t): self.tokens_used = t
+    def __init__(self, t=0, raw=None):
+        self.tokens_used = t
+        self.raw = raw
 
 
 class _Backend:
-    def __init__(self, toks): self._toks = toks
-    async def generate(self, *a, **kw): return _Resp(self._toks)
+    def __init__(self, toks=0, raw=None): self._toks = toks; self._raw = raw
+    async def generate(self, *a, **kw): return _Resp(self._toks, self._raw)
+
+
+class TestRespTokens(unittest.TestCase):
+    def test_prefers_tokens_used(self):
+        self.assertEqual(_resp_tokens(_Resp(t=42)), 42)
+
+    def test_falls_back_to_ollama_native_eval_counts(self):
+        # the bug from the live run: OllamaBackend leaves tokens_used=0 but puts the counts in .raw
+        r = _Resp(t=0, raw={"prompt_eval_count": 1200, "eval_count": 340})
+        self.assertEqual(_resp_tokens(r), 1540)
+
+    def test_falls_back_to_nested_usage(self):
+        self.assertEqual(_resp_tokens(_Resp(t=0, raw={"usage": {"total_tokens": 99}})), 99)
+
+    def test_zero_when_nothing_reported(self):
+        self.assertEqual(_resp_tokens(_Resp(t=0, raw={})), 0)
+
+
+class TestPromptParsing(unittest.TestCase):
+    def test_question_line_extracted_from_mc_remainder(self):
+        prompt = build_prompt(BenchItem(id="x", question="Which is blue?",
+                                        context="The sky is blue.", choices=["red", "blue"], answer="B"))
+        rem = _task_remainder(prompt)
+        self.assertIn("Options:", rem)                       # options survive for the extractor
+        self.assertIn("single letter", rem)
+        self.assertEqual(_question_line(rem), "Which is blue?")   # bare question for the hive topic
+
+    def test_question_line_closed_book(self):
+        self.assertEqual(_question_line("Question: 2+2?"), "2+2?")
 
 
 class _Mediator:

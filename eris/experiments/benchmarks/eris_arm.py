@@ -21,9 +21,26 @@ import threading
 from typing import Callable, Tuple
 
 
+def _resp_tokens(resp) -> int:
+    """Real token count from an LLMResponse, however the backend reports it: tokens_used (OpenAI/
+    /v1 'usage'), else Ollama-native prompt_eval_count + eval_count from .raw, else a nested
+    usage.total_tokens. Returns 0 only if nothing is reported."""
+    t = int(getattr(resp, "tokens_used", 0) or 0)
+    if t:
+        return t
+    raw = getattr(resp, "raw", None)
+    if isinstance(raw, dict):
+        n = int(raw.get("prompt_eval_count", 0) or 0) + int(raw.get("eval_count", 0) or 0)
+        if n:
+            return n
+        return int((raw.get("usage") or {}).get("total_tokens", 0) or 0)
+    return 0
+
+
 class _TokenMeter:
     """Sum real tokens across every LLM call during one ask(): wraps each backend's async
-    generate() to accumulate LLMResponse.tokens_used. Thread-safe (the hive reasons in parallel)."""
+    generate() to accumulate its token count (tokens_used OR Ollama-native eval counts).
+    Thread-safe (the hive reasons in parallel)."""
 
     def __init__(self):
         self.tokens = 0
@@ -41,7 +58,7 @@ class _TokenMeter:
             resp = await _orig(*a, **kw)
             with meter._lock:
                 meter.calls += 1
-                meter.tokens += int(getattr(resp, "tokens_used", 0) or 0)
+                meter.tokens += _resp_tokens(resp)
             return resp
         metered._metered = True
         backend.generate = metered
@@ -123,6 +140,21 @@ def _wipe_memory(orch) -> None:
             "refactor may have changed the tier internals this wipe reaches into.")
 
 
+def _task_remainder(prompt: str) -> str:
+    """Everything after the SOURCE block — the question + any options + the answer-format line."""
+    if "=== END SOURCE ===" in prompt:
+        return prompt.split("=== END SOURCE ===", 1)[1].strip()
+    return prompt.strip()
+
+
+def _question_line(remainder: str) -> str:
+    """The bare question (for the hive topic), without the options/format instructions."""
+    for line in remainder.splitlines():
+        if line.strip().lower().startswith("question:"):
+            return line.split(":", 1)[1].strip()
+    return remainder.strip()
+
+
 def make_eris_arm(data_dir: str = "eris_bench_data",
                   field_size: int = 32) -> Callable[[str], Tuple[str, int]]:
     """Return the Eris answer_fn (prompt -> (text, tokens)), ready for --eris-factory."""
@@ -137,7 +169,8 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
     from eris.orchestrator import ErisOrchestrator
     from eris.knowledge import web_reader
     from eris.knowledge.extractor import KnowledgeExtractor
-    from eris.experiments.benchmarks.arms import eris_pipeline_arm
+    from eris.experiments.benchmarks.arms import _split_source
+    from eris.interface.mediator import run_blocking
 
     orch = ErisOrchestrator(data_dir=data_dir, field_size=field_size)
     extractor = KnowledgeExtractor(output_dir=os.path.join(data_dir, "knowledge_base"))
@@ -164,15 +197,37 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
                     "is not reaching the scope='doc' store (title='bench'); aborting instead of "
                     "scoring an empty answer as a loss.")
 
-    def ask(q: str):
-        meter.reset()
-        res = asyncio.run(orch.hive_research(q, scope="doc", document="bench"))
-        text = (res.get("synthesis_full") or res.get("synthesis") or "").strip()
+    def _extract_answer(remainder: str, synthesis: str) -> str:
+        """One concise grounded-answer call so Eris emits a SCORABLE answer in the SAME form the
+        bare arm uses (a name/number/date, or a single option letter) — fair formatting of the
+        hive's synthesis, NOT a second research pass. Metered like every other call."""
+        p = ("Using ONLY the analysis below, give the final answer to the task. Follow the task's "
+             "answer format EXACTLY — if it asks for a single letter, output ONLY that letter; "
+             "otherwise answer as briefly as possible (a name, number, or date) with no "
+             f"explanation.\n\nANALYSIS:\n{synthesis[:3000]}\n\nTASK:\n{remainder}\n\nFinal answer:")
+        try:
+            resp = run_blocking(orch.mediator.generate(prompt=p, system=""), timeout=120)
+            return (getattr(resp, "text", "") or "").strip()
+        except Exception:
+            return ""
+
+    def _answer(prompt: str):
+        context, _ = _split_source(prompt)
+        remainder = _task_remainder(prompt)
+        question = _question_line(remainder)
+        reset()                                  # reset BEFORE ingest (never erase the passage)
+        if context and context.strip():
+            ingest(context)
+        meter.reset()                            # count the hive + the extraction call
+        res = asyncio.run(orch.hive_research(question, scope="doc", document="bench"))
+        synthesis = (res.get("synthesis_full") or res.get("synthesis") or "").strip()
+        # Extract a short, scorable answer from the synthesis (the bare arm answers directly; this
+        # gives Eris the same answer FORM so exact-match/MC don't penalize the hive for verbosity).
+        answer = (_extract_answer(remainder, synthesis) if synthesis else "") or synthesis
         tokens = meter.tokens
         if tokens <= 0:
-            # Distinguish "no LLM calls happened" (e.g. the hive declined with 0 sources — a
-            # legitimate 0 cost) from "calls happened but the backend reported no usage" (the real
-            # proxy case worth warning about).
+            # Distinguish "no LLM calls happened" (the hive declined with 0 sources — a legitimate
+            # 0 cost) from "calls happened but no usage reported" (the real proxy case worth warning).
             tc = res.get("tier_calls", {}) or {}
             calls = sum(v for k, v in tc.items() if not str(k).startswith("_")) or meter.calls
             tokens = calls
@@ -182,6 +237,6 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
                       "usage; cost is a CALL-COUNT PROXY, not tokens — equal-budget is approximate. "
                       "Serve via an OpenAI-compatible /v1 endpoint (Ollama/vLLM) for real tokens.",
                       file=sys.stderr)
-        return text, int(tokens)
+        return answer, int(tokens)
 
-    return eris_pipeline_arm(ingest, ask, reset)
+    return _answer
