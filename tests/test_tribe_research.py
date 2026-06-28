@@ -161,6 +161,25 @@ class TestTribeResearch(unittest.TestCase):
         self.assertEqual(res.cycles, 2)
         self.assertGreaterEqual(res.gaps_closed, 1)
 
+    def test_open_gaps_is_the_unclosed_complement(self):
+        # the routing feature: open_gaps holds exactly the gaps cycle-2 did NOT close, so the
+        # discovery→study loop chases what's still missing, not what was already resolved.
+        def model(prompt):
+            if "Kairos" in prompt:
+                return ("Synthesis [s:0].\n**Open Gaps**\n"
+                        "- empirical validation evidence is missing\n"
+                        "- the thermal drift coefficient remains unmeasured")
+            if "FALSIFY" in prompt:
+                return "weakest claim: X [s:0]"
+            if "Close these GAPS" in prompt:
+                return "The empirical validation evidence appears in [s:0] after all."
+            return "Domain finding [s:0]."
+        res = run_two_cycle_research("topic", retriever=_retriever, model=model,
+                                     specialists=TRIBE[:3], goal_bvec=GOAL)
+        self.assertGreaterEqual(res.gaps_closed, 1)
+        self.assertTrue(any("thermal drift" in g for g in res.open_gaps))        # still open
+        self.assertFalse(any("empirical validation" in g for g in res.open_gaps))  # closed → not open
+
     def test_elos_changed_flips_when_final_differs_from_draft(self):
         # canonize returns text very different from the cycle-1 synthesis → elos_changed True
         def model(prompt):

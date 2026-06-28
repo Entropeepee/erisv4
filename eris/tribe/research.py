@@ -74,6 +74,7 @@ class ResearchResult:
     synthesis: str
     thought_id: Optional[str] = None
     gaps: List[str] = field(default_factory=list)
+    open_gaps: List[str] = field(default_factory=list)   # the gaps cycle-2 did NOT close (route onward)
     n_contributors: int = 0          # distinct specialists that contributed (diversity)
     n_active: int = 0
     n_sources: int = 0               # how many DISTINCT sources the RAG retrieved
@@ -420,8 +421,13 @@ def run_two_cycle_research(
     # as closed if some non-echo cycle-2 finding shares ≥2 content words with the gap text.
     _c2_words = [_content_words(f.content) for f in c2
                  if not f.metadata.get("echo") and f.content.strip()]
-    gaps_closed = sum(1 for g in gaps
-                      if any(len(_content_words(g) & cw) >= 2 for cw in _c2_words))
+    def _gap_is_closed(g: str) -> bool:
+        gw = _content_words(g)
+        return any(len(gw & cw) >= 2 for cw in _c2_words)
+    gaps_closed = sum(1 for g in gaps if _gap_is_closed(g))
+    # The UNCLOSED complement — what the hive tried to resolve and couldn't. These are the gaps
+    # worth routing onward (autonomous study, or a question to the user), not the ones cycle-2 shut.
+    open_gaps = [g for g in gaps if not _gap_is_closed(g)]
 
     # ── Canonize: INTEGRATE cycle-2 gap-closures into the cycle-1 synthesis (not regenerate) ──
     all_sources = _distinct(ctx1 + ctx2)
@@ -472,6 +478,7 @@ def run_two_cycle_research(
 
     return ResearchResult(
         topic=topic, synthesis=synthesis_out, thought_id=thought_id, gaps=gaps,
+        open_gaps=open_gaps,
         n_contributors=len(contributors), n_sources=len(all_sources),
         sources=list(all_sources),     # FULL retrieved chunks — not 300-char previews (also so
                                         # source_alignment scores against the real source text)
