@@ -914,11 +914,21 @@ class ErisOrchestrator:
                     return [p.strip()[:1400] for p in str(txt).split("\n\n") if p.strip()][:6]
                 # A named document leads (or is the ONLY pool when scope='doc') — so asking
                 # about a paper primarily sees THAT paper (documents_matching by title/filename).
+                # The QUESTION embedding (not the doc-name) — used to RANK the document's chunks
+                # by relevance to what's actually being asked, so the conceptual sections surface
+                # instead of whichever chunks happen to contain the doc name (often tail-end code).
+                # With hashed (non-semantic) embeddings dense ranking is noise → pure BM25.
+                qe = get_embedding(query) if is_semantic() else None
                 lead = []
                 if document or scope == "doc":
                     q = document or query
                     if hasattr(self.memory, "documents_matching"):
-                        lead = list(self.memory.documents_matching(q, max_chunks=6))
+                        # scope=doc: pull MANY of the named doc's chunks (a paper is ~20 chunks),
+                        # ranked by the QUESTION, so summary/prior-art sections enter the pool and
+                        # the hive/resonance can pick them — not just the first 6 name-matches.
+                        n_doc = 16 if scope == "doc" else 6
+                        lead = list(self.memory.documents_matching(
+                            q, max_chunks=n_doc, query_embedding=qe))
                     if scope == "doc":
                         recs = lead
                     else:
@@ -933,9 +943,6 @@ class ErisOrchestrator:
                         pass
                 if not recs:
                     return []
-                # With hashed (non-semantic) embeddings the dense ranking is noise — use pure
-                # BM25 instead of polluting RRF (the lexical match is what actually works then).
-                qe = get_embedding(query) if is_semantic() else None
                 # Reuse a prebuilt index for the big stable memory pool (default scope, no named
                 # doc) across cycles; build inline for the small/variable doc-lead pools.
                 if scope == "memory" and not document:
