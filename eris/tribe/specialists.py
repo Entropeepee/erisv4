@@ -248,18 +248,30 @@ def make_reasoned_finding(specialist: Specialist, goal: str, retrieved_context: 
     is avoided by gating this to deep cycles + the top-K active cap)."""
     from eris.metacognition.truth_contract import PONDER_CONTRACT, fabricated_self
     context = (retrieved_context or "").strip() or "(no sources retrieved)"
-    base = (
-        f"{PONDER_CONTRACT}\n\n"
-        f"You are {specialist.name}, the {specialist.domain} specialist "
-        f"({specialist.description}).\n"
-        f"FIRST, read the sources for what they ACTUALLY say about the topic — the key "
-        f"mechanism, claim, or relationship, together with its conditions and limits. THEN, "
-        f"through your {specialist.domain} lens, give ONE specific, non-obvious finding that "
-        f"this understanding supports: name the mechanism and why it matters, cite the "
-        f"source(s) you rely on as [s:i], and explicitly flag anything the sources do NOT "
-        f"establish. Do not restate the question or quote verbatim. 2-4 sentences.\n\n"
-        f"TOPIC: {goal}\n\nSOURCES:\n{context}\n\n{specialist.name}'s finding:"
-    )
+    if specialist.id == "elos":
+        # Elos is the adversary — even in cycle 1 it should probe, not concur. Lead with the
+        # weakest assumption / the claim the sources support LEAST, rather than a confirming
+        # lens-finding. Sources-only, same truth-contract.
+        task = (
+            f"You are {specialist.name}, the adversarial {specialist.domain} specialist "
+            f"({specialist.description}).\n"
+            f"FIRST, read the sources. THEN name the ONE claim or assumption a synthesis of this "
+            f"topic would most likely make that the sources support LEAST — the weakest link. "
+            f"Say what it is, why the sources don't (fully) establish it, and what specific "
+            f"evidence [s:i] would be needed to defend it. Do not restate the question. 2-4 "
+            f"sentences.")
+    else:
+        task = (
+            f"You are {specialist.name}, the {specialist.domain} specialist "
+            f"({specialist.description}).\n"
+            f"FIRST, read the sources for what they ACTUALLY say about the topic — the key "
+            f"mechanism, claim, or relationship, together with its conditions and limits. THEN, "
+            f"through your {specialist.domain} lens, give ONE specific, non-obvious finding that "
+            f"this understanding supports: name the mechanism and why it matters, cite the "
+            f"source(s) you rely on as [s:i], and explicitly flag anything the sources do NOT "
+            f"establish. Do not restate the question or quote verbatim. 2-4 sentences.")
+    base = (f"{PONDER_CONTRACT}\n\n{task}\n\n"
+            f"TOPIC: {goal}\n\nSOURCES:\n{context}\n\n{specialist.name}'s finding:")
     reasoning, echoed = "", False
     for attempt in range(max_regens + 1):
         prompt = base if attempt == 0 else (

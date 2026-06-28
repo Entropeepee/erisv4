@@ -1078,9 +1078,13 @@ class ErisOrchestrator:
                     "cycles": res.cycles, "canonized": res.thought_id is not None,
                     "sources": res.sources, "sensitivity": str(sens.value),
                     "tier_calls": dict(run_costs),   # per-tier call counts + paid (per-run, no race)
-                    # FULL synthesis — never truncated. If a reader (David) or Eris herself can't
-                    # see the whole reasoning, we're missing part of the work. Metrics also score
-                    # the full text (a prior 2000-char cap silently truncated both).
+                    # OUTCOME measures (graded by hive_ab, not tautologies)
+                    "specialist_divergence": res.specialist_divergence,
+                    "gaps_closed": res.gaps_closed, "elos_changed": res.elos_changed,
+                    "elos_critique": res.elos_critique,
+                    # FULL synthesis — never truncated (display AND metrics). _full kept as an
+                    # explicit alias for metrics_from / blind_pair; all equal the full text.
+                    "synthesis_full": res.synthesis, "synthesis_pre_ground_full": res.synthesis_pre_ground,
                     "synthesis": res.synthesis,
                     "synthesis_pre_ground": res.synthesis_pre_ground}
 
