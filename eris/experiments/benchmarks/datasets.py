@@ -145,28 +145,40 @@ def _frames_links(row: Dict[str, Any]) -> List[str]:
 
 
 def _fetch_frames_context(row: Dict[str, Any], max_chars: int = 24000,
-                          max_articles: int = 8) -> str:
+                          max_articles: int = 8):
     """FRAMES ships Wikipedia LINKS, not article text — fetch the linked articles and assemble the
     provided 'source' so the grounded benchmark actually has documents. Capped (articles + chars)
-    so a 15-article question stays tractable; best-effort per article."""
+    so a 15-article question stays tractable; best-effort per article.
+
+    Returns (context, stats). `stats` records linked / fetched / failed / capped so a PARTIAL fetch
+    (e.g. 2 of 6 articles failed) is visible in the report — otherwise an incomplete source makes a
+    question unanswerable and Eris looks wrong when really the fetch broke."""
     from eris.knowledge.web_reader import fetch_wikipedia
-    parts, total = [], 0
-    for url in _frames_links(row)[:max_articles]:
+    links = _frames_links(row)
+    parts, total, fetched, failed = [], 0, 0, []
+    capped = False
+    for url in links[:max_articles]:
         title = _wiki_title_from_url(url)
         if not title:
             continue
         try:
             text = fetch_wikipedia(title)
         except Exception:
-            continue
+            failed.append(title); continue
         if not text:
-            continue
+            failed.append(title); continue
         block = f"== {title} ==\n{text}"
         parts.append(block)
         total += len(block)
+        fetched += 1
         if total >= max_chars:
+            capped = True
             break
-    return ("\n\n".join(parts))[:max_chars]
+    ctx = ("\n\n".join(parts))[:max_chars]
+    stats = {"linked": len(links), "fetched": fetched, "failed": failed,
+             "capped_articles": (len(links) > max_articles), "capped_chars": capped,
+             "context_chars": len(ctx)}
+    return ctx, stats
 
 
 def load_frames(limit: Optional[int] = None, fetch_context: bool = True,
@@ -180,7 +192,8 @@ def load_frames(limit: Optional[int] = None, fetch_context: bool = True,
     for i, r in enumerate(rows):
         it = _frames_item(r, i)
         if fetch_context and not it.context:
-            it.context = _fetch_frames_context(r, max_chars=max_chars)
+            it.context, stats = _fetch_frames_context(r, max_chars=max_chars)
+            it.meta["fetch"] = stats             # surfaced per-item in the report (partial fetch visible)
         items.append(it)
     return items
 

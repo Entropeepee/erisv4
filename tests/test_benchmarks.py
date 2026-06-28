@@ -283,6 +283,72 @@ class TestFaithfulnessScorer(unittest.TestCase):
         self.assertEqual(c["eris"]["faithfulness"]["mean_hallucination_rate"], 0.0)
 
 
+class TestObservabilityNoSilentFailures(unittest.TestCase):
+    def test_run_arm_captures_detail_from_dict_return(self):
+        # the Eris arm returns a dict with full diagnostics; run_arm must preserve detail
+        items = [BenchItem(id="a", question="q", answer="x")]
+        res = run_arm(items, lambda p: {"text": "x", "tokens": 5,
+                                        "detail": {"synthesis": "FULL HIVE TEXT",
+                                                   "extraction_ok": True}}, "eris")
+        self.assertEqual(res[0].tokens, 5)
+        self.assertEqual(res[0].detail["synthesis"], "FULL HIVE TEXT")
+
+    def test_accuracy_reports_error_rate(self):
+        # an arm that errors on some items must not hide the reliability hit in the denominator
+        items = [BenchItem(id=str(i), question="q", answer="x") for i in range(4)]
+        calls = {"n": 0}
+        def fn(p):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise ValueError("boom")
+            return ("x", 10)
+        res = score_results(run_arm(items, fn, "bare"), items)
+        a = accuracy(res)
+        self.assertEqual(a["errored"], 1)
+        self.assertEqual(a["error_rate"], 0.25)
+        self.assertEqual(a["graded"], 3)              # errored item excluded from accuracy denom
+
+    def test_item_details_surfaces_full_synthesis_and_fetch_stats(self):
+        it = BenchItem(id="f1", question="q", answer="x",
+                       meta={"fetch": {"linked": 3, "fetched": 1, "failed": ["A", "B"]}})
+        res = run_arm([it], lambda p: {"text": "x", "tokens": 9,
+                                       "detail": {"synthesis": "FULL HIVE TEXT",
+                                                  "extraction_ok": False}}, "eris")
+        score_results(res, [it])
+        rows = item_details([it], {"eris": res})
+        self.assertEqual(rows[0]["source_fetch"]["fetched"], 1)        # partial fetch is visible
+        self.assertEqual(rows[0]["source_fetch"]["failed"], ["A", "B"])
+        self.assertEqual(rows[0]["eris"]["synthesis"], "FULL HIVE TEXT")  # full, untruncated
+        self.assertFalse(rows[0]["eris"]["extraction_ok"])             # extraction failure flagged
+
+    def test_item_details_does_not_truncate_long_answers(self):
+        long = "word " * 500                          # ~2500 chars
+        it = BenchItem(id="a", question="q" * 400, answer="x")
+        res = run_arm([it], callable_arm(lambda p: (long, 1)), "bare")
+        rows = item_details([it], {"bare": res})
+        self.assertEqual(rows[0]["bare"]["answer"], long.strip())     # whole answer
+        self.assertEqual(len(rows[0]["question"]), 400)               # whole question
+
+    def test_frames_fetch_records_partial_failures(self):
+        import eris.knowledge.web_reader as wr
+        def fake_fetch(title, lang="en"):
+            if title == "Good":
+                return "the article text body"
+            raise RuntimeError("404")
+        orig = wr.fetch_wikipedia
+        wr.fetch_wikipedia = fake_fetch
+        try:
+            row = {"wiki_links": ["https://en.wikipedia.org/wiki/Good",
+                                  "https://en.wikipedia.org/wiki/Bad"]}
+            ctx, stats = D._fetch_frames_context(row)
+        finally:
+            wr.fetch_wikipedia = orig
+        self.assertIn("article text", ctx)
+        self.assertEqual(stats["linked"], 2)
+        self.assertEqual(stats["fetched"], 1)
+        self.assertIn("Bad", stats["failed"])                        # the failed article is recorded
+
+
 class TestArmsHelpers(unittest.TestCase):
     def test_split_source_recovers_context_and_question(self):
         it = BenchItem(id="x", question="Who wrote it?", context="Ada did.")
