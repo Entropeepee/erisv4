@@ -135,6 +135,32 @@ class TestDatasetMappers(unittest.TestCase):
         self.assertEqual(it.answer, "Ada")
         self.assertEqual(it.meta["type"], "multi_hop")
 
+    def test_frames_wiki_title_from_url(self):
+        self.assertEqual(D._wiki_title_from_url(
+            "https://en.wikipedia.org/wiki/Ada_Lovelace#Early_life"), "Ada Lovelace")
+        self.assertEqual(D._wiki_title_from_url(
+            "https://en.wikipedia.org/wiki/Charles_Babbage?foo=bar"), "Charles Babbage")
+        self.assertEqual(D._wiki_title_from_url(
+            "https://en.wikipedia.org/wiki/Caf%C3%A9"), "Café")          # url-decoded
+
+    def test_frames_links_collected_from_any_field(self):
+        # FRAMES ships links, not text — they may be a list OR inline in a string field
+        row = {"Prompt": "see https://en.wikipedia.org/wiki/Foo for context",
+               "wiki_links": ["https://en.wikipedia.org/wiki/Bar",
+                              "https://en.wikipedia.org/wiki/Bar"],   # dup
+               "Answer": "x"}
+        links = D._frames_links(row)
+        self.assertIn("https://en.wikipedia.org/wiki/Foo", links)
+        self.assertIn("https://en.wikipedia.org/wiki/Bar", links)
+        self.assertEqual(len(links), 2)                                # deduped, order-preserved
+
+    def test_frames_item_context_empty_without_fetch(self):
+        # the bug the smoke test caught: a bare FRAMES row carries NO article text → context ""
+        # (which is why load_frames(fetch_context=True) must assemble it)
+        it = D._frames_item({"Prompt": "Q?", "Answer": "A",
+                             "wiki_links": ["https://en.wikipedia.org/wiki/Foo"]}, 0)
+        self.assertEqual(it.context, "")
+
     def test_quality_flattens_questions_and_filters_hard(self):
         row = {"article": "A long passage.", "questions": [
             {"question": "easy?", "options": ["a", "b"], "gold_label": 1, "difficult": 0},

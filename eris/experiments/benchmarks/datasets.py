@@ -9,9 +9,13 @@ Tiers (from the brief):
   • document-grounded (Eris's proving ground): FRAMES, QuALITY-HARD, RAGTruth, MuSiQue
   • closed-book controls (bare-model ceiling):  MMLU-Pro, GPQA-Diamond
 """
+import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import unquote
 
 from eris.experiments.benchmarks.core import BenchItem
+
+_WIKI_URL = re.compile(r"https?://[^\s\"'\]\),]*wikipedia\.org/wiki/[^\s\"'\]\),]+", re.I)
 
 
 def _load_dataset(*args, **kwargs):
@@ -116,10 +120,69 @@ def _gpqa_item(row: Dict[str, Any], i: int) -> BenchItem:
 
 # ── live loaders (need `datasets` + network) ─────────────────────────────────
 
-def load_frames(limit: Optional[int] = None) -> List[BenchItem]:
+def _wiki_title_from_url(url: str) -> str:
+    """Pull the article title out of a Wikipedia URL: '.../wiki/Ada_Lovelace#Early' -> 'Ada Lovelace'."""
+    tail = (url or "").rstrip("/").split("/wiki/", 1)[-1].split("#")[0].split("?")[0]
+    return unquote(tail).replace("_", " ").strip()
+
+
+def _frames_links(row: Dict[str, Any]) -> List[str]:
+    """Collect the Wikipedia article URLs from a FRAMES row, wherever they live (a 'wiki_links'
+    list, separate link columns, or inline in a text field) — scan all values, dedupe in order."""
+    urls: List[str] = []
+    for v in (row or {}).values():
+        if isinstance(v, str):
+            urls += _WIKI_URL.findall(v)
+        elif isinstance(v, (list, tuple)):
+            for x in v:
+                if isinstance(x, str):
+                    urls += _WIKI_URL.findall(x)
+    seen, out = set(), []
+    for u in urls:
+        if u not in seen:
+            seen.add(u); out.append(u)
+    return out
+
+
+def _fetch_frames_context(row: Dict[str, Any], max_chars: int = 24000,
+                          max_articles: int = 8) -> str:
+    """FRAMES ships Wikipedia LINKS, not article text — fetch the linked articles and assemble the
+    provided 'source' so the grounded benchmark actually has documents. Capped (articles + chars)
+    so a 15-article question stays tractable; best-effort per article."""
+    from eris.knowledge.web_reader import fetch_wikipedia
+    parts, total = [], 0
+    for url in _frames_links(row)[:max_articles]:
+        title = _wiki_title_from_url(url)
+        if not title:
+            continue
+        try:
+            text = fetch_wikipedia(title)
+        except Exception:
+            continue
+        if not text:
+            continue
+        block = f"== {title} ==\n{text}"
+        parts.append(block)
+        total += len(block)
+        if total >= max_chars:
+            break
+    return ("\n\n".join(parts))[:max_chars]
+
+
+def load_frames(limit: Optional[int] = None, fetch_context: bool = True,
+                max_chars: int = 24000) -> List[BenchItem]:
+    """FRAMES — multi-hop over Wikipedia. With fetch_context=True (default) the linked articles are
+    fetched into BenchItem.context so the question is answerable from the provided source (the
+    paper's 'oracle' setting). fetch_context=False leaves context empty (a no-retrieval baseline)."""
     ds = _load_dataset("google/frames-benchmark", split="test")
     rows = ds.select(range(min(limit, len(ds)))) if limit else ds
-    return [_frames_item(r, i) for i, r in enumerate(rows)]
+    items = []
+    for i, r in enumerate(rows):
+        it = _frames_item(r, i)
+        if fetch_context and not it.context:
+            it.context = _fetch_frames_context(r, max_chars=max_chars)
+        items.append(it)
+    return items
 
 
 def load_quality(limit: Optional[int] = None, hard_only: bool = True) -> List[BenchItem]:

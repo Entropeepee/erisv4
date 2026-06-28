@@ -83,9 +83,20 @@ Override the scratch dir / field size by writing a one-line factory that calls
 
 ## Suite (recommended order)
 
+> **FRAMES ships Wikipedia *links*, not article text.** `load_frames(fetch_context=True)` (the
+> default) fetches the linked articles into each item's `context` so the question is answerable from
+> the provided source — this is what makes it a grounded test. That fetch is **slow** (up to 8
+> articles/question, each ingested through the PDE), so smoke-test at `--limit 1` first. A FRAMES run
+> with empty context would leave the hive nothing to read and it would (correctly) decline — the
+> loud ingest guard now aborts that case instead of scoring it 0.
+>
+> **The Eris arm is document-grounded**, so on the **closed-book controls** (MMLU-Pro, GPQA) it has
+> nothing to ingest and will decline. Run those with `--arm bare` (they measure the bare model's
+> ceiling); use `--arm both` only on the grounded benchmarks where Eris has a passage to reason over.
+
 | Tier | Benchmark | `--benchmark` | Why |
 |---|---|---|---|
-| 1 (proving ground) | FRAMES | `frames` | multi-hop comprehension-over-extraction |
+| 1 (proving ground) | FRAMES | `frames` | multi-hop comprehension-over-extraction (auto-fetches articles) |
 | 1 | QuALITY-HARD | `quality --hard-only` | skim-proof long-document comprehension |
 | 1 | RAGTruth | `ragtruth` | span-level faithfulness ("catch own hallucinations") |
 | 1 | MuSiQue | `musique` | shortcut-resistant 2–4 hop |

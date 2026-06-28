@@ -154,21 +154,33 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
 
     def ingest(ctx: str) -> None:
         if ctx and ctx.strip():
-            web_reader.ingest_text(ctx, title="bench", extractor=extractor, memory=orch.memory)
+            n = web_reader.ingest_text(ctx, title="bench", extractor=extractor, memory=orch.memory)
+            # Loud guard: a non-empty passage that stores 0 chunks means the source never reached
+            # the hive's doc store. FAIL rather than let the hive silently decline and score 0 —
+            # an ingest bug must not masquerade as "the architecture lost".
+            if n == 0 or len(orch.memory.all_records()) == 0:
+                raise RuntimeError(
+                    f"benchmark ingest stored 0 chunks for a {len(ctx)}-char context — the passage "
+                    "is not reaching the scope='doc' store (title='bench'); aborting instead of "
+                    "scoring an empty answer as a loss.")
 
     def ask(q: str):
         meter.reset()
         res = asyncio.run(orch.hive_research(q, scope="doc", document="bench"))
         text = (res.get("synthesis_full") or res.get("synthesis") or "").strip()
         tokens = meter.tokens
-        if tokens <= 0:                    # backend reported no usage → labeled call-count proxy
+        if tokens <= 0:
+            # Distinguish "no LLM calls happened" (e.g. the hive declined with 0 sources — a
+            # legitimate 0 cost) from "calls happened but the backend reported no usage" (the real
+            # proxy case worth warning about).
             tc = res.get("tier_calls", {}) or {}
-            tokens = sum(v for k, v in tc.items() if not str(k).startswith("_")) or meter.calls
-            if not warned["proxy"]:
+            calls = sum(v for k, v in tc.items() if not str(k).startswith("_")) or meter.calls
+            tokens = calls
+            if meter.calls > 0 and not warned["proxy"]:
                 warned["proxy"] = True
-                print("[eris-arm] WARNING: backend reported no token usage; cost is a CALL-COUNT "
-                      "PROXY, not tokens — the equal-budget comparison is approximate. Serve the "
-                      "model via an OpenAI-compatible /v1 endpoint (Ollama/vLLM) to get real tokens.",
+                print("[eris-arm] WARNING: the hive made calls but the backend reported no token "
+                      "usage; cost is a CALL-COUNT PROXY, not tokens — equal-budget is approximate. "
+                      "Serve via an OpenAI-compatible /v1 endpoint (Ollama/vLLM) for real tokens.",
                       file=sys.stderr)
         return text, int(tokens)
 
