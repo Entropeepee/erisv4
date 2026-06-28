@@ -840,25 +840,45 @@ class ErisOrchestrator:
         # Rank retrieval by RESONANCE (κ cos AND λ sin/torsion), not embedding cosine alone.
         # Off via ERIS_HIVE_RESONANCE=0. By default use the genuine FIELD resonance (signed
         # phase torsion sin Δθ); ERIS_HIVE_FIELD_RESONANCE=0 falls back to the lighter 6-vector
-        # bvec resonance. Both query signatures are computed once from the topic.
+        # bvec resonance. Both query signatures rank against `document or topic` (so a named
+        # paper's signature drives the lead), computed once.
         _resonance_on = os.environ.get("ERIS_HIVE_RESONANCE", "1") != "0"
         _field_resonance = os.environ.get("ERIS_HIVE_FIELD_RESONANCE", "1") != "0"
-        goal_bvec = _text_to_bvec(document or topic)
+        _goal_text = document or topic
+        goal_bvec = _text_to_bvec(_goal_text)
         _goal_field = None
         if _resonance_on and _field_resonance:
             try:
-                _goal_field = _text_to_field(topic)        # the research question's evolved field
+                _goal_field = _text_to_field(_goal_text)   # field query matches the bvec goal
             except Exception:
                 _goal_field = None
 
+        # Memoize each chunk's evolved field across cycle-1/cycle-2 (chunks recur) — one PDE per
+        # distinct chunk per run instead of per retrieval call.
+        _field_cache: Dict[str, Any] = {}
+        def _cached_field(text: str):
+            key = " ".join((text or "").lower().split())[:300]
+            f = _field_cache.get(key)
+            if f is None:
+                f = _text_to_field(text)
+                _field_cache[key] = f
+            return f
+
         def _rerank(texts):
             """Resonance re-rank: genuine field resonance (signed torsion) when available, else
-            the bvec form, else identity."""
+            the bvec form, else the incoming order. Never raises — a rerank failure must not nuke
+            the whole pool to 0 sources via _rag's outer handler."""
             if not (_resonance_on and texts):
                 return texts
-            if _goal_field is not None:
-                return field_resonance_rerank(_goal_field, texts, field_of=_text_to_field)
-            return resonance_rerank(goal_bvec, texts, bvec_of=_text_to_bvec)
+            try:
+                if _goal_field is not None:
+                    out = field_resonance_rerank(_goal_field, texts, field_of=_cached_field)
+                else:
+                    out = resonance_rerank(goal_bvec, texts, bvec_of=_text_to_bvec)
+                return out
+            except Exception as e:
+                _log(f"_rerank failed ({type(e).__name__}: {e}); keeping incoming order")
+                return texts
 
         def _rag(query: str):
             try:
