@@ -30,7 +30,9 @@ class ArmResult:
     arm: str                                # "bare" | "eris"
     text: str                               # the model's answer
     tokens: int = 0                         # tokens consumed (equal-budget accounting)
-    correct: Optional[bool] = None          # filled by the scorer
+    correct: Optional[bool] = None          # accuracy scorer (None for faithfulness items)
+    faithfulness: Optional[float] = None    # hallucination RATE for faithfulness items (lower=better)
+    detail: Dict[str, Any] = field(default_factory=dict)   # per-item scorer breakdown
 
 
 def build_prompt(item: BenchItem) -> str:
@@ -91,6 +93,16 @@ def accuracy(results: List[ArmResult]) -> Dict[str, Any]:
             "accuracy": round(n_correct / len(graded), 4) if graded else 0.0}
 
 
+def faithfulness(results: List[ArmResult]) -> Dict[str, Any]:
+    """Aggregate faithfulness for an arm: mean per-item hallucination rate (lower = more faithful).
+    This is the comparable per-arm number for RAGTruth — NOT pass/fail accuracy."""
+    rated = [r for r in results if r.faithfulness is not None]
+    if not rated:
+        return {}
+    mean = sum(r.faithfulness for r in rated) / len(rated)
+    return {"items": len(rated), "mean_hallucination_rate": round(mean, 4)}
+
+
 def compare(arm_a: List[ArmResult], arm_b: List[ArmResult],
             label_a: str = "bare", label_b: str = "eris") -> Dict[str, Any]:
     """Head-to-head summary: accuracy AND token cost for both arms, with an explicit equal-budget
@@ -98,9 +110,10 @@ def compare(arm_a: List[ArmResult], arm_b: List[ArmResult],
     unequal-compute 'win' is visible at a glance."""
     acc_a, acc_b = accuracy(arm_a), accuracy(arm_b)
     bud_a, bud_b = budget_report(arm_a), budget_report(arm_b)
+    fa_a, fa_b = faithfulness(arm_a), faithfulness(arm_b)
     tpq_a, tpq_b = bud_a["tokens_per_question"], bud_b["tokens_per_question"]
     ratio = round(tpq_b / tpq_a, 2) if tpq_a else None
-    return {
+    out = {
         label_a: {"accuracy": acc_a["accuracy"], "tokens_per_question": tpq_a, **acc_a},
         label_b: {"accuracy": acc_b["accuracy"], "tokens_per_question": tpq_b, **acc_b},
         "delta_accuracy": round(acc_b["accuracy"] - acc_a["accuracy"], 4),
@@ -110,3 +123,11 @@ def compare(arm_a: List[ArmResult], arm_b: List[ArmResult],
                  else "UNEQUAL budget — a higher-accuracy arm that also spends more tokens has "
                       "NOT cleanly won; equalize tokens/question before claiming a scaffold win"),
     }
+    if fa_a or fa_b:                       # faithfulness benchmarks (RAGTruth): lower rate = better
+        out[label_a]["faithfulness"] = fa_a
+        out[label_b]["faithfulness"] = fa_b
+        ra = fa_a.get("mean_hallucination_rate") if fa_a else None
+        rb = fa_b.get("mean_hallucination_rate") if fa_b else None
+        if ra is not None and rb is not None:
+            out["delta_hallucination_rate"] = round(rb - ra, 4)   # negative = Eris hallucinates LESS
+    return out

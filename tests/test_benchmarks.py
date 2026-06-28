@@ -10,9 +10,10 @@ os.environ.setdefault("ERIS_EMBEDDINGS", "off")
 import unittest
 
 from eris.experiments.benchmarks.core import (
-    BenchItem, build_prompt, run_arm, budget_report, accuracy, compare)
+    BenchItem, build_prompt, run_arm, budget_report, accuracy, faithfulness, compare)
 from eris.experiments.benchmarks.scoring import (
-    normalize, exact_match, multiple_choice, abstained, score_item, score_results)
+    normalize, exact_match, multiple_choice, abstained, score_item, score_results,
+    faithfulness_score, sentence_supported)
 from eris.experiments.benchmarks.arms import callable_arm, _split_source
 from eris.experiments.benchmarks import datasets as D
 
@@ -149,6 +150,70 @@ class TestDatasetMappers(unittest.TestCase):
         self.assertEqual(it.meta["type"], "faithfulness")
         self.assertEqual(it.context, "src text")
         self.assertEqual(it.meta["hallucination_spans"], [{"span": "x"}])
+
+
+class TestFaithfulnessScorer(unittest.TestCase):
+    CTX = ("The SGT method derives its gating threshold from the measurement statistics, "
+           "T equals k times sigma. The novelty is the integration into a dual-path "
+           "architecture with a shared accumulator, not the well-known scaling.")
+
+    def test_supported_sentence_passes_unsupported_flagged(self):
+        ctx_tokens = {w for w in __import__("re").findall(r"[a-z0-9]{4,}", self.CTX.lower())}
+        self.assertTrue(sentence_supported(
+            "The gating threshold is derived from the measurement statistics.", ctx_tokens))
+        self.assertFalse(sentence_supported(
+            "The device cured cancer in nineteen clinical trials worldwide.", ctx_tokens))
+
+    def test_faithfulness_rate_zero_when_fully_grounded(self):
+        out = ("The gating threshold is derived from the measurement statistics. "
+               "The novelty is the integration into a dual-path architecture.")
+        fs = faithfulness_score(out, self.CTX)
+        self.assertEqual(fs["hallucination_rate"], 0.0)
+        self.assertEqual(fs["unsupported"], 0)
+
+    def test_faithfulness_flags_unsupported_sentences(self):
+        out = ("The gating threshold is derived from the measurement statistics. "
+               "It also reduces power consumption by exactly forty-two percent in every device.")
+        fs = faithfulness_score(out, self.CTX)
+        self.assertGreater(fs["hallucination_rate"], 0.0)   # the fabricated stat is caught
+        self.assertEqual(fs["unsupported"], 1)
+
+    def test_annotated_spans_take_precedence(self):
+        out = "Claim one is here. The fabricated wear claim sits in sentence two."
+        fs = faithfulness_score(out, "anything", hallucination_spans=[{"text": "fabricated wear claim"}])
+        self.assertEqual(fs["unsupported"], 1)
+        self.assertIn("fabricated wear", fs["hallucinated"][0])
+
+    def test_score_item_does_not_misroute_faithfulness_to_exact_match(self):
+        it = BenchItem(id="rt", question="Summarize.", context=self.CTX,
+                       answer="(a reference response that exact-match would compare against)",
+                       meta={"type": "faithfulness", "hallucination_spans": []})
+        grounded = "The novelty is the integration into a dual-path architecture."
+        self.assertTrue(score_item(grounded, it))           # faithful → True, NOT a gold-string match
+        self.assertFalse(score_item("It tripled battery life across all tested hardware.", it))
+
+    def test_score_results_attaches_rate_and_leaves_accuracy_alone(self):
+        items = [BenchItem(id="rt", question="?", context=self.CTX,
+                           meta={"type": "faithfulness"})]
+        res = run_arm(items, callable_arm(
+            lambda p: "The novelty is the integration into a dual-path architecture."), "eris")
+        score_results(res, items)
+        self.assertEqual(res[0].faithfulness, 0.0)
+        self.assertIsNone(res[0].correct)                   # not folded into accuracy
+        self.assertEqual(accuracy(res)["graded"], 0)
+
+    def test_compare_reports_hallucination_delta_lower_is_better(self):
+        items = [BenchItem(id="rt", question="?", context=self.CTX,
+                           meta={"type": "faithfulness"})]
+        bare = run_arm(items, callable_arm(
+            lambda p: ("It cut power use by ninety percent on every device.", 100)), "bare")
+        eris = run_arm(items, callable_arm(
+            lambda p: ("The novelty is the integration into a dual-path architecture.", 110)), "eris")
+        score_results(bare, items); score_results(eris, items)
+        c = compare(bare, eris)
+        self.assertIn("faithfulness", c["bare"])
+        self.assertLess(c["delta_hallucination_rate"], 0)   # Eris hallucinates LESS than bare
+        self.assertEqual(c["eris"]["faithfulness"]["mean_hallucination_rate"], 0.0)
 
 
 class TestArmsHelpers(unittest.TestCase):
