@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List
 import hashlib
+import os
 import time
 import re
 import numpy as np
@@ -59,6 +60,35 @@ def _lap(a):
 def wrap_diff(a_nbr, a):
     """Phase difference on the circle, in (-pi, pi]."""
     return xp.angle(xp.exp(1j * (a_nbr - a)))
+
+
+# τ (torsion). The symbol contract (retrieval/field_interference.py) defines the field τ as the
+# VORTICITY ∇ρ×∇θ — and that is what knowledge/frontends.py::torsion already computes. The PDE/FRT
+# historically shipped a cheap proxy (Laplacian of the amplitude), which ignores phase entirely and
+# discards the signed/chiral information that makes τ a distinct third channel (an ablation in the
+# resonant-transfer-engine work measured ~28x better rotational/irrotational separation for the
+# vorticity, 20.5 vs 0.73). ERIS_TAU_VORTICITY switches the PDE/FRT onto the canonical vorticity;
+# default OFF for now so behavior is unchanged until the bvec shift is reviewed (the choice is
+# surfaced, not buried).
+_TAU_VORTICITY = os.environ.get("ERIS_TAU_VORTICITY", "0").strip().lower() in ("1", "on", "true", "yes")
+
+
+def _vorticity(rho, theta):
+    """Field torsion as the canonical vorticity τ = ∇ρ × ∇θ (2D scalar curl:
+    dρ/dx·dθ/dy − dρ/dy·dθ/dx). Phase gradients go through wrap_diff so the 2π branch cut never
+    injects spurious vorticity (the gauge-/wrap-safe form); tanh-stabilized like frontends.torsion.
+    Roll-based + xp throughout, so the CuPy/NumPy path is preserved."""
+    drho_x = rho - xp.roll(rho, 1, axis=1)
+    drho_y = rho - xp.roll(rho, 1, axis=0)
+    dth_x = wrap_diff(theta, xp.roll(theta, 1, axis=1))      # wrap-safe ∂θ/∂x
+    dth_y = wrap_diff(theta, xp.roll(theta, 1, axis=0))      # wrap-safe ∂θ/∂y
+    return xp.tanh(drho_x * dth_y - drho_y * dth_x)
+
+
+def _compute_tau(rho, theta):
+    """Dispatch τ: canonical vorticity ∇ρ×∇θ when ERIS_TAU_VORTICITY is on, else the legacy
+    amplitude-Laplacian proxy (kept reachable for comparison)."""
+    return _vorticity(rho, theta) if _TAU_VORTICITY else _lap(rho)
 
 def local_coherence(theta):
     """Local Kuramoto order parameter over the 4-neighborhood + self, in [0,1]."""
@@ -191,7 +221,7 @@ class FractalField:
         self.step_count = 0
         _enforce_dirichlet(self.phi)
         _enforce_dirichlet(self.phi_prev)
-        self.tau = _lap(self.phi)
+        self.tau = _compute_tau(self.phi, self.theta)
 
     def seed_from_fingerprint(self, fingerprint: str) -> None:
         self.seed_from_text(f"IDENTITY:{fingerprint}")
@@ -216,7 +246,7 @@ class FractalField:
         self.step_count = 0
         _enforce_dirichlet(self.phi)
         _enforce_dirichlet(self.phi_prev)
-        self.tau = _lap(self.phi)
+        self.tau = _compute_tau(self.phi, self.theta)
 
     def _base_ops(self):
         p, phi, Bm = self.p, self.phi, self.p.B_max
@@ -259,7 +289,7 @@ class FractalField:
 
         self.phi_prev = xp.copy(phi)
         _enforce_dirichlet(phi)
-        self.tau = _lap(phi)
+        self.tau = _compute_tau(phi, theta)
 
         # Eris modulators
         alpha_m = p.dt / max(p.memory_tau, p.dt)
@@ -315,7 +345,7 @@ class FractalField:
         self._flux_theta = (1 - a) * self._flux_theta + a * xp.abs(wrap_diff(self.theta, self.theta_prev))
         self.theta_prev = xp.copy(self.theta)
         
-        self.tau = _lap(self.phi)
+        self.tau = _compute_tau(self.phi, self.theta)
         self._update_global_observables()
         self.step_count += 1
 

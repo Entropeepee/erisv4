@@ -278,12 +278,19 @@ def compute_bvec_from_frt(text: str, size: int = 64):
     from eris.computation.activations import compute_bvec_from_field
 
     phi, theta = text_to_field_arrays(text, size=size)
-    # tau approximated as Laplacian of phi (same as PDE)
-    tau = (
-        np.roll(phi, 1, axis=0) + np.roll(phi, -1, axis=0) +
-        np.roll(phi, 1, axis=1) + np.roll(phi, -1, axis=1) -
-        4.0 * phi
-    )
+    # τ: canonical vorticity ∇ρ×∇θ when ERIS_TAU_VORTICITY is on (matches the PDE + the symbol
+    # contract; frontends.torsion is the unwrap-safe NumPy implementation), else the legacy
+    # amplitude-Laplacian proxy. Single flag, defined once in pde.py.
+    from eris.field.pde import _TAU_VORTICITY
+    if _TAU_VORTICITY:
+        from eris.knowledge.frontends import torsion as _torsion
+        tau = _torsion(phi, theta)
+    else:
+        tau = (
+            np.roll(phi, 1, axis=0) + np.roll(phi, -1, axis=0) +
+            np.roll(phi, 1, axis=1) + np.roll(phi, -1, axis=1) -
+            4.0 * phi
+        )
     # phi_prev = phi (no evolution → no temporal dynamics)
     # This means E and D will be ~0, which is correct:
     # FRT captures spatial structure, not temporal evolution
