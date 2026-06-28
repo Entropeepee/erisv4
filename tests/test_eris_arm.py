@@ -65,8 +65,10 @@ class TestTokenMeter(unittest.TestCase):
 class TestWipeMemory(unittest.TestCase):
     class _Orch:
         def __init__(self, data_dir):
+            from eris.tribe.specialists import CrossAttentionHub
             self.memory = MemorySystem(data_dir=data_dir)
             self.thought_stream = ThoughtStream(path=os.path.join(data_dir, "t.jsonl"))
+            self.hub = CrossAttentionHub(capacity=50)
 
     def test_wipe_clears_every_tier_and_thoughtstream(self):
         orch = self._Orch(tempfile.mkdtemp())
@@ -75,11 +77,14 @@ class TestWipeMemory(unittest.TestCase):
         orch.memory.stm.store(MemoryRecord(text="a turn", bvec=GOAL, source="conversation"))
         from eris.memory.thought_stream import link_and_store
         link_and_store(orch.thought_stream, topic="t", regime="plastic", text="a thought")
+        from eris.tribe.specialists import SpecialistFinding
+        orch.hub.post(SpecialistFinding(specialist_id="Elos", content="item N finding", bvec=GOAL))
         _wipe_memory(orch)
         self.assertEqual(orch.memory.mtm.size, 0)
         self.assertEqual(len(orch.memory.ltm._records), 0)
         self.assertEqual(len(orch.memory.stm.get_all()), 0)
         self.assertEqual(orch.thought_stream.size(), 0)
+        self.assertEqual(orch.hub.size, 0)                  # cross-pollination state cleared too
 
     def test_wipe_isolates_items_no_cross_retrieval(self):
         # after a wipe, the previous item's ingested passage is gone from the doc pool
@@ -87,6 +92,15 @@ class TestWipeMemory(unittest.TestCase):
         orch.memory.mtm.store(MemoryRecord(text="SECRET_ITEM_N", bvec=GOAL, source="reading:bench"))
         _wipe_memory(orch)
         self.assertFalse(any("SECRET_ITEM_N" in r.text for r in orch.memory.mtm._records))
+
+    def test_wipe_fails_loudly_if_store_not_actually_cleared(self):
+        # the hardening guard: if a future refactor makes the wipe a silent no-op, the run must DIE
+        # rather than produce contaminated numbers
+        orch = self._Orch(tempfile.mkdtemp())
+        orch.memory.mtm.store(MemoryRecord(text="leftover", bvec=GOAL, source="reading:bench"))
+        orch.memory.all_records = lambda *a, **k: [object()]   # simulate a wipe that didn't take
+        with self.assertRaises(RuntimeError):
+            _wipe_memory(orch)
 
 
 class TestSafetyGuard(unittest.TestCase):

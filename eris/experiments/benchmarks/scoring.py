@@ -16,9 +16,13 @@ _ABSTAIN = re.compile(r"\b(unanswerable|cannot answer|not (?:in|stated|provided|
 
 
 def normalize(text: str) -> str:
-    """SQuAD-style normalization: lowercase, drop punctuation + articles, collapse whitespace."""
+    """SQuAD-style normalization: lowercase, drop punctuation + articles, collapse whitespace.
+    A decimal/thousands separator INSIDE a number (3.14, 1,000) is preserved, so a numeric answer
+    isn't shattered into '3 14' and mis-scored."""
     t = (text or "").lower()
+    t = re.sub(r"(?<=\d)[.,](?=\d)", "․", t)        # protect intra-number . and , (placeholder)
     t = "".join(ch if ch not in string.punctuation else " " for ch in t)
+    t = t.replace("․", ".")                          # restore as a plain dot
     t = " ".join(w for w in t.split() if w not in _ARTICLES)
     return t.strip()
 
@@ -45,13 +49,34 @@ def _letter_for_choice(item: BenchItem) -> str:
     return ""
 
 
+def _extract_choice_letter(pred: str, valid: set) -> str:
+    """Pull the model's chosen option letter robustly, restricted to the VALID option letters so a
+    stray leading article ('A reasonable answer is C.') or pronoun ('I think C') can't be mistaken
+    for the choice. Priority: an explicit 'answer (is/:) X' marker, then a bracketed '(X)', then a
+    letter with trailing punctuation 'X.'/'X:', then the LAST standalone capital letter (answers
+    usually end on the choice). Returns '' if none is a valid option."""
+    if not pred:
+        return ""
+    m = re.search(r"(?i)\banswer\b\s*(?:is|:|=|->)?\s*[(\[]?\*{0,2}([A-Za-z])\b", pred)
+    if m and m.group(1).upper() in valid:
+        return m.group(1).upper()
+    for grp in re.findall(r"[(\[\{]\s*([A-Za-z])\s*[)\]\}]", pred):     # (B) / [B]
+        if grp.upper() in valid:
+            return grp.upper()
+    punct = [c.upper() for c in re.findall(r"\b([A-Za-z])[.):]", pred) if c.upper() in valid]
+    if punct:
+        return punct[-1]
+    caps = [c for c in re.findall(r"\b([A-Z])\b", pred) if c in valid]   # last standalone capital
+    return caps[-1] if caps else ""
+
+
 def multiple_choice(pred: str, item: BenchItem) -> bool:
     """Accept the gold letter (e.g. 'B', 'B.', '(B)', 'Answer: B') or the gold option text."""
     gold_letter = _letter_for_choice(item)
     if not gold_letter:
         return False
-    m = re.search(r"\b([A-Z])\b", (pred or "").upper())
-    if m and m.group(1) == gold_letter:
+    valid = {chr(65 + i) for i in range(len(item.choices or []))}
+    if _extract_choice_letter(pred, valid) == gold_letter:
         return True
     idx = ord(gold_letter) - 65                       # also accept the full option text
     if item.choices and 0 <= idx < len(item.choices):
@@ -97,7 +122,12 @@ def faithfulness_score(output: str, context: str, hallucination_spans=None,
     by the provided context (the hallucination rate; lower = more faithful). If annotated
     hallucination_spans are present (the RAGTruth reference), a sentence overlapping any span counts
     as hallucinated; otherwise fall back to context-entailment by content-word overlap. No new deps;
-    see ragchecker_faithfulness() for the optional claim-level upgrade."""
+    see ragchecker_faithfulness() for the optional claim-level upgrade.
+
+    CAVEAT on the fallback: with NO annotated spans, content-word overlap is a CRUDE proxy — it can
+    miss a fluent paraphrase that flips a fact and can flag a faithful-but-reworded sentence. Trust
+    the RAGTruth numbers (those carry spans); treat faithfulness-as-overlay on FRAMES/QuALITY as a
+    rough signal, or install RAGAS for claim-level entailment (ragchecker_faithfulness)."""
     sents = _sentences(output)
     if not sents:
         return {"hallucination_rate": 0.0, "n_sentences": 0, "supported": 0,
@@ -106,7 +136,9 @@ def faithfulness_score(output: str, context: str, hallucination_spans=None,
     ctx_tokens = _content_tokens(context)
     hallucinated = []
     for s in sents:
-        bad = (any(span in normalize(s) for span in spans) if spans
+        ns = normalize(s)
+        # word-boundary match so a span like 'cat' doesn't fire inside 'category'
+        bad = (any(re.search(rf"\b{re.escape(span)}\b", ns) for span in spans) if spans
                else not sentence_supported(s, ctx_tokens, threshold))
         if bad:
             hallucinated.append(s)

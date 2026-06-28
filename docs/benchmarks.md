@@ -103,6 +103,12 @@ hive's Elos pass should suppress unsupported claims). For claim-level precision,
 wire `scoring.ragchecker_faithfulness` (optional, guarded). The other five benchmarks score with the
 built-in exact-match / multiple-choice / abstention scorers.
 
+> **Trust which faithfulness numbers:** RAGTruth items carry annotated hallucination spans, so the
+> rate there is well-grounded. With no spans, the scorer falls back to a **crude content-word
+> overlap proxy** (it can miss a fluent paraphrase that flips a fact, or flag a faithful reword), so
+> treat a faithfulness overlay on FRAMES/QuALITY as a *rough* signal only — or install RAGAS for
+> claim-level entailment.
+
 ## Cross-check
 
 Validate the bare arm's closed-book numbers (MMLU-Pro, GPQA) against EleutherAI

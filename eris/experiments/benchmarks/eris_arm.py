@@ -97,12 +97,36 @@ def _wipe_memory(orch) -> None:
             ts._thoughts = []
         except Exception:
             pass
+    # The cross-attention hub accumulates specialist findings ACROSS calls and feeds synthesis, so
+    # without clearing it item N's findings could cross-pollinate item N+1's answer.
+    hub = getattr(orch, "hub", None)
+    if hub is not None:
+        try:
+            hub.clear()
+        except Exception:
+            pass
+    # Fail LOUDLY rather than silently contaminate: the wipe reaches into private tier internals,
+    # so if a future memory refactor changes them this guard stops the run instead of letting item
+    # N+1 retrieve item N's passage and quietly invalidate every downstream number. The hive's _rag
+    # reads the thought-stream too, but all_records() doesn't cover it — so count it here.
+    ts_left = 0
+    if ts is not None:
+        try:
+            ts_left = len(list(ts.all()))
+        except Exception:
+            ts_left = 0
+    remaining = len(orch.memory.all_records()) + ts_left
+    if remaining:
+        raise RuntimeError(
+            f"benchmark reset did NOT clear the scratch store ({remaining} record(s) remain) — "
+            "refusing to continue (cross-item contamination would invalidate the results). A memory "
+            "refactor may have changed the tier internals this wipe reaches into.")
 
 
 def make_eris_arm(data_dir: str = "eris_bench_data",
                   field_size: int = 32) -> Callable[[str], Tuple[str, int]]:
     """Return the Eris answer_fn (prompt -> (text, tokens)), ready for --eris-factory."""
-    if os.path.abspath(data_dir) == os.path.abspath("eris_data"):
+    if os.path.realpath(data_dir) == os.path.realpath("eris_data"):   # realpath: resolve symlinks
         raise ValueError("refusing to benchmark against the live eris_data — use a scratch dir")
 
     # Force-disable autonomous side-effects BEFORE the orchestrator is built.
@@ -118,7 +142,10 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
     orch = ErisOrchestrator(data_dir=data_dir, field_size=field_size)
     extractor = KnowledgeExtractor(output_dir=os.path.join(data_dir, "knowledge_base"))
     meter = _TokenMeter()
-    meter.attach(orch.mediator, *(getattr(orch, "_profile_mediators", {}) or {}).values())
+    # mediator (specialist reasoning + local synth), deep_mediator (the synth/expert mediator the
+    # hive can route synthesis through), any per-profile mediators, and the gateway tiers.
+    meter.attach(orch.mediator, getattr(orch, "deep_mediator", None),
+                 *(getattr(orch, "_profile_mediators", {}) or {}).values())
     meter.attach_gateway(getattr(orch, "gateway", None))
     warned = {"proxy": False}
 
