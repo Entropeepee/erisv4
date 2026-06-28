@@ -828,18 +828,57 @@ class ErisOrchestrator:
         the direct local model, fail-closed, never the gateway).
         Comprehension boosters: sources are pre-digested into atomic propositions (Stage-2).
         Runs in a worker thread; best-effort — returns a summary dict or {'error'}."""
-        from eris.tribe.research import run_two_cycle_research, resonance_rerank
+        from eris.tribe.research import (
+            run_two_cycle_research, resonance_rerank, field_resonance_rerank)
         from eris.interface.sovereignty import Sensitivity
         from eris.interface.mediator import run_blocking
         from eris.knowledge.embeddings import get_embedding, is_semantic
         from eris.retrieval.hybrid import hybrid_search
-        from eris.tribe.specialists import _text_to_bvec
+        from eris.tribe.specialists import _text_to_bvec, _text_to_field
 
         sys_prompt = self._default_system_prompt()
-        # The goal field for this research — used to rank retrieval by RESONANCE (κ cos AND
-        # λ sin/torsion), not embedding cosine alone. Computed once; off via ERIS_HIVE_RESONANCE=0.
-        goal_bvec = _text_to_bvec(document or topic)
+        # Rank retrieval by RESONANCE (κ cos AND λ sin/torsion), not embedding cosine alone.
+        # Off via ERIS_HIVE_RESONANCE=0. By default use the genuine FIELD resonance (signed
+        # phase torsion sin Δθ); ERIS_HIVE_FIELD_RESONANCE=0 falls back to the lighter 6-vector
+        # bvec resonance. Both query signatures rank against `document or topic` (so a named
+        # paper's signature drives the lead), computed once.
         _resonance_on = os.environ.get("ERIS_HIVE_RESONANCE", "1") != "0"
+        _field_resonance = os.environ.get("ERIS_HIVE_FIELD_RESONANCE", "1") != "0"
+        _goal_text = document or topic
+        goal_bvec = _text_to_bvec(_goal_text)
+        _goal_field = None
+        if _resonance_on and _field_resonance:
+            try:
+                _goal_field = _text_to_field(_goal_text)   # field query matches the bvec goal
+            except Exception:
+                _goal_field = None
+
+        # Memoize each chunk's evolved field across cycle-1/cycle-2 (chunks recur) — one PDE per
+        # distinct chunk per run instead of per retrieval call.
+        _field_cache: Dict[str, Any] = {}
+        def _cached_field(text: str):
+            key = " ".join((text or "").lower().split())[:300]
+            f = _field_cache.get(key)
+            if f is None:
+                f = _text_to_field(text)
+                _field_cache[key] = f
+            return f
+
+        def _rerank(texts):
+            """Resonance re-rank: genuine field resonance (signed torsion) when available, else
+            the bvec form, else the incoming order. Never raises — a rerank failure must not nuke
+            the whole pool to 0 sources via _rag's outer handler."""
+            if not (_resonance_on and texts):
+                return texts
+            try:
+                if _goal_field is not None:
+                    out = field_resonance_rerank(_goal_field, texts, field_of=_cached_field)
+                else:
+                    out = resonance_rerank(goal_bvec, texts, bvec_of=_text_to_bvec)
+                return out
+            except Exception as e:
+                _log(f"_rerank failed ({type(e).__name__}: {e}); keeping incoming order")
+                return texts
 
         def _rag(query: str):
             try:
@@ -910,13 +949,8 @@ class ErisOrchestrator:
                 # (κ cos + λ sin/torsion) ranks BOTH groups internally — otherwise scope=doc
                 # (all-lead) and the named-doc lead would fall back to pure embedding-cosine
                 # order, defeating the resonance design for the flagship "read this paper" path.
-                led = [t for t in cands if t in lead_text]
-                rest = [t for t in cands if t not in lead_text]
-                if _resonance_on:
-                    if led:
-                        led = resonance_rerank(goal_bvec, led, bvec_of=_text_to_bvec)
-                    if rest:
-                        rest = resonance_rerank(goal_bvec, rest, bvec_of=_text_to_bvec)
+                led = _rerank([t for t in cands if t in lead_text])
+                rest = _rerank([t for t in cands if t not in lead_text])
                 return (led + rest)[:6]
             except Exception as e:
                 import traceback

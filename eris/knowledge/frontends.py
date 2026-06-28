@@ -75,6 +75,23 @@ class ModalityFrontend(ABC):
         field.run(pde_steps)
         return field.compute_bvec()
 
+    def to_field_evolved(self, data: Any, size: int = 64, pde_steps: int = 50):
+        """The EVOLVED (phi, theta) attractor — same seed→run pass as to_bvec(), but returns the
+        field itself instead of measuring it to a BVec. This is what field_resonance_2d ranks on:
+        the signed phase θ carries the torsion (λ) channel that the 6-vector bvec coarse-grains
+        away. Returns (phi, theta) as CPU float32 arrays."""
+        from eris.field.pde import FractalField
+        from eris.config import to_gpu, to_numpy
+
+        phi, theta = self.to_field(data, size=size)
+        field = FractalField(size=size)
+        field.phi = to_gpu(phi)
+        field.theta = to_gpu(theta)
+        field.phi_prev = field.phi.copy()
+        field.run(pde_steps)
+        return (to_numpy(field.phi).astype(np.float32).copy(),
+                to_numpy(field.theta).astype(np.float32).copy())
+
 
 class TextFrontend(ModalityFrontend):
     """Text → field state. Already fully implemented.

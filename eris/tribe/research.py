@@ -103,30 +103,17 @@ def _no_sources_result(topic: str, *, cycles: int = 0, n_active: int = 0) -> "Re
                           stripped_claims=0, cycles=cycles, thought_id=None)
 
 
-def resonance_rerank(goal_bvec: BVec, texts: List[str], *, top_k: Optional[int] = None,
-                     blend: float = 0.5, bvec_of: Optional[Callable[[str], BVec]] = None
-                     ) -> List[str]:
-    """Re-rank retrieved chunks by FIELD RESONANCE — not just embedding cosine (§B3).
-
-    Each chunk is scored by the 2D resonance MAGNITUDE √(R_cos²+R_sin²) against the goal
-    (κ cosine/aligned channel AND λ sine/torsion channel — the sine is kept, not discarded),
-    then BLENDED with its incoming lexical/dense rank so a torsion-coupled chunk can rise even
-    when its cosine alignment is modest, without throwing away what BM25/dense already knew.
-    `blend`=1.0 is pure resonance, 0.0 is the incoming order. Best-effort: any chunk whose
-    bvec can't be computed keeps its incoming position. Returns the reordered texts."""
-    from eris.computation.activations import bvec_resonance_2d
-    if not texts or goal_bvec is None:
-        return list(texts)
-    to_bvec = bvec_of or _text_to_bvec
+def _blend_rerank(texts: List[str], scores: List[Optional[float]], *, blend: float,
+                  top_k: Optional[int]) -> List[str]:
+    """Shared rerank: blend a per-chunk resonance `score` (min-max normalized across the pool)
+    with the chunk's incoming lexical/dense rank prior, so a high-resonance chunk can rise
+    without discarding what BM25/dense already knew. `blend`=1.0 is pure resonance, 0.0 the
+    incoming order. A None score (couldn't compute) keeps the chunk's incoming position."""
     n = len(texts)
     scored = []
-    for i, t in enumerate(texts):
+    for i, (t, s) in enumerate(zip(texts, scores)):
         prior = 1.0 - (i / max(1, n - 1)) if n > 1 else 1.0   # incoming rank as a [0,1] prior
-        try:
-            res = bvec_resonance_2d(goal_bvec, to_bvec(t))["magnitude"]
-        except Exception:
-            res = None
-        scored.append([i, t, prior, res])
+        scored.append([i, t, prior, s])
     mags = [s[3] for s in scored if s[3] is not None]
     if mags:
         lo, hi = min(mags), max(mags)
@@ -140,6 +127,52 @@ def resonance_rerank(goal_bvec: BVec, texts: List[str], *, top_k: Optional[int] 
     scored.sort(key=lambda s: (-s[-1], s[0]))                  # stable on the incoming order
     out = [s[1] for s in scored]
     return out[:top_k] if top_k else out
+
+
+def resonance_rerank(goal_bvec: BVec, texts: List[str], *, top_k: Optional[int] = None,
+                     blend: float = 0.5, bvec_of: Optional[Callable[[str], BVec]] = None
+                     ) -> List[str]:
+    """Re-rank chunks by BVEC resonance (κ cos AND λ sin/torsion magnitude) — the lighter
+    6-vector form; see field_resonance_rerank for the faithful phase-based version. Each chunk
+    is scored by bvec_resonance_2d magnitude vs the goal, blended with its incoming rank so a
+    torsion-coupled chunk can rise without throwing away BM25/dense. Best-effort per chunk."""
+    from eris.computation.activations import bvec_resonance_2d
+    if not texts or goal_bvec is None:
+        return list(texts)
+    to_bvec = bvec_of or _text_to_bvec
+    scores: List[Optional[float]] = []
+    for t in texts:
+        try:
+            scores.append(bvec_resonance_2d(goal_bvec, to_bvec(t))["magnitude"])
+        except Exception:
+            scores.append(None)
+    return _blend_rerank(texts, scores, blend=blend, top_k=top_k)
+
+
+def field_resonance_rerank(query_field, texts: List[str], *, top_k: Optional[int] = None,
+                           blend: float = 0.5,
+                           field_of: Optional[Callable[[str], tuple]] = None) -> List[str]:
+    """Re-rank chunks by genuine FIELD RESONANCE — the faithful phase-based form (§B3). Each
+    chunk's evolved (phi, theta) field is scored by field_resonance_2d MAGNITUDE √(R_cos²+R_sin²)
+    against the query field, where R_sin = mean(φ_q·φ_s·sin Δθ) is the SIGNED torsion channel
+    (λ) — an independent degree of freedom the 6-vector bvec cannot represent. This is what
+    catches cross-domain resonance that shares a field signature but not vocabulary. Blended with
+    the incoming rank; best-effort (a chunk whose field can't be computed keeps its position).
+
+    `query_field` = (phi_q, theta_q); `field_of(text)->(phi,theta)` defaults to _text_to_field."""
+    from eris.retrieval.field_interference import field_resonance_2d
+    if not texts or not query_field:
+        return list(texts)
+    phi_q, theta_q = query_field
+    to_field = field_of or _text_to_field
+    scores: List[Optional[float]] = []
+    for t in texts:
+        try:
+            phi_s, theta_s = to_field(t)
+            scores.append(field_resonance_2d(phi_q, theta_q, phi_s, theta_s)["magnitude"])
+        except Exception:
+            scores.append(None)
+    return _blend_rerank(texts, scores, blend=blend, top_k=top_k)
 
 
 def _ground_citations(text: str, n_sources: int) -> tuple:
