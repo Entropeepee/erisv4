@@ -150,28 +150,30 @@ def resonance_rerank(goal_bvec: BVec, texts: List[str], *, top_k: Optional[int] 
 
 
 def field_resonance_rerank(query_field, texts: List[str], *, top_k: Optional[int] = None,
-                           blend: float = 0.5,
+                           blend: float = 0.5, denoise: bool = True,
                            field_of: Optional[Callable[[str], tuple]] = None) -> List[str]:
     """Re-rank chunks by genuine FIELD RESONANCE — the faithful phase-based form (§B3). Each
-    chunk's evolved (phi, theta) field is scored by field_resonance_2d MAGNITUDE √(R_cos²+R_sin²)
-    against the query field, where R_sin = mean(φ_q·φ_s·sin Δθ) is the SIGNED torsion channel
-    (λ) — an independent degree of freedom the 6-vector bvec cannot represent. This is what
-    catches cross-domain resonance that shares a field signature but not vocabulary. Blended with
-    the incoming rank; best-effort (a chunk whose field can't be computed keeps its position).
+    chunk's evolved (phi, theta) field is scored by the resonance MAGNITUDE |R| against the query
+    field, where Im R = mean(φ_q·φ_s·sin Δθ) is the SIGNED torsion channel (λ) — an independent
+    degree of freedom the 6-vector bvec cannot represent. Catches cross-domain resonance that
+    shares a field signature but not vocabulary. Blended with the incoming rank; best-effort.
+
+    `denoise=True` removes the candidate pool's COMMON-MODE field (rank-1 nullspace / GLNCS
+    projection) before scoring, so ranking is driven by DIFFERENTIAL resonance rather than the
+    baseline every chunk shares — a coherence improvement. Both κ and signed-λ survive.
 
     `query_field` = (phi_q, theta_q); `field_of(text)->(phi,theta)` defaults to _text_to_field."""
-    from eris.retrieval.field_interference import field_resonance_2d
+    from eris.retrieval.field_interference import analytic_resonance_magnitudes
     if not texts or not query_field:
         return list(texts)
-    phi_q, theta_q = query_field
     to_field = field_of or _text_to_field
-    scores: List[Optional[float]] = []
+    fields: List[Optional[tuple]] = []
     for t in texts:
         try:
-            phi_s, theta_s = to_field(t)
-            scores.append(field_resonance_2d(phi_q, theta_q, phi_s, theta_s)["magnitude"])
+            fields.append(to_field(t))
         except Exception:
-            scores.append(None)
+            fields.append(None)
+    scores = analytic_resonance_magnitudes(query_field, fields, denoise=denoise)
     return _blend_rerank(texts, scores, blend=blend, top_k=top_k)
 
 

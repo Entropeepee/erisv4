@@ -844,6 +844,9 @@ class ErisOrchestrator:
         # paper's signature drives the lead), computed once.
         _resonance_on = os.environ.get("ERIS_HIVE_RESONANCE", "1") != "0"
         _field_resonance = os.environ.get("ERIS_HIVE_FIELD_RESONANCE", "1") != "0"
+        # GLNCS/nullspace common-mode removal before field resonance (coherence) — default ON,
+        # A/B it off with ERIS_HIVE_RESONANCE_DENOISE=0.
+        _denoise = os.environ.get("ERIS_HIVE_RESONANCE_DENOISE", "1") != "0"
         _goal_text = document or topic
         goal_bvec = _text_to_bvec(_goal_text)
         _goal_field = None
@@ -876,7 +879,8 @@ class ErisOrchestrator:
                 return texts
             try:
                 if _goal_field is not None:
-                    out = field_resonance_rerank(_goal_field, texts, field_of=_cached_field)
+                    out = field_resonance_rerank(_goal_field, texts, field_of=_cached_field,
+                                                 denoise=_denoise)
                 else:
                     out = resonance_rerank(goal_bvec, texts, bvec_of=_text_to_bvec)
                 return out
