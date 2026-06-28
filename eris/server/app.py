@@ -266,6 +266,16 @@ def create_app(
         entry = await orchestrator.ponder(req.question.strip())
         return entry
 
+    @app.post("/api/dream/subjective")
+    async def api_subjective_dream():
+        """Trigger her undirected subjective dream now (decompression on the day; no research,
+        no hive). Returns the dream entry, or a note if there was no day to dream about yet."""
+        d = await orchestrator.subjective_dream()
+        if not d:
+            return {"dreamed": False,
+                    "message": "Nothing to dream about yet — no recent conversation or tension."}
+        return d
+
     @app.post("/api/retrospect")
     async def api_retrospect(req: PonderRequest):
         """Look back over her own past thoughts on a topic and synthesize them."""
@@ -708,6 +718,14 @@ def create_app(
                         print(f"[Replay] consolidated near-duplicates: {merged}")
                 except Exception as e:
                     print(f"[Replay Error] {e}")
+                # Sleep also DREAMS: a subjective, first-person decompression on the day — no
+                # crawl, no hive, no question. Her own voice, separate from the cold logic.
+                try:
+                    d = await asyncio.to_thread(orchestrator.subjective_dream)
+                    if d:
+                        print(f"[Dream] subjective ({d.get('regime')}): {d.get('chars', 0)} chars")
+                except Exception as e:
+                    print(f"[Dream Error] {e}")
             await asyncio.sleep(300)  # check every 5 min
 
     def _study_throttle() -> int:

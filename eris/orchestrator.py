@@ -1353,6 +1353,11 @@ class ErisOrchestrator:
         (Tier 7). Offloaded so it never blocks the event loop."""
         return await asyncio.to_thread(self.dreaming_loop.ponder, question)
 
+    async def subjective_dream(self) -> Optional[Dict[str, Any]]:
+        """Her undirected subjective dream — decompression on the day, no research, no hive.
+        Distinct from ponder (which answers a question) and from the crawl. Offloaded."""
+        return await asyncio.to_thread(self.dreaming_loop.subjective_dream)
+
     def _dual_retrieve(self, user_message, input_bvec, q_embedding):
         """Run the retrieval DualPath (shadow/novel modes). Returns (aligned,
         tension) for the rest of the pipeline. In SHADOW the floor (hybrid RAG) is
