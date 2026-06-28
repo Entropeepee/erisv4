@@ -66,6 +66,12 @@ For each question it splits the provided SOURCE back out, ingests it into a **sc
 (`web_reader.ingest_text(..., title="bench")`), runs the hive over just that document
 (`hive_research(q, scope="doc", document="bench")`), and returns `(synthesis, real_tokens)`.
 
+After the hive synthesizes, the arm runs ONE grounded **extraction** call ("using only this
+analysis, answer the task in its required form") so Eris emits a **short, scorable answer** (a
+name/number/date, or a single option letter) instead of a 1500-char essay — otherwise exact-match
+and multiple-choice would penalize the hive for verbosity, not wrongness. That call is metered like
+every other, so the equal-budget number stays honest.
+
 It is safe by construction:
 - builds `ErisOrchestrator(data_dir="eris_bench_data")` — a **scratch** dir; it *refuses* to run
   against `eris_data`;
