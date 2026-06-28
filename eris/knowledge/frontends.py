@@ -75,11 +75,17 @@ class ModalityFrontend(ABC):
         field.run(pde_steps)
         return field.compute_bvec()
 
-    def to_field_evolved(self, data: Any, size: int = 64, pde_steps: int = 50):
+    def to_field_evolved(self, data: Any, size: int = 64, pde_steps: int = 50,
+                         settle: bool = True):
         """The EVOLVED (phi, theta) attractor — same seed→run pass as to_bvec(), but returns the
         field itself instead of measuring it to a BVec. This is what field_resonance_2d ranks on:
         the signed phase θ carries the torsion (λ) channel that the 6-vector bvec coarse-grains
-        away. Returns (phi, theta) as CPU float32 arrays."""
+        away. Returns (phi, theta) as CPU float32 arrays.
+
+        `settle=True` (Stage-2 convergence early-stop): stop once the field reaches its attractor
+        instead of always running the full `pde_steps` — the field is only being measured for
+        resonance, so more steps past settling don't change the ranking. A min-steps floor keeps
+        it from under-evolving."""
         from eris.field.pde import FractalField
         from eris.config import to_gpu, to_numpy
 
@@ -88,7 +94,10 @@ class ModalityFrontend(ABC):
         field.phi = to_gpu(phi)
         field.theta = to_gpu(theta)
         field.phi_prev = field.phi.copy()
-        field.run(pde_steps)
+        if settle:
+            field.run_settled(max_steps=pde_steps)
+        else:
+            field.run(pde_steps)
         return (to_numpy(field.phi).astype(np.float32).copy(),
                 to_numpy(field.theta).astype(np.float32).copy())
 

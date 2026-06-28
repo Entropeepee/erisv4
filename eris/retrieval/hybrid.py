@@ -78,22 +78,69 @@ def reciprocal_rank_fusion(rankings: Sequence[Sequence[int]], k: int = 60) -> Li
     return [i for i, _ in sorted(score.items(), key=lambda x: x[1], reverse=True)]
 
 
-def _dense_ranking(query_embedding, embeddings: List[Optional[np.ndarray]]) -> List[int]:
-    q = np.asarray(query_embedding, dtype=np.float64).ravel()
-    qn = np.linalg.norm(q)
-    if qn < 1e-12:
-        return []
-    sims = []
+def _stack_normalized(embeddings: List[Optional[np.ndarray]]):
+    """Stack valid embeddings into one L2-normalized (m, d) matrix + a row→record-index map,
+    so dense similarity is a single matmul instead of a per-record Python loop (memory-scale
+    win at n~1000s). Records with None/zero-norm/odd-dim embeddings are dropped from the matrix."""
+    rows, idx, dim = [], [], None
     for i, e in enumerate(embeddings):
         if e is None:
             continue
-        e = np.asarray(e, dtype=np.float64).ravel()
-        en = np.linalg.norm(e)
-        if en < 1e-12 or e.shape != q.shape:
+        v = np.asarray(e, dtype=np.float64).ravel()
+        if dim is None:
+            dim = v.shape[0]
+        if v.shape[0] != dim:
             continue
-        sims.append((i, float(np.dot(q, e) / (qn * en))))
-    sims.sort(key=lambda x: x[1], reverse=True)
-    return [i for i, _ in sims]
+        n = np.linalg.norm(v)
+        if n < 1e-12:
+            continue
+        rows.append(v / n)
+        idx.append(i)
+    if not rows:
+        return None, []
+    return np.asarray(rows), idx                       # (m, d) row-normalized, idx[row]=record
+
+
+def _dense_ranking_matrix(query_embedding, mat, idx: List[int]) -> List[int]:
+    """Vectorized dense ranking from a prebuilt normalized matrix: one (m,d)·(d,) matmul."""
+    if mat is None:
+        return []
+    q = np.asarray(query_embedding, dtype=np.float64).ravel()
+    qn = np.linalg.norm(q)
+    if qn < 1e-12 or q.shape[0] != mat.shape[1]:
+        return []
+    sims = mat @ (q / qn)                               # cosine, all candidates at once
+    order = np.argsort(-sims)
+    return [idx[r] for r in order]
+
+
+def _dense_ranking(query_embedding, embeddings: List[Optional[np.ndarray]]) -> List[int]:
+    mat, idx = _stack_normalized(embeddings)
+    return _dense_ranking_matrix(query_embedding, mat, idx)
+
+
+class HybridIndex:
+    """Prebuilt corpus state for hybrid_search — the BM25 index and the normalized embedding
+    matrix, computed ONCE and reused across queries (Stage-3 amortization). _rag rebuilt these
+    from scratch every cycle (retokenizing the whole library 2-3× per hive run); building once
+    and reusing is the dominant retrieval-side win."""
+    __slots__ = ("records", "texts", "bm25", "_mat", "_idx")
+
+    def __init__(self, records, *, text_attr: str = "text", embedding_attr: str = "embedding"):
+        self.records = list(records)
+        self.texts = [getattr(r, text_attr, "") or "" for r in self.records]
+        self.bm25 = BM25(self.texts)
+        self._mat, self._idx = _stack_normalized(
+            [getattr(r, embedding_attr, None) for r in self.records])
+
+    def signature(self):
+        """Cheap identity for cache validity within a run (the pool is immutable mid-run)."""
+        return (len(self.records), id(self.records[0]) if self.records else 0)
+
+
+def build_hybrid_index(records, *, text_attr: str = "text",
+                       embedding_attr: str = "embedding") -> HybridIndex:
+    return HybridIndex(records, text_attr=text_attr, embedding_attr=embedding_attr)
 
 
 # A reranker is any callable: (query, [candidate_texts]) -> [scores]
@@ -134,8 +181,9 @@ def http_reranker(base_url: Optional[str] = None, model: Optional[str] = None,
 
 def hybrid_search(
     query: str,
-    records: Sequence[Any],
+    records: Sequence[Any] = None,
     *,
+    index: Optional[HybridIndex] = None,
     query_embedding=None,
     top_k: int = 8,
     text_attr: str = "text",
@@ -143,22 +191,25 @@ def hybrid_search(
     reranker: Optional[Reranker] = None,
     rerank_depth: int = 24,
 ) -> List[Any]:
-    """Rank `records` for `query` by fusing BM25 (lexical) and dense (embedding)
+    """Rank records for `query` by fusing BM25 (lexical) and dense (embedding)
     rankings with RRF, then optionally reranking the fused top-N.
 
-    `records` are objects with a `.text` (and optional `.embedding`) attribute —
-    e.g. `MemoryRecord`. Returns the top_k records, best first. Read-only; the
-    records and any memory store are never modified.
+    Pass either `records` (built inline) or a prebuilt `index` (HybridIndex, reused across
+    queries — Stage-3 amortization). Records are objects with a `.text` (and optional
+    `.embedding`) attribute. Returns the top_k records, best first. Read-only.
     """
-    records = list(records)
+    if index is None:
+        if not records:
+            return []
+        index = HybridIndex(records, text_attr=text_attr, embedding_attr=embedding_attr)
+    records = index.records
     if not records:
         return []
-    texts = [getattr(r, text_attr, "") or "" for r in records]
+    texts = index.texts
 
-    rankings: List[List[int]] = [list(np.argsort(-BM25(texts).scores(query)))]
+    rankings: List[List[int]] = [list(np.argsort(-index.bm25.scores(query)))]
     if query_embedding is not None:
-        embs = [getattr(r, embedding_attr, None) for r in records]
-        dense = _dense_ranking(query_embedding, embs)
+        dense = _dense_ranking_matrix(query_embedding, index._mat, index._idx)
         if dense:
             rankings.append(dense)
 

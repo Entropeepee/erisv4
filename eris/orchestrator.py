@@ -833,7 +833,7 @@ class ErisOrchestrator:
         from eris.interface.sovereignty import Sensitivity
         from eris.interface.mediator import run_blocking
         from eris.knowledge.embeddings import get_embedding, is_semantic
-        from eris.retrieval.hybrid import hybrid_search
+        from eris.retrieval.hybrid import hybrid_search, build_hybrid_index
         from eris.tribe.specialists import _text_to_bvec, _text_to_field
 
         sys_prompt = self._default_system_prompt()
@@ -853,6 +853,10 @@ class ErisOrchestrator:
             except Exception:
                 _goal_field = None
 
+        # Stage-3 amortization: build the BM25 index + embedding matrix ONCE for the big memory
+        # pool and reuse it across cycle-1/cycle-2 (and the control), instead of retokenizing the
+        # whole library every retrieval call. Keyed by pool size (immutable mid-run).
+        _index_cache: Dict[int, Any] = {}
         # Memoize each chunk's evolved field across cycle-1/cycle-2 (chunks recur) — one PDE per
         # distinct chunk per run instead of per retrieval call.
         _field_cache: Dict[str, Any] = {}
@@ -928,7 +932,16 @@ class ErisOrchestrator:
                 # With hashed (non-semantic) embeddings the dense ranking is noise — use pure
                 # BM25 instead of polluting RRF (the lexical match is what actually works then).
                 qe = get_embedding(query) if is_semantic() else None
-                ranked = hybrid_search(query, recs, query_embedding=qe, top_k=16)
+                # Reuse a prebuilt index for the big stable memory pool (default scope, no named
+                # doc) across cycles; build inline for the small/variable doc-lead pools.
+                if scope == "memory" and not document:
+                    idx = _index_cache.get(len(recs))
+                    if idx is None:
+                        idx = build_hybrid_index(recs)
+                        _index_cache[len(recs)] = idx
+                    ranked = hybrid_search(query, index=idx, query_embedding=qe, top_k=16)
+                else:
+                    ranked = hybrid_search(query, recs, query_embedding=qe, top_k=16)
                 # id()-based membership, NOT `h not in lead`: MemoryRecord is a dataclass whose
                 # __eq__ compares its numpy embedding/bvec fields → an array truth value →
                 # "ambiguous" ValueError. That crash silently emptied EVERY named-doc/scope=doc

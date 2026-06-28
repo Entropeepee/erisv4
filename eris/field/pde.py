@@ -357,6 +357,29 @@ class FractalField:
                 break
         return executed
 
+    def run_settled(self, max_steps: int, min_steps: int = 8, check_every: int = 4,
+                    tol: float = 0.02) -> int:
+        """Self-contained criticality early-stop (Stage-2 convergence-rate; the run_gated
+        discipline WITHOUT a shared monitor, so it works for a fresh per-call field like the
+        retrieval rerank, where a monitor would never leave warmup). Evolve up to `max_steps`
+        but SUSPEND once the field has SETTLED — the coherence change over a `check_every`
+        window falls below `tol` RELATIVE to the coherence level (the attractor is reached;
+        more steps won't change what resonance measures). `min_steps` is a hard floor. Returns
+        steps executed. `run()`/`run_gated()` are untouched — this is an additive variant."""
+        min_steps = max(1, min_steps)
+        last_c = self.coherence
+        executed = 0
+        for _ in range(max_steps):
+            self.step()
+            executed += 1
+            if executed < min_steps or executed % check_every != 0:
+                continue
+            c = self.coherence
+            if abs(c - last_c) <= tol * (abs(c) + 1e-9):
+                break
+            last_c = c
+        return executed
+
     def run_gated_response(self, monitor, max_steps: int, check_every: int = 4,
                            min_steps: int = 8) -> int:
         """Tier 3: evolve the response field but SUSPEND once the response bvec

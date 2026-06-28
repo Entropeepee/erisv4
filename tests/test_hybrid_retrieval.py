@@ -6,13 +6,54 @@ os.environ.setdefault("ERIS_EMBEDDINGS", "off")
 import unittest
 import numpy as np
 
-from eris.retrieval.hybrid import BM25, reciprocal_rank_fusion, hybrid_search
+from eris.retrieval.hybrid import (
+    BM25, reciprocal_rank_fusion, hybrid_search, build_hybrid_index,
+    _dense_ranking, _dense_ranking_matrix, _stack_normalized,
+)
 
 
 class _Rec:
     def __init__(self, text, embedding=None):
         self.text = text
         self.embedding = embedding
+
+
+class TestPrebuiltIndex(unittest.TestCase):
+    def _corpus(self):
+        return [_Rec("the resonant field evolves", np.array([1.0, 0.0, 0.0], dtype=np.float32)),
+                _Rec("sgtpatent statistical gating", np.array([0.0, 1.0, 0.0], dtype=np.float32)),
+                _Rec("coherence and dynamics", np.array([0.0, 0.0, 1.0], dtype=np.float32))]
+
+    def test_prebuilt_index_matches_inline(self):
+        recs = self._corpus()
+        idx = build_hybrid_index(recs)
+        qe = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+        a = hybrid_search("sgtpatent gating", recs, query_embedding=qe, top_k=3)
+        b = hybrid_search("sgtpatent gating", index=idx, query_embedding=qe, top_k=3)
+        self.assertEqual([r.text for r in a], [r.text for r in b])   # identical ranking
+        self.assertIs(b[0], idx.records[1])                          # the rare-token doc wins
+
+    def test_index_reused_across_queries(self):
+        idx = build_hybrid_index(self._corpus())
+        # two different queries on the SAME prebuilt index (no rebuild)
+        r1 = hybrid_search("resonant field", index=idx, top_k=1)
+        r2 = hybrid_search("coherence dynamics", index=idx, top_k=1)
+        self.assertEqual(r1[0].text, "the resonant field evolves")
+        self.assertEqual(r2[0].text, "coherence and dynamics")
+
+
+class TestVectorizedDense(unittest.TestCase):
+    def test_matrix_dense_equals_loop(self):
+        embs = [np.array([1.0, 0.0]), None, np.array([0.0, 1.0]), np.array([0.7, 0.7])]
+        q = np.array([1.0, 0.0])
+        mat, idx = _stack_normalized(embs)
+        self.assertEqual(_dense_ranking_matrix(q, mat, idx), _dense_ranking(q, embs))
+        self.assertEqual(_dense_ranking_matrix(q, mat, idx)[0], 0)   # exact match ranks first
+
+    def test_none_and_zero_norm_dropped(self):
+        embs = [None, np.zeros(3), np.array([1.0, 2.0, 3.0])]
+        mat, idx = _stack_normalized(embs)
+        self.assertEqual(idx, [2])                                   # only the valid row
 
 
 class TestBM25(unittest.TestCase):
