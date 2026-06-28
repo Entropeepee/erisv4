@@ -35,18 +35,41 @@ if TYPE_CHECKING:
     from eris.computation.activations import BVec
 
 
-def _softplus(x, epsilon: float = 0.05):
+# Below this many elements, run the Hill-Power math on the CPU (NumPy) instead of the GPU.
+# A 6-element BVec through CuPy fires ~12 kernel launches + a H2D/D2H round-trip + a stream
+# sync — pure overhead that dwarfs the arithmetic, and davidian_weight is called once per
+# candidate in the resonance ranking loops. Large arrays (field grids, eigenvalue spectra)
+# still go to xp/GPU. Math is bit-identical (IEEE float32 either backend). Stage-1 spirit:
+# pick the cheapest correct execution per the operator's structure (here, its size).
+_DAVIDIAN_CPU_MAX = 64
+
+
+def _shrink_mod(s):
+    """NumPy for small/scalar inputs (kernel-launch overhead dominates), xp otherwise."""
+    if np.isscalar(s):
+        return np
+    size = getattr(s, "size", None)
+    if size is None:
+        try:
+            size = len(s)
+        except Exception:
+            size = 1
+    return np if size <= _DAVIDIAN_CPU_MAX else xp
+
+
+def _softplus(x, epsilon: float = 0.05, mod=None):
     """Smooth C¹ approximation of max(0, x).
     The Hill function's infinite-derivative singularity at the origin
     enables L1/Lq sparsity — softplus preserves this property.
     """
+    mod = mod or _shrink_mod(x)
     # For large x/epsilon, softplus ≈ x. Avoid overflow by clamping.
     ratio = x / epsilon
     # Where ratio is large, just return x directly (softplus ≈ x)
-    return xp.where(
+    return mod.where(
         ratio > 20.0,
-        xp.maximum(x, 0.0),  # For large values, softplus ≈ max(0, x)
-        epsilon * xp.log(1.0 + xp.exp(xp.clip(ratio, -50, 20)))
+        mod.maximum(x, 0.0),  # For large values, softplus ≈ max(0, x)
+        epsilon * mod.log(1.0 + mod.exp(mod.clip(ratio, -50, 20)))
     )
 
 
@@ -70,12 +93,13 @@ def davidian_weight(s, alpha: float = 1.0, beta: float = 1.0,
     -------
     w : array in [0, 1].
     """
-    s = xp.asarray(s, dtype=xp.float32)
-    u = _softplus(s - delta) if smooth else xp.maximum(s - delta, 0.0)
-    u_alpha = xp.where(u > 1e-30, xp.power(u, alpha), xp.zeros_like(u))
+    mod = _shrink_mod(s)
+    s = mod.asarray(s, dtype=mod.float32)
+    u = _softplus(s - delta, mod=mod) if smooth else mod.maximum(s - delta, 0.0)
+    u_alpha = mod.where(u > 1e-30, mod.power(u, alpha), mod.zeros_like(u))
     # Hill function: u^α / (u^α + β). For very large u^α, this → 1.0
-    h = xp.where(u_alpha > 1e30, xp.ones_like(u_alpha), u_alpha / (u_alpha + beta))
-    return xp.power(h, gamma)
+    h = mod.where(u_alpha > 1e30, mod.ones_like(u_alpha), u_alpha / (u_alpha + beta))
+    return mod.power(h, gamma)
 
 
 @dataclass

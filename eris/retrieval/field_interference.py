@@ -58,24 +58,28 @@ def field_resonance(phi_q, theta_q, phi_s, theta_s) -> float:
     return float(np.mean(phi_q * phi_s * np.cos(theta_q - theta_s)))
 
 
-def field_resonance_2d(phi_q, theta_q, phi_s, theta_s) -> dict:
-    """Full two-channel resonance — the "never just cosine" correction (§B3).
+def _analytic(phi, theta) -> np.ndarray:
+    """The analytic field z = φ·e^{iθ} — the complex representation in which resonance is a
+    single inner product and the nullspace/common-mode projection (S1.8 GLNCS) is one line."""
+    return np.asarray(phi, dtype=np.float64) * np.exp(1j * np.asarray(theta, dtype=np.float64))
 
-    Returns BOTH channels plus their derived diagnostics:
-      R_cos       = mean(φ_q·φ_s·cos Δθ)   — κ / alignment (current scalar)
-      R_sin       = mean(φ_q·φ_s·sin Δθ)   — λ / SIGNED torsion channel (the discarded sine)
-      magnitude   = √(R_cos² + R_sin²)     — total resonance, the new default for RANKING
-      mixing_angle= atan2(R_sin, R_cos)    — the tan/torsion diagnostic (|angle| grows as
-                                              the torsion channel carries more of the signal)
+
+def field_resonance_2d(phi_q, theta_q, phi_s, theta_s) -> dict:
+    """Full two-channel resonance — the "never just cosine" correction (§B3), written as the
+    exact complex-exponential form (S1.1 FFT-family): the κ and signed-λ channels are the real
+    and imaginary parts of one Hermitian inner product, not two separate trig reductions.
+
+      R = mean( φ_q e^{iθ_q} · conj(φ_s e^{iθ_s}) ) = mean( φ_q·φ_s·e^{iΔθ} )
+      R_cos = Re R = mean(φ_q·φ_s·cos Δθ)   — κ / alignment (== the scalar field_resonance)
+      R_sin = Im R = mean(φ_q·φ_s·sin Δθ)   — λ / SIGNED torsion channel (the discarded sine)
+      magnitude   = |R| = √(R_cos² + R_sin²) — total resonance, the ranking score
+      mixing_angle= arg R = atan2(R_sin, R_cos) — torsion diagnostic
     """
     phi_q, theta_q, phi_s, theta_s = _common(phi_q, theta_q, phi_s, theta_s)
-    dtheta = theta_q - theta_s
-    coup = phi_q * phi_s
-    r_cos = float(np.mean(coup * np.cos(dtheta)))
-    r_sin = float(np.mean(coup * np.sin(dtheta)))
-    return {"R_cos": r_cos, "R_sin": r_sin,
-            "magnitude": float(np.hypot(r_cos, r_sin)),
-            "mixing_angle": float(np.arctan2(r_sin, r_cos))}
+    R = complex(np.mean(_analytic(phi_q, theta_q) * np.conj(_analytic(phi_s, theta_s))))
+    return {"R_cos": R.real, "R_sin": R.imag,
+            "magnitude": float(abs(R)),
+            "mixing_angle": float(np.angle(R))}
 
 
 def _ltm_records(memory):
