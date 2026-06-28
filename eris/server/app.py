@@ -699,6 +699,15 @@ def create_app(
                     print(f"[Study] nightly session: {rep['total_chunks']} passages on {rep['topics']}")
                 except Exception as e:
                     print(f"[Study Error] {e}")
+                # Sleep also REPLAYS: fold near-duplicate library traces into one reinforced
+                # record (re-ingest junk collapses; repeated facts get stronger). Provenance-safe
+                # — her reflections/dreams and the thought-stream are never touched.
+                try:
+                    merged = await asyncio.to_thread(orchestrator.memory.replay_consolidate)
+                    if merged.get("mtm_merged") or merged.get("ltm_merged"):
+                        print(f"[Replay] consolidated near-duplicates: {merged}")
+                except Exception as e:
+                    print(f"[Replay Error] {e}")
             await asyncio.sleep(300)  # check every 5 min
 
     def _study_throttle() -> int:
