@@ -107,6 +107,9 @@ def metrics_from(summary: Dict[str, Any]) -> Dict[str, Any]:
         "stripped_claims": summary.get("stripped_claims", 0),
         "canonized": bool(summary.get("canonized")),
         "synthesis_len": len(final),                                       # length is NOT a virtue
+        # confidence as resonance geometry (cos match + sin/torsion of the unresolved part);
+        # present only when the orchestrator could embed the synthesis + sources.
+        "confidence": summary.get("confidence", {}),
     }
 
 
