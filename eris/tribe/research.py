@@ -333,7 +333,7 @@ def run_two_cycle_research(
             f"SOURCES:\n{_format_sources(ctx, digester)}\n\nSummary:") or "").strip()
         g, strp = _ground_citations(pre, len(ctx))
         return ResearchResult(topic=topic, synthesis=(g or pre), synthesis_pre_ground=pre,
-                              n_sources=len(ctx), sources=[c[:300] for c in ctx],
+                              n_sources=len(ctx), sources=list(ctx),   # FULL retrieved chunks
                               n_active=0, n_contributors=0, stripped_claims=strp, cycles=0)
 
     goal_bvec = goal_bvec or _text_to_bvec(topic)
@@ -404,7 +404,8 @@ def run_two_cycle_research(
         _log(f"cycle 2 — {len(gaps)} gap(s); targeted retrieval + refine…")
         ctx2 = _distinct(list(retriever(" ; ".join(gaps)) or []))
         src2 = _format_sources(_distinct(ctx1 + ctx2), digester)
-        c1_summary = "; ".join(f"{f.specialist_id}: {f.content[:120]}" for f in top_findings)
+        # 400 (not 120) so cycle-2 reads cycle-1 findings whole, not cut mid-sentence
+        c1_summary = "; ".join(f"{f.specialist_id}: {f.content[:400]}" for f in top_findings)
         gap_goal = (f"Close these GAPS in our understanding of '{topic}': " + " | ".join(gaps) +
                     f". (Cycle-1 already found: {c1_summary}.) Add only what the sources reveal "
                     f"about the gaps; if a gap is already covered, say so briefly.")
@@ -468,7 +469,7 @@ def run_two_cycle_research(
     return ResearchResult(
         topic=topic, synthesis=synthesis_out, thought_id=thought_id, gaps=gaps,
         n_contributors=len(contributors), n_sources=len(all_sources),
-        sources=[c[:300] for c in all_sources],
+        sources=list(all_sources),     # FULL retrieved chunks (display + source_alignment)
         synthesis_pre_ground=synthesis_pre_ground,
         n_active=len(active), stripped_claims=stripped,
         elos_critique=elos_critique, cycles=2 if gaps else 1,

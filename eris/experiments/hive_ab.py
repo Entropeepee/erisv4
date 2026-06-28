@@ -99,7 +99,7 @@ def metrics_from(summary: Dict[str, Any]) -> Dict[str, Any]:
         "specialist_divergence": round(summary.get("specialist_divergence", 0.0), 4),
         "gaps_closed": summary.get("gaps_closed", 0),
         "elos_changed": bool(summary.get("elos_changed", False)),
-        "elos_critique": (summary.get("elos_critique", "") or "")[:300],
+        "elos_critique": summary.get("elos_critique", "") or "",   # full — no truncation
         # neutral reported stats (NOT verdict criteria)
         "domain_diversity": summary.get("n_contributors", 0),
         "n_active": summary.get("n_active", 0),

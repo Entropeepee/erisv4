@@ -1075,11 +1075,11 @@ class ErisOrchestrator:
                     "specialist_divergence": res.specialist_divergence,
                     "gaps_closed": res.gaps_closed, "elos_changed": res.elos_changed,
                     "elos_critique": res.elos_critique,
-                    # FULL text feeds the metrics (source_alignment must NOT be scored on a
-                    # truncated synthesis); the truncated fields are for DISPLAY only.
+                    # FULL synthesis — never truncated (display AND metrics). _full kept as an
+                    # explicit alias for metrics_from / blind_pair; all equal the full text.
                     "synthesis_full": res.synthesis, "synthesis_pre_ground_full": res.synthesis_pre_ground,
-                    "synthesis": res.synthesis[:2000],      # the actual reasoning, visible
-                    "synthesis_pre_ground": res.synthesis_pre_ground[:2000]}
+                    "synthesis": res.synthesis,
+                    "synthesis_pre_ground": res.synthesis_pre_ground}
 
         try:
             return await asyncio.to_thread(_run)
