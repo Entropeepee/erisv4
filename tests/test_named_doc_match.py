@@ -53,6 +53,24 @@ class TestNamedDocMatch(unittest.TestCase):
         # filename substring also works (sgt ∈ sgtpatent)
         self.assertEqual(len(self.mem.documents_matching("sgtpatent")), 1)
 
+    def test_ranks_doc_chunks_by_query_embedding(self):
+        # the scope=doc fix: a doc's chunks are ranked by relevance to the QUESTION, so the
+        # conceptual chunk surfaces above tail-end code — not just whichever chunk matched the name
+        import numpy as np
+        concept = MemoryRecord(
+            text="SGT Summary: the novelty is the soft gate, not the 1/sqrt(N) scaling.",
+            bvec=GOAL, embedding=np.array([1.0, 0.0], dtype=np.float32),
+            source="reading:Summary", metadata={"title": "Summary"})
+        code = MemoryRecord(
+            text="SGT reference code: acc += k_w*err; resid = buf - (a + b*idx)",
+            bvec=GOAL, embedding=np.array([0.0, 1.0], dtype=np.float32),
+            source="reading:Code", metadata={"title": "Code"})
+        self.mem.ltm.store(code); self.mem.ltm.store(concept)   # store code first (storage order)
+        q_emb = np.array([1.0, 0.0], dtype=np.float32)          # points at the concept chunk
+        hits = self.mem.documents_matching("SGT", max_chunks=2, query_embedding=q_emb)
+        self.assertEqual(len(hits), 2)
+        self.assertIn("novelty", hits[0].text)                 # concept ranked first, not the code
+
     def test_common_short_word_does_not_overmatch(self):
         # lowering the floor must NOT make "the" match every document
         self.mem.ltm.store(_doc("The contents of an unrelated paper.", source="reading:other"))
