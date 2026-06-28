@@ -10,16 +10,34 @@ runner is agnostic to which is which — that interchangeability is what keeps t
 Note (from the brief): Ollama's default 4096-token context is too small for QuALITY/FRAMES — set
 OLLAMA_CONTEXT_LENGTH >= 22000 before serving, or long documents are silently truncated."""
 import os
+import re
 from typing import Callable, Tuple
+
+
+def _answer_text_from_message(msg: dict) -> str:
+    """Robustly pull the model's answer from a /chat/completions message — including REASONING
+    models (qwen3, deepseek-r1, gpt-oss) that put their answer in `reasoning_content`/`reasoning`
+    and leave `content` empty, or inline a <think>…</think> block. Without this a reasoning model
+    scores 0 (empty content) and looks dumb when it actually answered."""
+    text = (msg.get("content") or "").strip()
+    if not text:                                  # answer landed in the reasoning channel
+        text = (msg.get("reasoning_content") or msg.get("reasoning") or "").strip()
+    if "</think>" in text:                        # keep what FOLLOWS the think block (the answer)
+        text = text.rsplit("</think>", 1)[-1].strip()
+    else:
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    return text
 
 
 def openai_chat_arm(base_url: str = "http://localhost:11434/v1",
                     model: str = "", api_key: str = "ollama",
-                    max_tokens: int = 512, temperature: float = 0.0,
+                    max_tokens: int = 2048, temperature: float = 0.0,
                     system: str = "You are a careful assistant. Answer concisely and only from "
                                   "any provided source.") -> Callable[[str], Tuple[str, int]]:
     """Arm A — a bare model behind an OpenAI-compatible /chat/completions endpoint. Deterministic
-    (temperature 0) for reproducible scoring. Returns (text, total_tokens)."""
+    (temperature 0) for reproducible scoring. max_tokens defaults to 2048 (not 512): a reasoning
+    model can spend hundreds of tokens thinking before the answer, and a small cap truncates it
+    mid-thought into an empty answer. Returns (text, total_tokens)."""
     try:
         import requests
     except Exception as e:                       # pragma: no cover - environment-dependent
@@ -34,7 +52,7 @@ def openai_chat_arm(base_url: str = "http://localhost:11434/v1",
         r = requests.post(url, json=body, headers=headers, timeout=300)
         r.raise_for_status()
         data = r.json()
-        text = (data["choices"][0]["message"]["content"] or "").strip()
+        text = _answer_text_from_message(data["choices"][0]["message"] or {})
         tokens = int((data.get("usage") or {}).get("total_tokens", 0))
         return text, tokens
 

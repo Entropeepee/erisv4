@@ -14,7 +14,7 @@ from eris.experiments.benchmarks.core import (
 from eris.experiments.benchmarks.scoring import (
     normalize, exact_match, multiple_choice, abstained, score_item, score_results,
     faithfulness_score, sentence_supported)
-from eris.experiments.benchmarks.arms import callable_arm, _split_source
+from eris.experiments.benchmarks.arms import callable_arm, _split_source, _answer_text_from_message
 from eris.experiments.benchmarks import datasets as D
 
 
@@ -360,6 +360,17 @@ class TestArmsHelpers(unittest.TestCase):
         ctx, q = _split_source("Question: 2+2?")
         self.assertEqual(ctx, "")
         self.assertIn("2+2", q)
+
+    def test_bare_arm_reads_reasoning_models(self):
+        # the live bug: qwen3 put its answer in reasoning_content with empty content → scored 0
+        self.assertEqual(_answer_text_from_message({"content": "42"}), "42")
+        self.assertEqual(_answer_text_from_message(
+            {"content": "", "reasoning_content": "let me think... the answer is 42"}),
+            "let me think... the answer is 42")
+        self.assertEqual(_answer_text_from_message(
+            {"content": "<think>2+2 is 4, not 5</think>4"}), "4")          # strip the think block
+        self.assertEqual(_answer_text_from_message(
+            {"content": "", "reasoning": "<think>hmm</think>Paris"}), "Paris")
 
 
 if __name__ == "__main__":
