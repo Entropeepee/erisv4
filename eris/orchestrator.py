@@ -1073,6 +1073,7 @@ class ErisOrchestrator:
                 synth_model=synth_model, digester=digester, single_pass=(mode == "single"),
                 max_specialists=max_specialists, log=_log, map_fn=_map_fn)
             return {"topic": res.topic, "thought_id": res.thought_id, "gaps": res.gaps,
+                    "open_gaps": res.open_gaps,
                     "n_contributors": res.n_contributors, "n_active": res.n_active,
                     "n_sources": res.n_sources, "stripped_claims": res.stripped_claims,
                     "cycles": res.cycles, "canonized": res.thought_id is not None,
@@ -1089,10 +1090,27 @@ class ErisOrchestrator:
                     "synthesis_pre_ground": res.synthesis_pre_ground}
 
         try:
-            return await asyncio.to_thread(_run)
+            result = await asyncio.to_thread(_run)
         except Exception as e:
             import traceback
             return {"error": str(e), "traceback": traceback.format_exc()}
+
+        # Close the discovery→study loop: route the hive's UNCLOSED gaps either into the
+        # autonomous study queue (open work → go learn it) or the user notifications queue
+        # (sovereign/IP work → ask the human, never egress). Best-effort, never fatal; gated
+        # by ERIS_ROUTE_GAPS (default on) so the offline A/B harness can opt out.
+        if (isinstance(result, dict) and "error" not in result
+                and os.environ.get("ERIS_ROUTE_GAPS", "1") not in ("0", "off", "false")):
+            try:
+                dl = getattr(self, "dreaming_loop", None)
+                if dl is not None:
+                    routed = dl.enqueue_research_gaps(
+                        result.get("open_gaps") or result.get("gaps") or [], sens)
+                    if routed.get("queued") or routed.get("asked"):
+                        result["gaps_routed"] = routed
+            except Exception:
+                pass
+        return result
 
     def _assemble_prompt(self, user_message: str,
                          winner: Optional[SpecialistFinding],

@@ -207,6 +207,11 @@ def main(argv=None):   # pragma: no cover
                     help="title/filename to prioritise (or restrict to, with --scope doc)")
     args = ap.parse_args(argv)
 
+    # This is an offline experiment, not live cognition — don't let a benchmark run feed gaps
+    # into the autonomous study queue or clutter the comparison JSON with a routing key.
+    import os
+    os.environ.setdefault("ERIS_ROUTE_GAPS", "0")
+
     from eris.orchestrator import ErisOrchestrator
     print(f"[hive-ab] booting Eris (reads ./eris_data, talks to your local Ollama)…")
     orch = ErisOrchestrator(field_size=args.size)           # default data_dir = eris_data

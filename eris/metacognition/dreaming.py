@@ -67,6 +67,42 @@ def _run_blocking(coro, timeout: float = 180):
         return pool.submit(asyncio.run, coro).result(timeout=timeout)
 
 
+# A speaker/source label the hive sometimes prefixes onto a gap line — "Elos**", "Praxis**",
+# "Cross-links**", "Source s:2**". Stripped so the routed topic/question reads as the gap itself.
+_GAP_LABEL = re.compile(r"^\s*(?:[-*•]|\d+[.)])?\s*"
+                        r"(?:[A-Za-z][\w .:-]{0,22}?\*\*)?\s*[:\-—]?\s*")
+
+
+def _clean_gap(text: str) -> str:
+    """Normalize one named research gap into a bare phrase: drop list/table markers, a leading
+    speaker label (Elos**, Source s:2**), and markdown emphasis; collapse whitespace."""
+    s = (text or "").strip().strip("|").strip()
+    s = _GAP_LABEL.sub("", s, count=1)
+    s = s.replace("**", "").replace("*", "")
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def distill_gaps(gaps, *, max_items: int = 5, max_len: int = 160) -> List[str]:
+    """Turn the hive's named gaps into a short, de-duplicated list of routable phrases.
+    Pure (no I/O) so it is directly unit-testable; the loop wiring is a thin wrapper."""
+    out: List[str] = []
+    seen = set()
+    for g in (gaps or []):
+        s = _clean_gap(g)
+        if len(s) < 12:                       # too short to be a meaningful gap
+            continue
+        if len(s) > max_len:                  # trim on a word boundary, not mid-word
+            s = s[:max_len].rsplit(" ", 1)[0].rstrip(" ,;.")
+        key = s.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+        if len(out) >= max_items:
+            break
+    return out
+
+
 @dataclass
 class DreamResult:
     """Result of processing one tension in the dreaming loop."""
@@ -223,6 +259,7 @@ class DreamingLoop:
     }
     _MAX_REPEAT = 2     # never run the same query more than this within the window
     _QUERY_WINDOW = 60
+    _GAP_ROUTE_CAP = 5  # at most this many gaps routed per research run (avoid flooding)
 
     def _regime_feeling(self, regime: str, dominant_domains=None) -> str:
         """Felt phrase for the regime, enriched with the dominant-domain
@@ -237,6 +274,48 @@ class DreamingLoop:
 
     def _query_count(self, topic: str) -> int:
         return self._recent_queries.count((topic or "").strip().lower())
+
+    def enqueue_research_gaps(self, gaps, sensitivity="open") -> Dict[str, List[str]]:
+        """Close the discovery→study loop. The hive surfaces gaps it could not resolve; route
+        them by sensitivity:
+
+          • OPEN work  → push each gap into the autonomous study queue, so the dream loop goes
+            and learns it next (web / Claude allowed). This is the directed-curiosity behavior:
+            study what she discovered she's missing, not just what she happens to remember.
+          • SOVEREIGN work (IP / patent) → push each gap into the user notifications queue as a
+            direct question. Nothing egresses; she asks the human for the input she can't get.
+
+        The OPEN/SOVEREIGN split here is exactly the future single-IP-node boundary, living in
+        one node now. Best-effort and idempotent; returns what was routed. Never raises."""
+        try:
+            from eris.interface.sovereignty import Sensitivity
+            sovereign = Sensitivity.coerce(sensitivity) == Sensitivity.SOVEREIGN
+        except Exception:
+            sovereign = str(sensitivity).lower().startswith("sov")
+
+        routed: Dict[str, List[str]] = {"queued": [], "asked": []}
+        items = distill_gaps(gaps, max_items=self._GAP_ROUTE_CAP)
+        if not items:
+            return routed
+
+        if sovereign:
+            existing = set(self.pending_questions)
+            for s in items:
+                q = ("I hit a gap in your sovereign material I can't close without you "
+                     f"(it stays local — I won't search it online): {s}")
+                if q not in existing:
+                    self.pending_questions.append(q)
+                    existing.add(q)
+                    routed["asked"].append(s)
+        else:
+            existing = {t.strip().lower() for t in self.topic_queue}
+            for s in items:
+                if s.lower() in existing or self._query_count(s) >= self._MAX_REPEAT:
+                    continue
+                self.topic_queue.append(s)
+                existing.add(s.lower())
+                routed["queued"].append(s)
+        return routed
 
     def _distill_topic(self, text: str) -> Optional[str]:
         """Turn a source (a chat line, a memory passage, a doc title) into a
