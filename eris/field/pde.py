@@ -16,7 +16,8 @@ import re
 import numpy as np
 
 from eris.config import xp, to_numpy, to_gpu, CONFIG
-from eris.computation.activations import BVec, compute_bvec_from_field, bvec_distance
+from eris.computation.activations import (
+    BVec, compute_bvec_from_field, bvec_distance, quarantine_nonfinite)
 
 # BGE-M3 ONNX integration (Placeholder / Hooks ready)
 def get_bge_m3_embedding(text: str, dim: int = 256) -> np.ndarray:
@@ -347,6 +348,11 @@ class FractalField:
         self.theta_prev = xp.copy(self.theta)
         
         self.tau = _compute_tau(self.phi, self.theta)
+        # Codex #9: quarantine any non-finite φ/θ/τ at the END of the step so a transient NaN/inf
+        # (bad seed, overflow) can't poison the field for every subsequent step or flow downstream.
+        self.phi, _ = quarantine_nonfinite(self.phi, 0.0, "phi")
+        self.theta, _ = quarantine_nonfinite(self.theta, 0.0, "theta")
+        self.tau, _ = quarantine_nonfinite(self.tau, 0.0, "tau")
         self._update_global_observables()
         self.step_count += 1
 
