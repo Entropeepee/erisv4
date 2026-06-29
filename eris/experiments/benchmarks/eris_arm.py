@@ -166,6 +166,10 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
     # Force-disable autonomous side-effects BEFORE the orchestrator is built.
     os.environ["ERIS_ROUTE_GAPS"] = "0"
     os.environ["ERIS_SYNTHESIS_WRITEBACK"] = "0"
+    # One key covers everything: if the gateway key isn't set explicitly, reuse the bench key (both
+    # point at the same OpenRouter account) — so you only paste ONE OpenRouter key into .env.
+    if not os.environ.get("ERIS_GATEWAY_API_KEY") and os.environ.get("ERIS_BENCH_API_KEY"):
+        os.environ["ERIS_GATEWAY_API_KEY"] = os.environ["ERIS_BENCH_API_KEY"]
     # READ THE WHOLE PASSAGE, don't RAG 6 fragments of it. A grounded benchmark provides the full
     # short document (a ~5k-word QuALITY story is ~17 chunks) and asks a whole-narrative question —
     # so feed the hive (nearly) all of it, not the focused-6 default tuned for live turns. setdefault
