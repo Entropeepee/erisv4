@@ -10,7 +10,7 @@ independently re-run — flagged so the trust level is explicit.
 Baseline commit for all anchors: `6ec67fa`.
 
 ### Version & maintenance — read first
-**v1.4** · living document; update in place, don't fork. So nothing is lost across token windows or
+**v1.5** · living document; update in place, don't fork. So nothing is lost across token windows or
 between the two agents:
 - **Homed in the repo** as `docs/REMEDIATION_ROADMAP.md` → git history *is* the version log (every
   check-off is a diffable, revertible commit; no manual version juggling).
@@ -30,6 +30,12 @@ live code and fresh adversarial findings.
   the roadmap.
 
 ### Changelog
+- **v1.5 (2026-06-29):** PR #94 (egress) independently audited by **Codex + chat** — converged.
+  Added the **"Codex PR#94 audit — egress (6 findings)"** section. **#1 (P0 host-class bypass) + #3
+  (status-probe egress) folded into #94** (re-review required before merge); #2 + #5 (TTS +
+  sovereignty host-class) → **planned PR #96** (reuses #94's loopback helper, build after #94); #4 +
+  #6 (ask_expert / autonomous web-study) → **Cloud/web egress-consent workstream** (DESIGN CALL
+  pending — do not build). Recorded the guard's verified-good skeleton.
 - **v1.4 (2026-06-29):** folded the **Codex round-4 static audit** (main @ `6ec67fa`, all 11
   findings + 1 verified-clean) into a new section with file:line/severity/status; added the
   **Build order & conflicts** section + the **scorer-coverage** write-inventory. In flight:
@@ -67,11 +73,14 @@ All eight landed on `main`; each Tier-3 item passed a real-server exploit re-run
 - ✓done **[#90]** Autonomous-loop cost guard — paid dream/condense path OFF by default + per-process
   ceiling + visible budget signal. *Verified by tracing the call is gated (0 paid calls / 5 default
   cycles), not just a passing test.*
-- ▶PR **[Codex r3 #10]** Loopback-guard ALL "local" accelerator URLs — embed, rerank, STT, VLM,
-  *not just* edge_tts. **PR #94 (open):** shared `egress_allowed`/`is_loopback_url` in
-  `accelerators.py`; default-DENY remote unless `ERIS_ALLOW_REMOTE_<NAME>`/`ERIS_ALLOW_REMOTE_ACCEL`;
-  wired into embeddings (→ in-process fallback), rerank (→ RRF-only), STT + VLM (→ raise). Tests cover
-  loopback/remote detection, default-deny, consent scoping, no-network-on-refusal. *Awaiting merge.*
+- ▶PR **[Codex r3 #10 + PR#94 audit #1/#3]** Egress guard + **host-classification hardening** for ALL
+  "local" accelerator URLs — embed, rerank, STT, VLM (not just edge_tts). **PR #94 (open):** shared
+  `egress_allowed`/`is_loopback_url`/`host_of` in `accelerators.py`; default-DENY remote unless
+  `ERIS_ALLOW_REMOTE_<NAME>`/`ERIS_ALLOW_REMOTE_ACCEL`; wired into embeddings (→ in-process), rerank
+  (→ RRF-only), STT + VLM (→ raise). **Scope expanded** from plain r3 #10 to also close **Codex #1
+  (P0 host-class bypass)** and **#3 (status-probe egress)** — see the PR#94-audit section.
+  **Status: fix-in-progress; RE-REVIEW REQUIRED before merge** (host-class hardening landed after the
+  first read; owner re-reads the helper, Codex self-confirms #1).
 
 ## Phase 1.5 — Memory integrity & durability · ▶ IN PROGRESS
 *Owner's own data — journals, research, field memory — must be trustworthy before any physics test
@@ -162,6 +171,36 @@ first.** All gate AFTER #93 (need the scorer on `main`).
 - ☐ Prompt-assembly tier caveat (**r4 #2**) — orchestrator.py ~1186-1194: inject memory WITH its tier,
   not as bare "already read."
 
+## Codex PR#94 audit — egress (6 findings)
+*PR #94 independently audited by Codex + chat (converged). The guard's skeleton is sound (see
+verified-good); these are the host-classification gaps + the same-module completeness items.*
+- ▶PR **[#1 · P0]** `is_loopback_url` accepted a public DNS name that merely starts with `127.` or
+  ends with `.localhost` (e.g. `127.0.0.1.evil.com`, `evil.localhost`) → content shipped off-box with
+  NO consent (accelerators.py:38,40). **Fix:** robust `ipaddress`-based, fail-closed classifier
+  (exact-`localhost` only for names; `is_loopback` for IP literals; userinfo/`%`-encoding/IPv4-mapped
+  handled). **FOLDED INTO #94.**
+- ☐ **[#2 · P1]** TTS provider URL unguarded — raw text goes off-box *before* the edge_tts guard
+  (tts.py:19,27,66). **Fix:** guard via the shared `egress_allowed`/`is_loopback_url` helper. **→ PR #96.**
+- ▶PR **[#3 · P1]** Status probe egresses to a remote URL by default — `_reachable` GETs configured
+  URLs, leaking source IP/UA (accelerators.py:86,115; app.py:924). **Fix:** gate `_reachable` with
+  `egress_allowed`; a denied remote URL is "not probed." **FOLDED INTO #94.**
+- ☐ **[#4 · P1]** `ask_expert` sends research Q/context to Anthropic with no per-path consent
+  (research.py:65,68; ask_expert.py:49,72). **→ Cloud/web egress-consent workstream (design pending).**
+- ☐ **[#5 · P1/P2]** Sovereignty treats `.local` as local, so prompts go off-box
+  (sovereignty.py:80,90; orchestrator.py:253). **Fix:** apply the shared host classifier. **→ PR #96.**
+- ☐ **[#6 · P2]** Autonomous web/study egress unguarded — DuckDuckGo / Wikipedia / page fetch / r.jina
+  (web_search.py:200,237; web_reader.py:57; study.py:148; orchestrator.py:1344). **→ Cloud/web
+  egress-consent workstream.**
+
+### Planned: PR #96 — egress hardening (TTS + sovereignty host-class)
+Codex #2 + #5. Apply #94's `is_loopback_url`/`host_of` helper to the TTS provider URL and the
+sovereignty `.local` classification. **Reuses #94's helper → build AFTER #94 merges.**
+
+### Workstream: Cloud/web egress consent (Codex #4 + #6)
+`ask_expert`/cloud-LLM escalation + autonomous web/study fetches (search, wiki, page-fetch) need a
+per-path consent/policy layer distinct from the accelerator guard (these are *intended* outbound
+calls, not misconfig). **DESIGN CALL pending — do NOT build yet.**
+
 ## Build order & conflicts
 *Two PRs own the contested files; everything else sequences around them.* **#92 owns `tiers.py`;
 #93 owns `orchestrator.py` + the grounding files.** Both are cleared and PR-open (merge imminent);
@@ -249,6 +288,10 @@ in a state to do what the theory says. Fix before testing.*
 ---
 
 ## Verified-good (Codex "clean" section)
+- **[PR#94 egress, Codex + chat]** Default-deny consent parsing is correct — only `1/on/true/yes`
+  enable; `0/false`/empty/unset do NOT. The guard runs BEFORE the network call at all four content
+  sites (embeddings/rerank/STT/VLM) with safe fallbacks. *Skeleton confirmed by both reads; the host
+  classifier + status probe were the gaps (folded into #94).*
 - **τ vorticity matches the canon scalar curl ∇ρ×∇θ** (sign + axis) apart from the known
   boundary-stencil issue — the core torsion math is correct.
 - No additional CPU/GPU math divergence beyond the known `xp.roll` boundary + the VRAM-cap no-op.
