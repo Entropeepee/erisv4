@@ -24,14 +24,38 @@ def _clear_consent(env):
 class TestLoopbackDetection(unittest.TestCase):
     def test_loopback_hosts(self):
         for u in ("http://localhost:8013/v1", "http://127.0.0.1:8000", "http://127.0.0.5:9",
-                  "http://[::1]:8000/v1", "http://0.0.0.0:8013", "localhost:8013",
-                  "http://api.localhost/v1"):
+                  "http://127.0.0.7", "http://[::1]:8000/v1", "localhost:8013"):
             self.assertTrue(is_loopback_url(u), u)
 
     def test_remote_hosts(self):
         for u in ("http://10.0.0.5:8013/v1", "http://192.168.1.50:8000", "https://api.openai.com/v1",
-                  "http://embeddings.example.com", "http://my-gpu-box.lan:8013"):
+                  "http://embeddings.example.com", "http://my-gpu-box.lan:8013",
+                  "http://0.0.0.0:8013"):       # 0.0.0.0 is not is_loopback → remote (fail closed)
             self.assertFalse(is_loopback_url(u), u)
+
+    def test_codex1_bypass_cases_are_remote(self):
+        # The P0: a public DNS name that merely embeds/decorates a loopback token must NOT pass.
+        for u in ("http://127.0.0.1@evil.com/v1",        # userinfo trick — real host is evil.com
+                  "http://127.0.0.1.evil.com:8000",      # DNS name that starts with 127.
+                  "http://evil.localhost/v1",            # *.localhost is a public name, not loopback
+                  "http://%31%32%37.0.0.1:8000",         # %-encoded "127" — not a valid IP literal
+                  "http://127.0.0.1.example.com"):
+            self.assertFalse(is_loopback_url(u), u)
+
+    def test_exact_localhost_variants_are_local(self):
+        for u in ("http://localhost.:8013", "http://LOCALHOST:8013", "LocalHost:9"):
+            self.assertTrue(is_loopback_url(u), u)
+
+    def test_ipv4_mapped_ipv6_judged_by_embedded_v4(self):
+        # Documented choice: ::ffff:127.0.0.1 is local (embedded v4 is loopback);
+        # ::ffff:10.0.0.5 is remote (embedded v4 is public).
+        self.assertTrue(is_loopback_url("http://[::ffff:127.0.0.1]:8000"))
+        self.assertFalse(is_loopback_url("http://[::ffff:10.0.0.5]:8000"))
+
+    def test_invalid_ip_fails_closed_remote(self):
+        # a bracketed-but-invalid IPv6 host is not a valid IP and isn't "localhost" → remote
+        self.assertFalse(is_loopback_url("http://[gggg::1]:8000"))
+        self.assertFalse(is_loopback_url("http://[::ffff:10.0.0.5.junk]"))
 
 
 class TestEgressDecision(unittest.TestCase):
@@ -125,6 +149,37 @@ class TestVisionGuard(unittest.TestCase):
             _clear_consent(os.environ)
             with self.assertRaises(RuntimeError):
                 asyncio.run(see("what is this?", []))
+
+
+class TestStatusProbeGuard(unittest.TestCase):
+    """Codex #3: accelerator_status probes configured URLs over HTTP, leaking source IP/UA. A remote
+    URL with no consent must NOT be probed."""
+
+    def test_remote_url_not_probed_without_consent(self):
+        import eris.interface.accelerators as acc
+        import eris.config as cfg
+        with mock.patch.dict(os.environ, {}, clear=False):
+            _clear_consent(os.environ)
+            with mock.patch.object(cfg.CONFIG, "embed_base_url", "http://10.0.0.5:8013/v1"), \
+                 mock.patch.object(acc, "_reachable",
+                                   side_effect=AssertionError("must not probe a denied remote URL")):
+                st = acc.accelerator_status(probe=True, timeout=0.1)
+        emb = st["embeddings"]
+        self.assertFalse(emb["egress_allowed"])
+        self.assertFalse(emb["reachable"])
+        self.assertIn("not probed", emb["status"])
+
+    def test_remote_url_probed_when_consented(self):
+        import eris.interface.accelerators as acc
+        import eris.config as cfg
+        probed = {"n": 0}
+        with mock.patch.dict(os.environ, {"ERIS_ALLOW_REMOTE_EMBEDDINGS": "1"}, clear=False):
+            with mock.patch.object(cfg.CONFIG, "embed_base_url", "http://10.0.0.5:8013/v1"), \
+                 mock.patch.object(acc, "_reachable",
+                                   side_effect=lambda *a, **k: probed.__setitem__("n", 1) or True):
+                st = acc.accelerator_status(probe=True, timeout=0.1)
+        self.assertEqual(probed["n"], 1)                  # consent → probe runs
+        self.assertTrue(st["embeddings"]["egress_allowed"])
 
 
 if __name__ == "__main__":

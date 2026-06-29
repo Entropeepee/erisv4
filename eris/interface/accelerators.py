@@ -7,6 +7,7 @@ blocks boot and never raises; a down service simply reports unreachable.
 """
 from __future__ import annotations
 from typing import Dict, Optional, Tuple
+import ipaddress
 import os
 from urllib.parse import urlparse
 
@@ -27,17 +28,47 @@ SERVICES = [
 # misconfigured remote endpoint can't quietly exfiltrate. Default-DENY remote,
 # consistent with the localhost-bind / sandbox / edge_tts posture.
 
-_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "ip6-localhost", ""}
+def host_of(base_url: str) -> str:
+    """Parse the host out of a URL (with or without a scheme), normalized: stripped, lowercased,
+    trailing dot removed. "" when there is no host. urlparse handles userinfo/port/IPv6 brackets —
+    so `127.0.0.1@evil.com` yields `evil.com`, not `127.0.0.1` (the classic SSRF confusion)."""
+    try:
+        parsed = urlparse(base_url if "://" in (base_url or "") else f"//{base_url or ''}")
+        host = parsed.hostname or ""
+    except Exception:
+        return ""
+    return host.strip().lower().rstrip(".")
 
 
 def is_loopback_url(base_url: str) -> bool:
-    """True if `base_url` targets the local machine (loopback / unspecified host) — so sending
-    content there does NOT leave the box. Anything else (a LAN IP, a public host) is remote."""
-    host = (urlparse(base_url if "://" in (base_url or "") else f"//{base_url}").hostname or "")
-    host = host.strip().lower()
-    if host in _LOOPBACK_HOSTS or host.endswith(".localhost"):
+    """True ONLY if `base_url` PROVABLY targets the local machine, so sending content there does not
+    leave the box. Fails CLOSED — anything we can't prove is local is treated as remote. A single
+    reusable host classifier (also for sovereignty / TTS).
+
+    Classification (NO DNS resolution — an unrecognized name is remote):
+      • EMPTY input (no URL / unset) → local (the in-process case the caller already short-circuits).
+      • host parsed via `host_of` (handles userinfo/port/brackets). A NON-empty input that yields no
+        parseable host → remote (fail closed — e.g. a malformed bracketed IPv6).
+      • non-IP host → local ONLY if it is EXACTLY "localhost". A name that merely starts with
+        "127." or ends with ".localhost" (e.g. `127.0.0.1.evil.com`, `evil.localhost`) is a PUBLIC
+        DNS name and is REMOTE — this closes the Codex #1 bypass.
+      • IP literal → local iff `ipaddress` says `is_loopback` (covers 127.0.0.0/8 and ::1). An
+        IPv4-mapped IPv6 (`::ffff:127.0.0.1`) is local iff its embedded IPv4 is loopback.
+      • any parse failure → remote (fail closed)."""
+    if not (base_url or "").strip():
+        return True                           # genuinely no URL → in-process
+    host = host_of(base_url)
+    if host == "localhost":
         return True
-    return host.startswith("127.")            # all of 127.0.0.0/8 is loopback
+    if not host:
+        return False                          # non-empty input, no parseable host → fail closed
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False                          # a DNS name that isn't exactly "localhost" → remote
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped.is_loopback     # ::ffff:127.0.0.1 → judge by the embedded v4
+    return ip.is_loopback
 
 
 def _consent_on(*keys: str) -> bool:
@@ -112,13 +143,19 @@ def accelerator_status(probe: bool = True, timeout: float = 2.0) -> Dict[str, di
         base = getattr(CONFIG, url_attr, "") or ""
         model = getattr(CONFIG, model_attr, "") or ""
         configured = bool(base)
-        reachable = _reachable(base, timeout) if (configured and probe) else False
+        # The probe itself egresses (it GETs the URL, leaking source IP/UA). Codex #3: gate it with
+        # the SAME guard as content — a remote URL with no consent is NOT probed, so a misconfigured
+        # remote endpoint never sees a packet by default.
+        allowed, _why = egress_allowed(name, base)
+        reachable = _reachable(base, timeout) if (configured and probe and allowed) else False
         if not configured:
             status = "off (in-process)"
+        elif not allowed:
+            status = "remote — not probed (egress denied; set consent to probe)"
         elif reachable:
             status = "live"
         else:
             status = "unreachable → fallback"
         out[name] = {"configured": configured, "base_url": base, "model": model,
-                     "reachable": reachable, "status": status}
+                     "reachable": reachable, "egress_allowed": allowed, "status": status}
     return out
