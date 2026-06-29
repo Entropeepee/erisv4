@@ -173,7 +173,9 @@ class FractalField:
 
     def __init__(self, size: int = 64, params: Optional[PDEParams] = None, seed: int = 42):
         self.size = size
-        self.params = params or PDEParams()
+        # Codex #7: honor CONFIG.pde_dt for the timestep instead of always using the hardcoded
+        # PDEParams.dt. An explicitly-passed `params` still wins (callers that tuned dt themselves).
+        self.params = params if params is not None else PDEParams(dt=CONFIG.pde_dt)
         self.p = self.params
         self.step_count: int = 0
         self.wall_time_start: float = time.time()
