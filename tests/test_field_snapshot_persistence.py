@@ -12,7 +12,8 @@ import unittest
 import numpy as np
 
 from eris.memory.tiers import (
-    MemoryRecord, MediumTermMemory, LongTermMemory, _snapshot_from_list, _snapshot_to_list)
+    MemoryRecord, MediumTermMemory, LongTermMemory, _snapshot_from_list, _snapshot_to_list,
+    _snapshot_pair_from_lists)
 from eris.computation.activations import BVec
 
 
@@ -82,6 +83,38 @@ class TestValidation(unittest.TestCase):
         self.assertIsNone(_snapshot_to_list(None))
         self.assertIsNone(_snapshot_to_list(np.array([np.inf, 0.0], dtype=np.float32)))  # 1D+inf
         self.assertEqual(_snapshot_to_list(np.array([[1, 2], [3, 4]], np.float32)), [[1.0, 2.0], [3.0, 4.0]])
+
+
+class TestSnapshotPairConsistency(unittest.TestCase):
+    """Codex #7: phi/theta are validated independently, so a SHAPE-MISMATCHED pair both load as
+    non-None and DCR would compute on inconsistent geometry. A snapshot is only meaningful as a
+    matched grid — a mismatched pair must fall back to no-snapshot (embedding-only)."""
+
+    def test_mismatched_pair_falls_back_to_none_on_reload(self):
+        d = _rec(np.zeros((2, 2), np.float32), np.zeros((1, 1), np.float32)).to_dict()
+        self.assertIn("phi_snapshot", d)               # each side serialized fine individually
+        self.assertIn("theta_snapshot", d)
+        r = MemoryRecord.from_dict(d)
+        self.assertIsNone(r.phi_snapshot)              # but the mismatched PAIR is dropped
+        self.assertIsNone(r.theta_snapshot)
+
+    def test_matched_pair_survives(self):
+        phi, theta = np.zeros((4, 4), np.float32), np.ones((4, 4), np.float32)
+        r = MemoryRecord.from_dict(_rec(phi, theta).to_dict())
+        self.assertIsNotNone(r.phi_snapshot)
+        self.assertEqual(r.phi_snapshot.shape, r.theta_snapshot.shape)
+
+    def test_pair_helper_directly(self):
+        # mismatch → (None, None)
+        self.assertEqual(_snapshot_pair_from_lists([[1, 2], [3, 4]], [[1]]), (None, None))
+        # match → both restored
+        phi, theta = _snapshot_pair_from_lists([[1, 2], [3, 4]], [[5, 6], [7, 8]])
+        self.assertEqual(phi.shape, (2, 2))
+        self.assertEqual(theta.shape, (2, 2))
+        # a torn pair (one side missing) is NOT this fix's concern — the present side is kept
+        phi, theta = _snapshot_pair_from_lists([[1, 2], [3, 4]], None)
+        self.assertIsNotNone(phi)
+        self.assertIsNone(theta)
 
 
 if __name__ == "__main__":
