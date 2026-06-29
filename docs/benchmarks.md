@@ -43,6 +43,36 @@ export ERIS_BENCH_BASE_URL=http://localhost:11434/v1
 export ERIS_BENCH_MODEL=<your-local-model>     # e.g. the ~13GB model you run for Eris
 ```
 
+## Going faster with a cloud API (OpenRouter) — OPEN/general node only
+
+Local Ollama is the bottleneck: the hive makes ~18–21 calls **per question**, run one at a time.
+On a general (non-IP) node you can route to a cloud OpenAI-compatible endpoint for a big speed-up
+**and** to compare LLM choices. (Never on the IP/patent node — that one stays local, no keys, no
+egress; see `.env.example`.) Copy `.env.example` → `.env` (gitignored) or `set` these in your shell:
+
+```bash
+# datasets (removes the HF rate-limit warning)
+HF_TOKEN=hf_...
+
+# BARE arm → OpenRouter (swap the model to compare LLM choices)
+ERIS_BENCH_BASE_URL=https://openrouter.ai/api/v1
+ERIS_BENCH_MODEL=qwen/qwen-2.5-72b-instruct
+ERIS_BENCH_API_KEY=sk-or-...
+
+# HIVE (Eris arm) → OpenRouter via the gateway (fail-closed to local if the cloud is down)
+ERIS_GATEWAY_BASE_URL=https://openrouter.ai/api/v1
+ERIS_GATEWAY_API_KEY=sk-or-...
+ERIS_TIER_FREE=qwen/qwen-2.5-72b-instruct        # specialist reasoning model (real OpenRouter slug)
+ERIS_TIER_SYNTH=anthropic/claude-3.5-sonnet      # synthesis model
+ERIS_HIVE_SYNTH_CLOUD=1                           # route synthesis to the cloud too
+```
+
+The Eris arm prints, to stderr, **where** the hive routes (`GATEWAY (cloud)` vs `LOCAL Ollama`), so
+a fast/slow run is never a mystery. Tokens are metered the same way regardless of provider, so the
+equal-budget comparison stays honest — and an LLM-choice study is just re-running with a different
+model id. The gateway only activates when `ERIS_GATEWAY_BASE_URL` is set; sovereign work is never
+routed out.
+
 ## Run
 
 Bare arm (works once the model is served):

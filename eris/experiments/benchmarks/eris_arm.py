@@ -184,6 +184,21 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
     meter.attach_gateway(getattr(orch, "gateway", None))
     warned = {"proxy": False}
 
+    # Surface WHERE the hive's ~18-21 calls/question go, so it's never a mystery why a run is fast
+    # or slow. OPEN-sensitivity hive calls route to the gateway (e.g. OpenRouter) when
+    # ERIS_GATEWAY_BASE_URL is set, else to the local Ollama model. Sovereign work is never affected.
+    gw = getattr(orch, "gateway", None)
+    if gw is not None and getattr(gw, "enabled", False):
+        print(f"[eris-arm] hive model → GATEWAY (cloud) at "
+              f"{os.environ.get('ERIS_GATEWAY_BASE_URL', '?')} — tiers "
+              f"free={os.environ.get('ERIS_TIER_FREE', 'free-pool')} "
+              f"synth={os.environ.get('ERIS_TIER_SYNTH', 'synth')} "
+              f"(synth_cloud={os.environ.get('ERIS_HIVE_SYNTH_CLOUD', '0')})", file=sys.stderr)
+    else:
+        print(f"[eris-arm] hive model → LOCAL Ollama ({os.environ.get('ERIS_LOCAL_MODEL', 'gpt-oss:20b')})"
+              " — set ERIS_GATEWAY_BASE_URL/KEY + ERIS_TIER_* to route the hive to OpenRouter for speed.",
+              file=sys.stderr)
+
     def reset() -> None:
         _wipe_memory(orch)
 
