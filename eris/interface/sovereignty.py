@@ -78,17 +78,14 @@ def is_local_backend(backend: Any) -> bool:
 
 
 def _is_loopback_url(url: str) -> bool:
-    """Loopback / on-box host check for a backend base_url. Empty host (relative)
-    counts as local. Anything resolving to an external host does not."""
-    from urllib.parse import urlparse
-    try:
-        host = (urlparse(url).hostname or "").lower()
-    except Exception:
-        return False
-    if not host:
-        return True
-    return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0",
-                    "host.docker.internal"} or host.endswith(".local")
+    """Loopback / on-box host check for a backend base_url — delegated to the shared, fail-closed
+    classifier (Codex PR#94 #5). The old ad-hoc check treated `*.local` (mDNS), `0.0.0.0`, and
+    `host.docker.internal` as local, so a "local"-named LLM backend at e.g. `evil.local` passed the
+    sovereignty gate and prompts went off-box. The shared `is_loopback_url` admits only `localhost`
+    and genuine loopback IP literals (127.0.0.0/8, ::1); `.local` / docker.internal / a bare host
+    are now REMOTE → non-sovereign. (Empty/relative url still counts as local, as before.)"""
+    from eris.interface.accelerators import is_loopback_url
+    return is_loopback_url(url)
 
 
 def assert_backend_allowed(sensitivity: Any, backend: Any) -> None:

@@ -22,6 +22,14 @@ def _provider_speech(text: str, voice_id: str, CONFIG) -> Optional[bytes]:
     base = (CONFIG.tts_base_url or "").rstrip("/")
     if not base:
         return None
+    # Egress guard (Codex PR#94 #2): the speech text is the owner's content and is POSTed here
+    # BEFORE the edge_tts cloud guard. A REMOTE provider URL would ship raw text off-box — refuse
+    # unless consented and fall back (the edge_tts path keeps its own ERIS_TTS_ALLOW_CLOUD guard).
+    from eris.interface.accelerators import egress_allowed
+    ok, why = egress_allowed("tts", base)
+    if not ok:
+        logger.warning(f"[tts] {why} Not POSTing speech text to the provider; falling back.")
+        return None
     payload = {"model": CONFIG.tts_model or "tts", "input": text,
                "voice": voice_id or "default", "response_format": "wav"}
     data = _post_speech(f"{base}/audio/speech", payload, CONFIG.accel_timeout_s)
