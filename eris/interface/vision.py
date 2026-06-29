@@ -58,6 +58,12 @@ async def see(prompt: str, image_paths: List[str], *,
     base_url = base_url or os.environ.get("ERIS_VISION_BASE_URL", "").strip()
     if not base_url:
         raise RuntimeError("No vision server configured (set ERIS_VISION_BASE_URL).")
+    # Egress guard (r3 #10): the images are the owner's content (often IP). A REMOTE VLM URL would
+    # ship them off-box — refuse unless explicitly consented (no in-process fallback, so we raise).
+    from eris.interface.accelerators import egress_allowed
+    _ok, _why = egress_allowed("vision", base_url)
+    if not _ok:
+        raise RuntimeError(_why)
     model = model or os.environ.get("ERIS_VISION_MODEL", "vision")
     api_key = api_key or os.environ.get("ERIS_VISION_API_KEY", "local")
 

@@ -34,6 +34,12 @@ def transcribe(audio_bytes: bytes, *, filename: str = "audio.wav",
     base = (CONFIG.stt_base_url or "").rstrip("/")
     if not base:
         raise RuntimeError("No STT service configured (set ERIS_STT_BASE_URL).")
+    # Egress guard (r3 #10): the audio is the owner's content. A REMOTE STT URL would ship it
+    # off-box — refuse unless explicitly consented (STT has no in-process fallback, so we raise).
+    from eris.interface.accelerators import egress_allowed
+    _ok, _why = egress_allowed("stt", base)
+    if not _ok:
+        raise RuntimeError(_why)
     data = _post_audio(
         f"{base}/audio/transcriptions", audio_bytes, filename, content_type,
         CONFIG.stt_model or "whisper-base", CONFIG.accel_timeout_s)

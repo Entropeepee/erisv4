@@ -61,10 +61,12 @@ All eight landed on `main`; each Tier-3 item passed a real-server exploit re-run
 - ✓done **[#90]** Autonomous-loop cost guard — paid dream/condense path OFF by default + per-process
   ceiling + visible budget signal. *Verified by tracing the call is gated (0 paid calls / 5 default
   cycles), not just a passing test.*
-- ☐ **[Codex r3 #10]** Loopback-guard / loud-warn ALL "local" accelerator URLs — embed, rerank, STT,
-  VLM, *not just* edge_tts. A misconfigured remote URL exfiltrates IP content (config.py:211;
-  embeddings.py:177; hybrid.py:166; vision.py:72; stt.py:21). *(Carried forward — #89 covered only
-  edge_tts; the other accelerator URLs remain. Re-scope as a small follow-up.)*
+- ▶PR **[Codex r3 #10]** Loopback-guard ALL "local" accelerator URLs — embed, rerank, STT, VLM,
+  *not just* edge_tts. **DONE — PR #94:** shared `egress_allowed`/`is_loopback_url` in
+  `accelerators.py`; default-DENY remote unless `ERIS_ALLOW_REMOTE_<NAME>`/`ERIS_ALLOW_REMOTE_ACCEL`;
+  wired into embeddings (→ in-process fallback), rerank (→ RRF-only), STT + VLM (→ raise). Tests
+  cover loopback/remote detection, default-deny, consent scoping, no-network-on-refusal.
+  *Awaiting owner merge (no auto-merge).*
 
 ## Phase 1.5 — Memory integrity & durability · ▶ IN PROGRESS
 *Owner's own data — journals, research, field memory — must be trustworthy before any physics test
