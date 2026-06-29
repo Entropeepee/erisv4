@@ -100,14 +100,22 @@ def vram_free_gb() -> float:
     return float("inf")
 
 
+def _vram_cap_gb() -> float:
+    """The live VRAM cap. Codex #7: read it from CONFIG.vram_cap_gb (the documented knob, settable
+    at runtime / from ERIS_VRAM_CAP_GB) rather than only the import-time module constant."""
+    cfg = globals().get("CONFIG")
+    return float(getattr(cfg, "vram_cap_gb", VRAM_CAP_GB)) if cfg is not None else VRAM_CAP_GB
+
+
 def vram_check(needed_gb: float = 0.5) -> bool:
-    """Room for `needed_gb` more VRAM? Frees the pool first if tight."""
+    """Room for `needed_gb` more VRAM under the cap? Frees the pool first if tight. True on CPU."""
     _ensure_gpu()
     if not GPU_AVAILABLE:
         return True
-    if vram_used_gb() + needed_gb > VRAM_CAP_GB and mempool is not None:
+    cap = _vram_cap_gb()
+    if vram_used_gb() + needed_gb > cap and mempool is not None:
         mempool.free_all_blocks()
-    return vram_used_gb() + needed_gb <= VRAM_CAP_GB
+    return vram_used_gb() + needed_gb <= cap
 
 
 def to_numpy(arr) -> np.ndarray:
@@ -140,7 +148,7 @@ class ErisConfig:
 
     # PDE field
     field_size: int = 64             # NxN grid for FRACTAL PDE
-    pde_dt: float = 0.01             # PDE timestep
+    pde_dt: float = 0.05             # PDE timestep (the live FractalField default; now actually wired)
     pde_steps_per_input: int = 50    # How many PDE steps per text input
 
     # SGT gating

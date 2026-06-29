@@ -221,8 +221,9 @@ class ErisOrchestrator:
             thought_stream=self.thought_stream,
         )
 
-        # SGT gate for dissonance detection
-        self._dissonance_gate = SGTGate(threshold_sigma=2.0, ema_alpha=0.1)
+        # SGT gate for dissonance detection (Codex #7: honor the CONFIG knobs, not literals)
+        self._dissonance_gate = SGTGate(threshold_sigma=CONFIG.sgt_threshold_sigma,
+                                        ema_alpha=CONFIG.sgt_ema_alpha)
 
         # ── LLM Router configuration (Remediation Tier 0) ─────────────
         # Reasoning happens UPSTREAM in the field; the LLM only verbalizes the
@@ -296,7 +297,8 @@ class ErisOrchestrator:
 
         # Scale-adaptive gate for the deep path: opens only when |dC/dX| is a
         # statistical outlier relative to this engine's own running history.
-        self._router_gate = SGTGate(threshold_sigma=2.0, ema_alpha=0.1)
+        self._router_gate = SGTGate(threshold_sigma=CONFIG.sgt_threshold_sigma,
+                                    ema_alpha=CONFIG.sgt_ema_alpha)
 
         # Turn counter + last-turn dissonance (surfaced separately in vitals).
         self.turn_count: int = 0
@@ -392,6 +394,12 @@ class ErisOrchestrator:
         result.metadata["profile"] = prof.id
 
         # ── Layer 1: Seed and evolve the FRACTAL field ────────────────
+        # Codex #7: actually consult the VRAM cap before the field loop (the dominant in-process GPU
+        # consumer) — vram_check frees the pool if tight; a soft warn if still over (never blocks the
+        # turn). Makes ERIS_VRAM_CAP_GB / CONFIG.vram_cap_gb a live knob. No-op on CPU.
+        from eris.config import vram_check
+        if not vram_check():
+            print("[vram] over the VRAM cap even after freeing the pool — proceeding (soft guard).")
         self.field.seed_from_text(user_message, use_frt=self.use_frt_seeding)
         if CONFIG.orchestration_enabled and CONFIG.gate_field_depth:
             # Tier 2: evolve only as deep as needed — suspend once settled.
