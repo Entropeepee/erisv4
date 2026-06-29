@@ -77,21 +77,46 @@ def is_synthesis_task(query: str, named_sources: int = 0) -> bool:
     return bool(_SYNTH_MARKERS.search(query or ""))
 
 
-def verify_grounding(claim: dict, provided_sources) -> dict:
-    """Grounding check UNDER the calibration labels: a claim may be tier
-    'fact'/'grounded' ONLY if the source it cites actually exists in the material
-    we were given. Honest retrieval is a precondition for an honest label — this
-    is the organ behind the confabulation (a 'directly grounded' table citing a
-    source found nowhere in the input). Mutates and returns the claim dict.
+def verify_grounding(claim: dict, provided_sources, *, source_texts=None, model=None) -> dict:
+    """Grounding check UNDER the calibration labels. Two levels, both required for a 'fact':
 
-    `provided_sources` is the set/collection of real source ids actually present
-    (document section ids, retrieved memory ids, or reviewed thought ids)."""
+      1. RESOLUTION — the cited source id must actually exist in the material we were given.
+         (A 'directly grounded' table citing a source found nowhere in the input is the
+         confabulation this organ was built to catch.)
+      2. SUBSTANCE — resolution is NOT support. When the cited source TEXT and a `model` are
+         provided, run QUOTE-AND-VERIFY (eris.reasoning.grounding.judge_claim): a 'fact' must be
+         SUPPORTED by a span that actually occurs in its source, else it is demoted. This closes
+         the false-confidence gap where a fabrication carrying a live citation id was kept as
+         'fact' merely because the id resolved.
+
+    Mapping: SUPPORTED → 'fact'; INFERRED → its own 'inference' tier carrying the verified spans +
+    one-line reason as `provenance`; UNSUPPORTED/CONTRADICTED → 'speculation' (never canonized).
+
+    `provided_sources` is the set/collection of real source ids actually present (document section
+    ids, retrieved memory ids, reviewed thought ids). `source_texts` maps those ids → the source
+    text; `model(prompt)->text` is the local judge. When text/model are absent the check degrades
+    to resolution-only (the old behavior) — callers on the live path SHOULD pass both. Mutates and
+    returns the claim dict."""
     allowed = set(provided_sources or [])
-    if claim.get("tier") in ("fact", "grounded"):
-        sid = claim.get("source_id")
-        if sid is None or sid not in allowed:
+    if claim.get("tier") not in ("fact", "grounded"):
+        return claim
+    sid = claim.get("source_id")
+    if sid is None or sid not in allowed:                  # (1) resolution
+        claim["tier"] = "speculation"
+        claim["note"] = "cited source not found in provided material — demoted"
+        return claim
+    src_text = (source_texts or {}).get(sid)
+    if model is not None and src_text:                     # (2) substance — quote-and-verify
+        from eris.reasoning.grounding import judge_claim
+        v = judge_claim(str(claim.get("text", "")), str(src_text), model)
+        if v.label == "SUPPORTED":
+            claim["tier"] = "fact"
+        elif v.label == "INFERRED":
+            claim["tier"] = "inference"
+            claim["provenance"] = v.provenance()
+        else:
             claim["tier"] = "speculation"
-            claim["note"] = "cited source not found in provided material — demoted"
+            claim["note"] = f"cited source does not support the claim ({v.label}) — demoted"
     return claim
 
 
