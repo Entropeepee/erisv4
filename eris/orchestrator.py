@@ -919,6 +919,11 @@ class ErisOrchestrator:
                 # instead of whichever chunks happen to contain the doc name (often tail-end code).
                 # With hashed (non-semantic) embeddings dense ranking is noise → pure BM25.
                 qe = get_embedding(query) if is_semantic() else None
+                # Source budget. scope=doc is a READ-THE-DOCUMENT task — for a short passage the
+                # hive should see (nearly) the WHOLE thing, not 6 fragments of it. Default stays 6
+                # (focused/cheap live turns + the tuned named-doc path); the benchmark raises
+                # ERIS_HIVE_MAX_SOURCES so a ~5k-word QuALITY story is read whole, not RAG'd to 6.
+                _max_src = int(os.environ.get("ERIS_HIVE_MAX_SOURCES") or 6)
                 lead = []
                 if document or scope == "doc":
                     q = document or query
@@ -926,7 +931,8 @@ class ErisOrchestrator:
                         # scope=doc: pull MANY of the named doc's chunks (a paper is ~20 chunks),
                         # ranked by the QUESTION, so summary/prior-art sections enter the pool and
                         # the hive/resonance can pick them — not just the first 6 name-matches.
-                        n_doc = 16 if scope == "doc" else 6
+                        n_doc = max(int(os.environ.get("ERIS_HIVE_DOC_CHUNKS")
+                                        or (16 if scope == "doc" else 6)), _max_src)
                         lead = list(self.memory.documents_matching(
                             q, max_chunks=n_doc, query_embedding=qe))
                     if scope == "doc":
@@ -952,7 +958,8 @@ class ErisOrchestrator:
                         _index_cache[len(recs)] = idx
                     ranked = hybrid_search(query, index=idx, query_embedding=qe, top_k=16)
                 else:
-                    ranked = hybrid_search(query, recs, query_embedding=qe, top_k=16)
+                    ranked = hybrid_search(query, recs, query_embedding=qe,
+                                           top_k=max(16, _max_src))
                 # id()-based membership, NOT `h not in lead`: MemoryRecord is a dataclass whose
                 # __eq__ compares its numpy embedding/bvec fields → an array truth value →
                 # "ambiguous" ValueError. That crash silently emptied EVERY named-doc/scope=doc
@@ -967,7 +974,7 @@ class ErisOrchestrator:
                     key = " ".join(t.lower().split())[:300]   # wider key → fewer false dedups
                     if key and key not in seen:
                         seen.add(key); cands.append(t[:1400])
-                    if len(cands) >= 12:
+                    if len(cands) >= max(12, _max_src):
                         break
                 # Named-doc chunks LEAD (so a named paper is seen first), but resonance
                 # (κ cos + λ sin/torsion) ranks BOTH groups internally — otherwise scope=doc
@@ -975,7 +982,7 @@ class ErisOrchestrator:
                 # order, defeating the resonance design for the flagship "read this paper" path.
                 led = _rerank([t for t in cands if t in lead_text])
                 rest = _rerank([t for t in cands if t not in lead_text])
-                return (led + rest)[:6]
+                return (led + rest)[:_max_src]
             except Exception as e:
                 import traceback
                 _log(f"_rag FAILED ({type(e).__name__}: {e}) — returning 0 sources")
