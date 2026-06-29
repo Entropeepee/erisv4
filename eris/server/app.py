@@ -38,7 +38,7 @@ except ImportError:
     HAS_FASTAPI = False
 
 from eris.orchestrator import ErisOrchestrator
-from eris.sandbox.executor import SandboxExecutor
+from eris.sandbox.executor import SandboxExecutor, endpoint_guard as _sandbox_endpoint_guard
 from eris.knowledge.extractor import KnowledgeExtractor
 from eris.interface.tts import TTSEngine
 from eris.server.system_stats import get_system_stats
@@ -570,13 +570,15 @@ def create_app(
         return {"questions": orchestrator.drain_pending_questions()}
 
     async def _run_sandbox(req: SandboxRequest):
-        # B2: when the instance is potentially exposed (an auth token is set), the
-        # subprocess sandbox is OFF unless explicitly enabled — exposed use should
-        # require docker-or-refuse. Local-only use (no token) keeps subprocess.
-        if _auth_token and os.environ.get("ERIS_SANDBOX_ENABLED", "0").lower() in ("0", "", "off", "false"):
-            return JSONResponse(
-                {"error": "sandbox disabled on a token-protected instance; "
-                          "set ERIS_SANDBOX_ENABLED=1 to allow it"}, status_code=403)
+        # Default-DENY, INDEPENDENT of the auth token. The old gate only blocked when a token was set,
+        # so a default no-token box left arbitrary code execution ON to any caller (unauth file
+        # read/write/exec — the verified CRITICALs). The endpoint now runs only when explicitly
+        # enabled AND under docker isolation (the validator is not a security boundary; host
+        # subprocess is not isolation) unless an acknowledged subprocess opt-in is set. See
+        # eris.sandbox.executor.endpoint_guard.
+        _deny = _sandbox_endpoint_guard(sandbox.mode)
+        if _deny:
+            return JSONResponse({"error": _deny}, status_code=403)
         # B6: clamp the user-supplied timeout (no unbounded runs).
         timeout = max(1, min(int(req.timeout or 60), 300))
         # Off the event loop — the subprocess/Docker run is blocking.

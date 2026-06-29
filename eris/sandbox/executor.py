@@ -59,6 +59,42 @@ class ExecutionResult:
     blocked_reason: str = ""
 
 
+# A minimal, SCRUBBED environment for subprocess execution — sandboxed code must NEVER inherit the
+# host's secrets (API keys, ERIS_AUTH_TOKEN, …). Only PATH/PYTHONPATH (so Eris's own libs still
+# import for her self-experiments) and a few hygiene vars pass through.
+_SUBPROCESS_ENV_PASS = ("PATH", "PYTHONPATH", "LD_LIBRARY_PATH", "LANG", "LC_ALL")
+
+
+def _subprocess_env(workspace_dir: str) -> Dict[str, str]:
+    env = {k: os.environ[k] for k in _SUBPROCESS_ENV_PASS if k in os.environ}
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["HOME"] = workspace_dir
+    env["TMPDIR"] = workspace_dir
+    return env
+
+
+def endpoint_guard(mode: "ExecutionMode", env: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Decide whether the REACHABLE /sandbox endpoint may run. Returns None to allow, else a refusal
+    reason. Default-DENY INDEPENDENT of any auth token — the old gate only blocked when a token was
+    set, so the default no-token box left arbitrary code execution ON to any caller. The endpoint
+    additionally requires docker isolation (the regex/AST validator is NOT a security boundary, and a
+    host subprocess is not isolation) unless an explicit, acknowledged opt-in is set for trusted
+    localhost-only use."""
+    env = os.environ if env is None else env
+
+    def _on(k: str) -> bool:
+        return env.get(k, "").strip().lower() in ("1", "on", "true", "yes")
+
+    if not _on("ERIS_SANDBOX_ENABLED"):
+        return ("sandbox disabled (default-deny). Set ERIS_SANDBOX_ENABLED=1 to allow it; prefer "
+                "ERIS_SANDBOX_MODE=docker for isolation (the validator is not a security boundary).")
+    if mode != ExecutionMode.DOCKER and not _on("ERIS_SANDBOX_ALLOW_SUBPROCESS"):
+        return ("sandbox endpoint requires docker isolation (set ERIS_SANDBOX_MODE=docker). Host "
+                "subprocess is NOT a security boundary; set ERIS_SANDBOX_ALLOW_SUBPROCESS=1 only for "
+                "trusted localhost-only use.")
+    return None
+
+
 class SandboxExecutor:
     """Execute Python code in isolation.
 
@@ -152,10 +188,9 @@ class SandboxExecutor:
                 text=True,
                 timeout=timeout,
                 cwd=self.workspace_dir,
-                env={
-                    **os.environ,
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                },
+                # SCRUBBED env — do NOT inherit the host's secrets (API keys, ERIS_AUTH_TOKEN). Even
+                # in subprocess mode the sandboxed code must not be able to read os.environ secrets.
+                env=_subprocess_env(self.workspace_dir),
             )
             duration = (time.time() - t0) * 1000
 
@@ -201,11 +236,17 @@ class SandboxExecutor:
             proc = subprocess.run(
                 [
                     "docker", "run", "--rm",
-                    "--network=none",              # No network
-                    "--memory=2g",                  # 2GB RAM limit
-                    "--cpus=2",                     # 2 CPU cores max
-                    "-v", f"{self.workspace_dir}:/workspace:rw",
+                    "--network=none",               # no network
+                    "--memory=2g", "--cpus=2",      # RAM + CPU limits
+                    "--pids-limit=128",             # fork-bomb guard
+                    "--read-only",                  # read-only root filesystem
+                    "--tmpfs", "/tmp:rw,size=256m", # writable scratch ONLY in a capped tmpfs
+                    "--cap-drop=ALL",               # drop every Linux capability
+                    "--security-opt=no-new-privileges",
+                    "--user", "65534:65534",        # nobody:nogroup — non-root
+                    "-v", f"{self.workspace_dir}:/workspace:ro",   # code mounted READ-ONLY
                     "-w", "/workspace",
+                    "-e", "PYTHONDONTWRITEBYTECODE=1",
                     "python:3.11-slim",
                     "python", "/workspace/_sandbox_exec.py",
                 ],
