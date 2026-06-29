@@ -198,11 +198,22 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
     # ERIS_GATEWAY_BASE_URL is set, else to the local Ollama model. Sovereign work is never affected.
     gw = getattr(orch, "gateway", None)
     if gw is not None and getattr(gw, "enabled", False):
-        print(f"[eris-arm] hive model → GATEWAY (cloud) at "
-              f"{os.environ.get('ERIS_GATEWAY_BASE_URL', '?')} — tiers "
-              f"free={os.environ.get('ERIS_TIER_FREE', 'free-pool')} "
-              f"synth={os.environ.get('ERIS_TIER_SYNTH', 'synth')} "
-              f"(synth_cloud={os.environ.get('ERIS_HIVE_SYNTH_CLOUD', '0')})", file=sys.stderr)
+        # VISIBLE PROOF of attributability: the EFFECTIVE model each hive component uses (not the
+        # raw env var). With synth_cloud off, synthesis REUSES the specialist/free model
+        # (research.py: `synth = synth_model or model`), so we must show the free model for synth —
+        # otherwise the header lies. If specialists, synth, and the bare arm aren't the SAME model,
+        # the run is NOT attributable and we say so loudly.
+        _free = os.environ.get("ERIS_TIER_FREE", "free-pool")
+        _synth_cloud = os.environ.get("ERIS_HIVE_SYNTH_CLOUD", "0").strip().lower() in (
+            "1", "on", "true", "yes")
+        _synth = os.environ.get("ERIS_TIER_SYNTH", "synth") if _synth_cloud else _free
+        _bare = os.environ.get("ERIS_BENCH_MODEL", "?")
+        _one = (_free == _synth == _bare)
+        _verdict = ("✓ ATTRIBUTABLE — one model everywhere" if _one else
+                    "✗ MISMATCH — NOT attributable (different models in different slots)")
+        print(f"[eris-arm] hive → GATEWAY {os.environ.get('ERIS_GATEWAY_BASE_URL', '?')} | "
+              f"specialists+gaps={_free} | synth={_synth} | bare={_bare} | {_verdict}",
+              file=sys.stderr)
     else:
         print(f"[eris-arm] hive model → LOCAL Ollama ({os.environ.get('ERIS_LOCAL_MODEL', 'gpt-oss:20b')})"
               " — set ERIS_GATEWAY_BASE_URL/KEY + ERIS_TIER_* to route the hive to OpenRouter for speed.",
