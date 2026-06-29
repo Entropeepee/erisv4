@@ -96,6 +96,12 @@ For each question it splits the provided SOURCE back out, ingests it into a **sc
 (`web_reader.ingest_text(..., title="bench")`), runs the hive over just that document
 (`hive_research(q, scope="doc", document="bench")`), and returns `(synthesis, real_tokens)`.
 
+It reads the **whole short passage**, not 6 fragments of it. A grounded QuALITY/FRAMES document is
+provided in full and the question is about the *whole* narrative ("why does X feel Y"), which is a
+read-the-passage task, not a 6-chunk RAG task. So the arm sets `ERIS_HIVE_MAX_SOURCES=50` (override
+to taste), feeding the hive (nearly) the entire document instead of the focused-6 default tuned for
+live chat turns. You'll see `retrieved N source(s)` with N covering the doc, not a constant 6.
+
 After the hive synthesizes, the arm runs ONE grounded **extraction** call ("using only this
 analysis, answer the task in its required form") so Eris emits a **short, scorable answer** (a
 name/number/date, or a single option letter) instead of a 1500-char essay — otherwise exact-match

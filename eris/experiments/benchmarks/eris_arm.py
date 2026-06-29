@@ -166,6 +166,11 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
     # Force-disable autonomous side-effects BEFORE the orchestrator is built.
     os.environ["ERIS_ROUTE_GAPS"] = "0"
     os.environ["ERIS_SYNTHESIS_WRITEBACK"] = "0"
+    # READ THE WHOLE PASSAGE, don't RAG 6 fragments of it. A grounded benchmark provides the full
+    # short document (a ~5k-word QuALITY story is ~17 chunks) and asks a whole-narrative question —
+    # so feed the hive (nearly) all of it, not the focused-6 default tuned for live turns. setdefault
+    # so an explicit override still wins.
+    os.environ.setdefault("ERIS_HIVE_MAX_SOURCES", "50")
 
     import asyncio
     from eris.orchestrator import ErisOrchestrator
