@@ -907,6 +907,12 @@ def create_app(
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         """WebSocket for real-time metrics streaming."""
+        # Auth BEFORE accept(): the HTTP auth middleware never runs for the websocket scope, so
+        # without this in-endpoint check the token gate is bypassed entirely (the verified vitals leak).
+        from eris.server.ws_guard import ws_authorized as _ws_authorized
+        if not _ws_authorized(_auth_token, websocket):
+            await websocket.close(code=1008)        # policy violation
+            return
         await websocket.accept()
         # B6: cap concurrent metric sockets so they can't grow without bound.
         _ws_cap = int(os.environ.get("ERIS_WS_MAX", "32"))
@@ -937,6 +943,14 @@ def create_app(
     async def websocket_field_endpoint(websocket: WebSocket, agent: str = "eris"):
         """Send-only field stream for a node (WILLOW I.10): /ws/field?agent=willow
         streams that node's mind. Defaults to eris (the existing cockpit viz)."""
+        # Auth BEFORE accept() (middleware never runs for the websocket scope) — this socket leaks
+        # the live patent-IP cognitive field, so it must be gated in-endpoint.
+        from eris.server.ws_guard import ws_authorized as _ws_authorized, sanitize_field_agent
+        if not _ws_authorized(_auth_token, websocket):
+            await websocket.close(code=1008)
+            return
+        # Whitelist the agent param so it can't probe arbitrary node names (node-enumeration leak).
+        agent = sanitize_field_agent(agent, os.environ.get("ERIS_WS_FIELD_AGENTS", ""))
         await websocket.accept()
         from eris.config import to_numpy
         node = registry.get(agent)
