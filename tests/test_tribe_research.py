@@ -127,6 +127,30 @@ class TestTribeResearch(unittest.TestCase):
         self.assertEqual(ts.get(res.thought_id).topic, "emergence")
         self.assertGreaterEqual(res.faithfulness.get("faithful", 0), 1)
 
+    def test_uncited_sentence_does_not_ride_into_fact_via_a_cited_one(self):
+        # Codex #1 pass-through repro: a supported, cited sentence + an UNCITED factual claim.
+        # Only the cited+supported sentence may be canonized; the uncited cost claim must NOT reach
+        # fact-tier memory just because the other sentence resolved. The full synthesis stays visible.
+        path = os.path.join(tempfile.mkdtemp(), "t.jsonl")
+        ts = ThoughtStream(path=path)
+
+        def retriever(query):
+            return ["X moved twelve shards during the migration."]
+
+        two = "X moved twelve shards [s:0]. It also cut costs by 40%."
+        res = run_two_cycle_research("migration", retriever=retriever,
+                                     model=_model_with_faithful_judge(two),
+                                     specialists=TRIBE[:2], goal_bvec=GOAL, thought_stream=ts)
+        self.assertIsNotNone(res.thought_id)                 # sentence 1 canonized
+        stored = ts.get(res.thought_id).text
+        self.assertIn("twelve shards", stored)               # the supported, cited claim is in fact
+        self.assertNotIn("cut costs", stored)                # the uncited claim is NOT
+        self.assertNotIn("cut costs", res.synthesis_canon)   # nor in the fact-safe subset
+        self.assertIn("cut costs", res.synthesis)            # but the FULL synthesis stays visible
+        # whole-synthesis metric: 1 supported (cited) + 1 unsupported (uncited)
+        self.assertEqual(res.faithfulness.get("supported"), 1)
+        self.assertEqual(res.faithfulness.get("unsupported"), 1)
+
     def test_resolving_but_unsupported_synthesis_is_not_canonized(self):
         # THE hive false-confidence fix: the citation [s:0] RESOLVES, but the judge finds no
         # supporting span (it returns UNSUPPORTED) → NOT canonized, though still returned.

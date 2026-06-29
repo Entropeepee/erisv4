@@ -1090,6 +1090,7 @@ class ErisOrchestrator:
                     "n_sources": res.n_sources, "stripped_claims": res.stripped_claims,
                     "cycles": res.cycles, "canonized": res.thought_id is not None,
                     "faithfulness": res.faithfulness,   # quote-and-verify substance metric (Phase-3)
+                    "synthesis_canon": res.synthesis_canon,   # fact-safe subset (only this -> LTM)
                     "sources": res.sources, "sensitivity": str(sens.value),
                     "tier_calls": dict(run_costs),   # per-tier call counts + paid (per-run, no race)
                     # OUTCOME measures (graded by hive_ab, not tautologies)
@@ -1151,11 +1152,23 @@ class ErisOrchestrator:
         # memory that outranks the raw chunks it summarized — she retrieves what she LEARNED, not
         # a re-derivation. Gated by ERIS_SYNTHESIS_WRITEBACK (default on) so the offline A/B
         # harness never writes into the live store. Best-effort, never fatal.
-        if (syn and result.get("canonized")
+        # IMPORTANT: write back only the fact-safe SUBSET (synthesis_canon — the SUPPORTED/INFERRED
+        # sentences), NOT the full synthesis. Otherwise uncited/unsupported sentences would ride
+        # into fact-tier memory alongside the grounded ones (the quote-and-verify pass-through hole).
+        canon = (result.get("synthesis_canon") or "").strip()
+        if (canon and result.get("canonized")
                 and os.environ.get("ERIS_SYNTHESIS_WRITEBACK", "1") not in ("0", "off", "false")):
             try:
+                # embed the canon subset (reuse syn_emb only if it IS the full synthesis verbatim)
+                canon_emb = syn_emb if (canon == syn and syn_emb is not None) else None
+                if canon_emb is None:
+                    try:
+                        from eris.knowledge.embeddings import get_embedding
+                        canon_emb = get_embedding(canon)
+                    except Exception:
+                        canon_emb = None
                 wb = self.memory.write_back_synthesis(
-                    result.get("topic", topic), syn, embedding=syn_emb,
+                    result.get("topic", topic), canon, embedding=canon_emb,
                     n_sources=int(result.get("n_sources", 0) or 0))
                 result["synthesis_written_back"] = str(getattr(wb, "source", ""))
             except Exception:

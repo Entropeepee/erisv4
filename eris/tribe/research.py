@@ -42,21 +42,39 @@ def _cited_ids(text: str) -> set:
     return ids
 
 
-def _claim_source_pairs(grounded_text: str, sources: List[str]) -> List[tuple]:
-    """Split a grounded synthesis into (sentence, cited-source-text) pairs for the SUBSTANCE check
-    (quote-and-verify). Only sentences that cite a resolvable [s:i] are scored — an uncited
-    sentence is honest framing / a negative finding, not a grounded factual claim, so it is not
-    judged (mirrors _ground_citations' keep rule). A sentence's source is the concatenation of the
-    source texts it actually cites."""
-    pairs = []
+def _faithful_canon(grounded_text: str, sources: List[str], judge) -> tuple:
+    """The SUBSTANCE gate (quote-and-verify), scored over the WHOLE synthesis — every sentence, not
+    just the cited ones. This closes the pass-through hole: previously only cited sentences were
+    judged and the WHOLE grounded blob was canonized if any one of them was supported, so an
+    uncited or unsupported sentence rode into fact-tier memory alongside a single good citation.
+
+    Per sentence:
+      • a sentence citing a resolvable [s:i] is judged against its cited source(s);
+      • an UNCITED sentence has NO source to verify against → it cannot be a fact (UNSUPPORTED).
+
+    Returns (canon_text, faith_metric). `canon_text` is ONLY the SUPPORTED / INFERRED-with-verified-
+    span sentences joined — the subset safe to write to fact-tier memory. Uncited or unsupported
+    sentences are DROPPED from canon (they remain in the VISIBLE synthesis for inspection, but never
+    enter LTM as fact). `faith_metric` is computed over ALL sentences, so it reflects the whole
+    synthesis, not the cited subset."""
+    from eris.reasoning.grounding import judge_claim, faithfulness as _faithfulness, ClaimVerdict
     allowed = set(range(len(sources)))
+    verdicts, canon = [], []
     for sent in re.split(r"(?<=[.!?])\s+", grounded_text or ""):
-        ids = _cited_ids(sent) & allowed
-        if not ids:
+        s = sent.strip()
+        if not s:
             continue
-        src = "\n\n".join(sources[i] for i in sorted(ids))
-        pairs.append((sent.strip(), src))
-    return pairs
+        ids = _cited_ids(s) & allowed
+        if ids:
+            src = "\n\n".join(sources[i] for i in sorted(ids))
+            v = judge_claim(s, src, judge)
+        else:                                       # no citation → no source → cannot be a fact
+            v = ClaimVerdict(claim=s, label="UNSUPPORTED",
+                             reason="uncited sentence — no source to verify against")
+        verdicts.append(v)
+        if v.is_faithful:                           # SUPPORTED or INFERRED with a verified span
+            canon.append(s)
+    return " ".join(canon).strip(), _faithfulness(verdicts)
 
 
 # Content-word helper for OUTCOME metrics (specialist divergence, gap closure, Elos edit).
@@ -104,10 +122,13 @@ class ResearchResult:
     specialist_divergence: float = 0.0   # 1 − mean pairwise content-word Jaccard over cycle-1
     gaps_closed: int = 0                 # named gaps a cycle-2 finding genuinely addressed
     elos_changed: bool = False           # did the synthesis change from cycle-1 to final
-    # SUBSTANCE (quote-and-verify): the Phase-3 faithfulness metric over the canonized synthesis —
+    # SUBSTANCE (quote-and-verify): the Phase-3 faithfulness metric over the WHOLE synthesis —
     # {n, faithful, faithfulness, hallucination_rate, supported/inferred/unsupported/contradicted}.
-    # Empty {} when the gate didn't run (no thought_stream / nothing resolved).
+    # Empty {} when the gate didn't run (no grounded text).
     faithfulness: dict = field(default_factory=dict)
+    # The fact-tier-safe SUBSET actually canonized (only SUPPORTED/INFERRED sentences). This — NOT
+    # the full `synthesis` — is what may be written back to LTM as fact. "" when nothing qualified.
+    synthesis_canon: str = ""
 
 
 def _format_sources(sources: List[str], digester: Optional[Callable[[str], List[str]]] = None
@@ -488,35 +509,39 @@ def run_two_cycle_research(
                     if not f.metadata.get("echo") and not f.metadata.get("empty")}
 
     # SUBSTANCE GATE (quote-and-verify): citation RESOLUTION (resolved >= 1) is necessary but NOT
-    # sufficient — a fabrication carrying a live [s:i] resolves yet states nothing the source backs.
-    # Before canonizing, judge each cited sentence against its source: a synthesis is canon-worthy
-    # only if at least ONE cited claim is genuinely SUPPORTED/INFERRED by a span that occurs in the
-    # source. This is the SAME scorer as the Phase-3 faithfulness metric (one definition, two uses).
-    # The synthesis text stays visible either way; only canonization to long-term memory is gated.
+    # sufficient, and it must hold PER SENTENCE — not blanket the whole synthesis. We canonize only
+    # the sentences that are individually SUPPORTED/INFERRED by a span in their cited source; an
+    # uncited or unsupported sentence is dropped from the canon (stays visible, never enters fact-
+    # tier memory). `canon_text` is what gets written to LTM; `faith` is the whole-synthesis metric
+    # (the SAME scorer as the Phase-3 faithfulness metric — one definition, two uses). DEFAULT keeps
+    # unsupported sentences OUT of fact entirely (a future option could re-admit them as speculation
+    # with provenance). The full synthesis stays visible for inspection either way.
     faith: dict = {}
-    if faithfulness_gate and grounded and resolved >= 1:
-        from eris.reasoning.grounding import score_claims, faithfulness as _faithfulness
-        pairs = _claim_source_pairs(grounded, all_sources)
-        if pairs:
-            faith = _faithfulness(score_claims(pairs, judge))
-            _log(f"faithfulness: {faith['faithful']}/{faith['n']} claims supported "
-                 f"(hallucination_rate={faith['hallucination_rate']})")
-    # Canon-worthy = resolves AND (gate off OR at least one claim genuinely supported).
-    substance_ok = (not faithfulness_gate) or (faith.get("faithful", 0) >= 1)
+    canon_text, canon_ok = "", False                 # defaults for the empty-synthesis case
+    if faithfulness_gate and grounded:
+        canon_text, faith = _faithful_canon(grounded, all_sources, judge)
+        canon_ok = bool(canon_text)
+        if faith.get("n"):
+            _log(f"faithfulness: {faith['faithful']}/{faith['n']} sentences supported "
+                 f"(hallucination_rate={faith['hallucination_rate']}); "
+                 f"canon {len(canon_text)} of {len(grounded)} chars")
+    else:                                            # gate off → preserve the old whole-blob behavior
+        canon_text = grounded
+        canon_ok = resolved >= 1
 
     thought_id = None
-    if thought_stream is not None and grounded and resolved >= 1 and substance_ok:
+    if thought_stream is not None and grounded and canon_ok:
         try:
             from eris.memory.thought_stream import link_and_store
             # store WITH a semantic embedding (else thought_stream.retrieve skips it and the
             # canonized synthesis is invisible to introspection/retrospection)
-            emb = embed_fn(grounded) if embed_fn else None
-            t = link_and_store(thought_stream, topic, regime, grounded, embedding=emb)
+            emb = embed_fn(canon_text) if embed_fn else None
+            t = link_and_store(thought_stream, topic, regime, canon_text, embedding=emb)
             thought_id = getattr(t, "id", None)
         except Exception:
             thought_id = None
-    elif thought_stream is not None and grounded and resolved >= 1 and not substance_ok:
-        _log("NOT canonized — citations resolve but no claim is substantively supported "
+    elif thought_stream is not None and grounded and not canon_ok:
+        _log("NOT canonized — no sentence is substantively supported by its cited source "
              "(quote-and-verify); returned for inspection only")
 
     return ResearchResult(
@@ -529,4 +554,5 @@ def run_two_cycle_research(
         n_active=len(active), stripped_claims=stripped,
         elos_critique=elos_critique, cycles=2 if gaps else 1,
         specialist_divergence=specialist_divergence, gaps_closed=gaps_closed,
-        elos_changed=elos_changed, faithfulness=faith)
+        elos_changed=elos_changed, faithfulness=faith,
+        synthesis_canon=(canon_text if canon_ok else ""))
