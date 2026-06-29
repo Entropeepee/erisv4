@@ -33,7 +33,9 @@ import numpy as np
 #   λ ("torsion", KLSE sense) = the SINE / perpendicular channel → θ (phase; context;
 #       *how* it's said). THIS is "the sine that is usually discarded."
 #   τ (tau) = the twist/discrepancy between the κ and λ channels (NOT computed here; the
-#       field-PDE τ is the vorticity ∇ρ×∇θ, defined in knowledge/frontends.py).
+#       field-PDE τ is the vorticity ∇ρ×∇θ, defined in knowledge/frontends.py, and now computed
+#       by the PDE/FRT by default — set ERIS_TAU_VORTICITY=0 to reach the legacy amplitude-Laplacian
+#       proxy for comparison).
 #   tan = sin/cos = λ/κ = the torsion-to-curvature RATIO — a derived DIAGNOSTIC, not
 #       torsion itself (tan<1 curvature-dominated, tan>1 torsion-dominated, tan≈1 the 45°
 #       critical transition). "Is torsion the tangent?" No — torsion is the sine channel λ;
