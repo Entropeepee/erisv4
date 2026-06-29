@@ -67,10 +67,11 @@ def wrap_diff(a_nbr, a):
 # historically shipped a cheap proxy (Laplacian of the amplitude), which ignores phase entirely and
 # discards the signed/chiral information that makes τ a distinct third channel (an ablation in the
 # resonant-transfer-engine work measured ~28x better rotational/irrotational separation for the
-# vorticity, 20.5 vs 0.73). ERIS_TAU_VORTICITY switches the PDE/FRT onto the canonical vorticity;
-# default OFF for now so behavior is unchanged until the bvec shift is reviewed (the choice is
-# surfaced, not buried).
-_TAU_VORTICITY = os.environ.get("ERIS_TAU_VORTICITY", "0").strip().lower() in ("1", "on", "true", "yes")
+# vorticity, 20.5 vs 0.73). The proxy was also DEGENERATE in practice: it pinned bvec C≈1.0 for
+# every text (a constant wearing a variable's name), while the vorticity gives a content-varying
+# C≈0.38–0.49. Default is now ON (canonical vorticity); set ERIS_TAU_VORTICITY=0 to reach the
+# legacy Laplacian proxy for comparison.
+_TAU_VORTICITY = os.environ.get("ERIS_TAU_VORTICITY", "1").strip().lower() in ("1", "on", "true", "yes")
 
 
 def _vorticity(rho, theta):
