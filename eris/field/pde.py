@@ -62,6 +62,20 @@ def wrap_diff(a_nbr, a):
     return xp.angle(xp.exp(1j * (a_nbr - a)))
 
 
+def _soft_clamp(x, lo: float, hi: float, k: float = 40.0):
+    """Bound φ into [lo, hi] with a SOFT amplitude CEILING (the handoff's Domain-6 boundary) and a
+    hard non-negativity FLOOR. The ceiling is softplus-smoothed (C¹): ~identity inside the band,
+    saturating gently near `hi` with NO gradient kink — so the saturation contour no longer injects a
+    spurious edge into τ, and φ stays strictly below `hi` (the IBT pole is never reached). The floor
+    is a plain max(·, lo): φ is a non-negative coherence amplitude (a hard physical constraint, not a
+    tunable boundary), and it bites only in a quiescent region where the field is ~flat and τ≈0, so
+    it dirties nothing — and it lets an unseeded field decay genuinely to lo, not float on a soft
+    offset. `k` sets the ceiling sharpness."""
+    x = xp.maximum(x, lo)                                          # hard non-negativity floor
+    sp = xp.logaddexp(xp.asarray(0.0, dtype=x.dtype), k * (hi - x)) / k   # softplus(k·(hi−x))/k
+    return hi - sp                                                 # smooth ceiling toward hi
+
+
 # τ (torsion). The symbol contract (retrieval/field_interference.py) defines the field τ as the
 # VORTICITY ∇ρ×∇θ — and that is what knowledge/frontends.py::torsion already computes. The PDE/FRT
 # historically shipped a cheap proxy (Laplacian of the amplitude), which ignores phase entirely and
@@ -117,13 +131,6 @@ def encode_text(text, size=64, n_channels=12, amp=0.6, B_max=1.0):
     phi = np.abs(Psi); phi = phi / (phi.max() + 1e-10) * amp + 0.12
     phi = np.clip(phi, 0.02, B_max - 0.02)
     return to_gpu(phi.astype(np.float32)), to_gpu((np.angle(Psi) % (2 * np.pi)).astype(np.float32))
-
-def _enforce_dirichlet(field):
-    field[0, :] = 0.0
-    field[-1, :] = 0.0
-    field[:, 0] = 0.0
-    field[:, -1] = 0.0
-    return field
 
 @dataclass
 class PDEParams:
@@ -205,8 +212,6 @@ class FractalField:
         self._dCdX_history: list = []
         self._hp_beta = self.p.hp_beta if self.p.hp_beta > 0 else beta_star(self.p.omega + 1.0)
         
-        _enforce_dirichlet(self.phi)
-        _enforce_dirichlet(self.phi_prev)
 
     def seed_from_text(self, text: str, use_frt: bool = False, amp: float = 0.6) -> None:
         # Unify seed_from_text directly to encode_text.
@@ -220,8 +225,6 @@ class FractalField:
         self._flux_phi = xp.zeros((self.size, self.size), dtype=xp.float32)
         self._flux_theta = xp.zeros((self.size, self.size), dtype=xp.float32)
         self.step_count = 0
-        _enforce_dirichlet(self.phi)
-        _enforce_dirichlet(self.phi_prev)
         self.tau = _compute_tau(self.phi, self.theta)
 
     def seed_from_fingerprint(self, fingerprint: str) -> None:
@@ -245,8 +248,6 @@ class FractalField:
         self._flux_phi = xp.zeros((self.size, self.size), dtype=xp.float32)
         self._flux_theta = xp.zeros((self.size, self.size), dtype=xp.float32)
         self.step_count = 0
-        _enforce_dirichlet(self.phi)
-        _enforce_dirichlet(self.phi_prev)
         self.tau = _compute_tau(self.phi, self.theta)
 
     def _base_ops(self):
@@ -289,7 +290,6 @@ class FractalField:
         theta = self.theta
 
         self.phi_prev = xp.copy(phi)
-        _enforce_dirichlet(phi)
         self.tau = _compute_tau(phi, theta)
 
         # Eris modulators
@@ -329,15 +329,18 @@ class FractalField:
         if not p.activations and xp.max(self.phi) < 0.5:
             phi_new *= 0.95
             
-        self.phi = xp.clip(phi_new, 0.0, p.B_max - 1e-4)
-        
-        # Enforce Dirichlet boundaries
-        self.phi[0, :] = 0.0
-        self.phi[-1, :] = 0.0
-        self.phi[:, 0] = 0.0
-        self.phi[:, -1] = 0.0
-        
-        
+        # TORUS topology (no wall): the xp.roll stencils already wrap, so there is NO Dirichlet
+        # edge to zero — that manufactured a hard φ discontinuity at the border and injected spurious
+        # gradients/vorticity into τ. Removed. SPACE is bounded by the finite grid itself (the torus).
+        #
+        # AMPLITUDE boundary is a SOFT ceiling, not a hard clip. The Domain-6 soft restoring forces
+        # already live in ops["B"]/["IBT"]/["ZBT"] (the −γ·σ·max(φ−lower,0)² ceiling + the soft
+        # barriers near 0 and B_max). The old hard clip kinked the gradient at the saturation contour
+        # (dirtying τ). Replace it with a smooth, differentiable clamp that is ~identity inside the
+        # operating band and saturates softly — no kink — while keeping φ strictly inside (0, B_max)
+        # so the IBT/ZBT barriers never reach their poles (stability the hard clip used to provide).
+        self.phi = _soft_clamp(phi_new, 0.0, p.B_max - 1e-4)
+
         self._phase_step()
 
         # Update temporal flux for liveness check

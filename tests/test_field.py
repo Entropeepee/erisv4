@@ -24,21 +24,21 @@ import pytest
 class TestFractalPDE:
 
     def test_field_initialization(self):
-        """Field should initialize with correct dimensions and boundary conditions."""
+        """Field initializes with correct dimensions on a TORUS (no Dirichlet wall)."""
         from eris.field.pde import FractalField
 
         field = FractalField(size=32)
 
         phi_np = to_numpy(field.phi)
         assert phi_np.shape == (32, 32)
-        # Boundary should be zero (Dirichlet)
-        assert phi_np[0, :].max() == 0.0
-        assert phi_np[-1, :].max() == 0.0
-        assert phi_np[:, 0].max() == 0.0
-        assert phi_np[:, -1].max() == 0.0
+        # Torus topology: the border is NOT zeroed — it carries field like the interior and wraps
+        # (the periodic stencils step off one edge straight onto the opposite one).
+        assert phi_np[0, :].max() > 0.0
+        assert phi_np[:, -1].max() > 0.0
 
     def test_step_preserves_bounds(self):
-        """After stepping, phi should stay in [0, 1] and boundaries should be zero."""
+        """After stepping, phi stays in [0, 1] via the SOFT amplitude ceiling + non-negativity floor
+        (no hard clip, no Dirichlet wall — the torus has no border to zero)."""
         from eris.field.pde import FractalField
 
         field = FractalField(size=32)
@@ -50,8 +50,9 @@ class TestFractalPDE:
         phi_np = to_numpy(field.phi)
         assert phi_np.min() >= 0.0, f"phi went negative: {phi_np.min()}"
         assert phi_np.max() <= 1.0, f"phi exceeded 1: {phi_np.max()}"
-        assert phi_np[0, :].max() == 0.0, "Top boundary violated"
-        assert phi_np[-1, :].max() == 0.0, "Bottom boundary violated"
+        assert phi_np.max() < field.p.B_max, "soft ceiling must keep phi strictly below B_max"
+        # Torus: the border is NOT pinned to zero — it evolves and wraps like the interior.
+        assert phi_np[0, :].max() > 0.0, "border was zeroed — Dirichlet wall should be gone"
 
     def test_empty_field_stays_quiet(self):
         """An unseeded field should remain near zero (only tiny initial noise)."""
@@ -439,9 +440,8 @@ class TestFRT:
         assert phi.shape == (32, 32)
         assert theta.shape == (32, 32)
         assert phi.max() > 0, "Field should have nonzero phi"
-        # Dirichlet boundaries enforced
-        assert phi[0, :].max() == 0.0
-        assert phi[-1, :].max() == 0.0
+        # Torus topology (match the PDE): the border is NOT zeroed — the FRT spreads wrap with % size.
+        assert np.isfinite(phi).all() and np.isfinite(theta).all()
 
     def test_frt_bvec_computable(self):
         """FRT path should produce a valid BVec without GPU or PDE."""

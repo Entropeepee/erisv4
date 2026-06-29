@@ -315,6 +315,15 @@ _SCALE_C: float = 5.0    # Torsion RMS
 _SCALE_D: float = 15.0   # Decay rate
 _SCALE_S: float = 1.0    # S is already a fraction
 
+# Boundary (Domain-6) measure A_B = σ(λ(|X−B|/ΔB − θ)) — a soft measure on field VALUES (the I/O
+# membrane / soft amplitude ceiling), NOT grid position. B is the field's own mean (matches the audio
+# GVE form (φ − mean φ)²); ΔB is a fixed amplitude scale so MORE spread → MORE membrane activation
+# (absolute, not std-normalized); λ steepness, θ tolerance. Constants are calibration knobs (like
+# _SCALE_*) — tune empirically; surfaced for review.
+_B_LAMBDA: float = 4.0
+_B_DELTA: float = 0.15
+_B_THETA: float = 1.0
+
 
 def compute_bvec_from_field(
     phi,
@@ -354,9 +363,14 @@ def compute_bvec_from_field(
     tau = xp.asarray(tau, dtype=xp.float32)
     phi_prev = xp.asarray(phi_prev, dtype=xp.float32)
 
-    # B: Boundary — fraction of field at boundary clamp
-    b_raw = float(to_numpy(xp.mean(phi > boundary_threshold)))
-    B = min(b_raw * _SCALE_B, 1.0)
+    # B: Boundary — the I/O-membrane / soft-amplitude-ceiling measure (Domain-6, BLECD pp.16-17).
+    # A measure on VALUES, not grid position (the grid edge is gone — the field is a torus): the soft
+    # fraction of the field whose amplitude deviates from the field's own mean beyond a tolerance —
+    # the smooth Domain-6 form of the audio GVE boundary (φ − mean φ)². A_B = σ(λ(|X−B|/ΔB − θ)).
+    mu_phi = xp.mean(phi)
+    dev = xp.abs(phi - mu_phi)                                  # |X − B|, B = field mean (membrane)
+    a_b = 1.0 / (1.0 + xp.exp(-_B_LAMBDA * (dev / _B_DELTA - _B_THETA)))
+    B = min(float(to_numpy(xp.mean(a_b))) * _SCALE_B, 1.0)
 
     # F: Feedback — gradient alignment between phi and theta (advection)
     # Uses cp.roll stencils (NOT cupyx.scipy.ndimage — broken on CUDA 13.2)

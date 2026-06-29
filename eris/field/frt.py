@@ -256,11 +256,9 @@ def text_to_field_arrays(text: str, size: int = 64) -> Tuple[np.ndarray, np.ndar
     phi = np.clip(phi, 0.0, 1.0)
     theta = theta % (2.0 * math.pi)
 
-    # Enforce Dirichlet boundary (match PDE convention)
-    phi[0, :] = 0.0
-    phi[-1, :] = 0.0
-    phi[:, 0] = 0.0
-    phi[:, -1] = 0.0
+    # TORUS topology: no Dirichlet edge (match the PDE convention, now periodic). The neighbor
+    # spreads above already wrap with `% size`, so zeroing the border would re-introduce the wall
+    # the PDE just dropped — and a spurious edge gradient in the FRT seed's τ. Removed.
 
     return phi, theta
 
