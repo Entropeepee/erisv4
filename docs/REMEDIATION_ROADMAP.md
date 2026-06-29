@@ -181,22 +181,26 @@ verified-good); these are the host-classification gaps + the same-module complet
   NO consent (accelerators.py:38,40). **Fix:** robust `ipaddress`-based, fail-closed classifier
   (exact-`localhost` only for names; `is_loopback` for IP literals; userinfo/`%`-encoding/IPv4-mapped
   handled). **MERGED in #94.**
-- ☐ **[#2 · P1]** TTS provider URL unguarded — raw text goes off-box *before* the edge_tts guard
-  (tts.py:19,27,66). **Fix:** guard via the shared `egress_allowed`/`is_loopback_url` helper. **→ PR #96.**
+- ▶PR **[#2 · P1]** TTS provider URL unguarded — raw text goes off-box *before* the edge_tts guard
+  (tts.py:19,27,66). **PR #96:** `_provider_speech` now gates the POST with `egress_allowed("tts",…)`
+  — a remote URL with no consent refuses (falls back, never POSTs raw text); edge_tts guard intact.
 - ✓done **[#3 · P1]** Status probe egresses to a remote URL by default — `_reachable` GETs configured
   URLs, leaking source IP/UA (accelerators.py:86,115; app.py:924). **Fix:** gate `_reachable` with
   `egress_allowed`; a denied remote URL is "not probed." **MERGED in #94.**
 - ☐ **[#4 · P1]** `ask_expert` sends research Q/context to Anthropic with no per-path consent
   (research.py:65,68; ask_expert.py:49,72). **→ Cloud/web egress-consent workstream (design pending).**
-- ☐ **[#5 · P1/P2]** Sovereignty treats `.local` as local, so prompts go off-box
-  (sovereignty.py:80,90; orchestrator.py:253). **Fix:** apply the shared host classifier. **→ PR #96.**
+- ▶PR **[#5 · P1/P2]** Sovereignty treats `.local` as local, so prompts go off-box
+  (sovereignty.py:80,90; orchestrator.py:253). **PR #96:** `sovereignty._is_loopback_url` now
+  delegates to the shared `accelerators.is_loopback_url` → `.local` / `host.docker.internal` /
+  `0.0.0.0` are REMOTE / non-sovereign; only `localhost` + loopback IPs pass. Caller (the "local" tag
+  at orchestrator.py:253) unchanged.
 - ☐ **[#6 · P2]** Autonomous web/study egress unguarded — DuckDuckGo / Wikipedia / page fetch / r.jina
   (web_search.py:200,237; web_reader.py:57; study.py:148; orchestrator.py:1344). **→ Cloud/web
   egress-consent workstream.**
 
-### Planned: PR #96 — egress hardening (TTS + sovereignty host-class)
-Codex #2 + #5. Apply #94's `is_loopback_url`/`host_of` helper to the TTS provider URL and the
-sovereignty `.local` classification. **Reuses #94's helper → build AFTER #94 merges.**
+### ▶PR PR #96 — egress hardening (TTS + sovereignty host-class)
+Codex #2 + #5. Applies the merged `accelerators.is_loopback_url`/`egress_allowed` to the TTS provider
+POST and the sovereignty `.local` classification. **Built (PR-open, no auto-merge);** 787 tests green.
 
 ### Workstream: Cloud/web egress consent (Codex #4 + #6)
 `ask_expert`/cloud-LLM escalation + autonomous web/study fetches (search, wiki, page-fetch) need a
