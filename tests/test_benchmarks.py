@@ -186,6 +186,30 @@ class TestDatasetMappers(unittest.TestCase):
         allq = D._quality_questions(row, 0, hard_only=False)
         self.assertEqual(len(allq), 2)
 
+    def test_gold_to_letter_handles_every_encoding(self):
+        opts = ["apple", "banana", "cherry", "date"]
+        self.assertEqual(D._gold_to_letter("B", opts), "B")            # letter
+        self.assertEqual(D._gold_to_letter("cherry", opts), "C")       # option text
+        self.assertEqual(D._gold_to_letter(2, opts), "B")             # 1-based (QuALITY native)
+        self.assertEqual(D._gold_to_letter("4", opts), "D")           # numeric string, 1-based
+        self.assertEqual(D._gold_to_letter(None, opts), "")
+
+    def test_quality_flat_schema_one_question_per_row(self):
+        # the emozilla/quality mirror is flat (one MC question per row), not nested
+        row = {"question": "Why?", "options": ["a", "b", "c"], "answer": 2,
+               "hard": True, "article": "A long passage about the topic."}
+        items = D._quality_questions(row, 0, hard_only=True)           # routes to the flat mapper
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].question, "Why?")
+        self.assertEqual(items[0].answer, "B")                        # 1-based 2 → B
+        self.assertEqual(items[0].context, "A long passage about the topic.")
+        self.assertEqual(items[0].meta["type"], "faithfulness" if False else "long_doc_mc")
+
+    def test_quality_flat_hard_only_filters_easy(self):
+        easy = {"question": "Q?", "options": ["a", "b"], "answer": 1, "hard": False}
+        self.assertEqual(D._quality_questions(easy, 0, hard_only=True), [])
+        self.assertEqual(len(D._quality_questions(easy, 0, hard_only=False)), 1)
+
     def test_mmlu_pro_item_uses_letter_or_index(self):
         it = D._mmlu_pro_item({"question": "?", "options": ["w", "x", "y"],
                                "answer": "C", "category": "math"}, 0)

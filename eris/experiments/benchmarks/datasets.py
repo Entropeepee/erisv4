@@ -53,20 +53,66 @@ def _frames_item(row: Dict[str, Any], i: int) -> BenchItem:
                            "reasoning": row.get("reasoning_types", "")})
 
 
+def _gold_to_letter(gold, options) -> str:
+    """Map a QuALITY-style gold answer to an option LETTER, robust to how the HF mirror encodes it:
+    a letter ('B'), the option text, a 1-based index (the QuALITY card's gold_label is 1-based), or
+    a 0-based index. The 1-based vs 0-based call is the one real ambiguity — QuALITY's native
+    `gold_label` is 1-based, so an int is treated 1-based; verify against the printed items block."""
+    if gold is None or gold == "":
+        return ""
+    if isinstance(gold, str):
+        g = gold.strip()
+        if len(g) == 1 and g.upper().isalpha():
+            return g.upper()
+        for k, o in enumerate(options or []):           # gold given as the option text
+            if str(o).strip() == g:
+                return chr(65 + k)
+        if g.isdigit():
+            gold = int(g)
+        else:
+            return ""
+    if isinstance(gold, int):
+        n = len(options or [])
+        # 1-based if it fits as 1..n and (n is unknown or gold==n boundary); else 0-based.
+        if 1 <= gold <= max(n, 1) and not (n and gold == 0):
+            return chr(64 + gold)                       # 1-based (QuALITY native)
+        if 0 <= gold < n:
+            return chr(65 + gold)                       # 0-based fallback
+    return ""
+
+
+def _quality_item_flat(row: Dict[str, Any], i: int, hard_only: bool):
+    """FLAT schema: one MC QUESTION per row (the common HF mirror, e.g. emozilla/quality)."""
+    if not row.get("question"):
+        return []
+    difficult = bool(row.get("hard", row.get("difficult", row.get("is_hard", 0))))
+    if hard_only and not difficult:
+        return []
+    options = row.get("options") or row.get("choices") or []
+    article = row.get("article") or row.get("context") or row.get("passage") or ""
+    gold = row.get("gold_label", row.get("answer", row.get("label")))
+    return [BenchItem(id=f"quality-{i}", question=row["question"], context=article,
+                      choices=list(options), answer=_gold_to_letter(gold, options),
+                      meta={"type": "long_doc_mc", "difficult": difficult})]
+
+
 def _quality_questions(article_row: Dict[str, Any], i: int, hard_only: bool) -> List[BenchItem]:
-    # nyu-mll/quality: one ~5k-token article with several MC questions; HARD = `difficult`==1.
+    """NESTED schema (nyu-mll/quality): one ~5k-token article with several MC questions; falls
+    through to the FLAT per-question schema when there is no `questions` list."""
+    nested = article_row.get("questions")
+    if not isinstance(nested, list):
+        return _quality_item_flat(article_row, i, hard_only)
     article = article_row.get("article") or article_row.get("context") or ""
     out: List[BenchItem] = []
-    for j, q in enumerate(article_row.get("questions", []) or []):
-        difficult = bool(q.get("difficult", 0))
+    for j, q in enumerate(nested or []):
+        difficult = bool(q.get("difficult", q.get("hard", 0)))
         if hard_only and not difficult:
             continue
         options = q.get("options") or []
-        gold = q.get("gold_label")              # 1-based index per the QuALITY card
-        ans_letter = chr(64 + int(gold)) if gold else ""
+        gold = q.get("gold_label", q.get("answer"))
         out.append(BenchItem(
             id=f"quality-{i}-{j}", question=q.get("question", ""), context=article,
-            choices=list(options), answer=ans_letter,
+            choices=list(options), answer=_gold_to_letter(gold, options),
             meta={"type": "long_doc_mc", "difficult": difficult}))
     return out
 
@@ -198,13 +244,24 @@ def load_frames(limit: Optional[int] = None, fetch_context: bool = True,
     return items
 
 
-def load_quality(limit: Optional[int] = None, hard_only: bool = True) -> List[BenchItem]:
-    ds = _load_dataset("emozilla/quality", split="validation")
+def load_quality(limit: Optional[int] = None, hard_only: bool = True,
+                 dataset: str = "emozilla/quality", split: str = "validation") -> List[BenchItem]:
+    """QuALITY — long-document MC comprehension. Handles BOTH the nested (one article → questions)
+    and flat (one question per row) schemas. Fails LOUDLY if it maps zero items, so a schema
+    mismatch (wrong dataset id / field names / a missing `hard` flag) can't masquerade as 'no hard
+    questions found'. Override `dataset`/`split` if your mirror differs."""
+    ds = _load_dataset(dataset, split=split)
     items: List[BenchItem] = []
     for i, r in enumerate(ds):
         items.extend(_quality_questions(r, i, hard_only))
         if limit and len(items) >= limit:
             break
+    if not items:
+        keys = list((ds[0] if len(ds) else {}).keys())
+        raise RuntimeError(
+            f"QuALITY loader mapped 0 items from {dataset}:{split} (hard_only={hard_only}). The row "
+            f"schema may differ from what the mapper expects — row keys seen: {keys}. Fix "
+            f"_quality_item_flat/_quality_questions to match, or pass hard_only=False to confirm.")
     return items[:limit] if limit else items
 
 
