@@ -6,11 +6,11 @@ Every item is file:line-verified by an adversarial process. Items re-run against
 (chat) are marked **✓v**; the rest are Codex/swarm-verified (concrete repro, file:line) but not
 independently re-run — flagged so the trust level is explicit.
 
-**Legend:** `✓done` · `◐ partly done (core merged, item still open)` · `▶PR open` · `☐todo` · `⚑Phase-3 precondition`
+**Legend:** `✓done` · `◐ partly done (core merged, item still open)` · `▶PR open` · `☐todo` · `⊘ withdrawn (not a fix)` · `⚑Phase-3 precondition`
 Baseline commit for all anchors: `6ec67fa`.
 
 ### Version & maintenance — read first
-**v1.6** · living document; update in place, don't fork. So nothing is lost across token windows or
+**v1.7** · living document; update in place, don't fork. So nothing is lost across token windows or
 between the two agents:
 - **Homed in the repo** as `docs/REMEDIATION_ROADMAP.md` → git history *is* the version log (every
   check-off is a diffable, revertible commit; no manual version juggling).
@@ -30,6 +30,9 @@ live code and fresh adversarial findings.
   the roadmap.
 
 ### Changelog
+- **v1.7 (2026-06-29):** **Codex #5 (SGT polarity) WITHDRAWN** — resolved from the filed patent:
+  the gate is magnitude-based and two-sided by design, so the live `abs(value−mean)` is faithful; no
+  code change, do not make it one-sided. Marked r1 #4 / Codex #7 (config-knob wiring) as PR #99.
 - **v1.6 (2026-06-29):** **#92 / #93 / #94 MERGED to `main`** (disjoint code; roadmap reconciled).
   Full suite green on main (780). Phase-1.5 r3 #1 cleared; r1 #2/#3 core landed (stays OPEN for
   scorer-coverage); r3 #10 + Codex #1/#3 closed. **Next: PR #96** (egress hardening — Codex #2/#5,
@@ -256,10 +259,16 @@ in a state to do what the theory says. Fix before testing.*
   (activations.py:377) — finite guards + JSON `allow_nan=False`.
 
 **Gates / config**
-- ☐ **[r3 #2 ✓v]** SGT gate is two-sided `abs(value-mean)` where callers mean "exceeds" (sgt.py:69).
-  Make directional per call site. **Touches the filed SGT patent's intended semantics.**
-- ☐ **[r1 #4 ✓v]** `CONFIG.pde_dt` / `sgt_threshold_sigma` are no-ops (hardcoded params win) — wire
-  or delete.
+- ⊘ **[r3 #2 / Codex #5 — WITHDRAWN, not a fix]** SGT polarity resolved FROM THE FILED PATENT. The
+  canonical gate is `g(e) = 1/(1+exp(−(|e|−T)·S))` (patent [0047] / claim 4); claims 1(d)/21(c) say
+  **"magnitude"**, and it is **two-sided by design** (drift is bidirectional). The live
+  `abs(value−mean)` in sgt.py:69 is therefore FAITHFUL to the filed claims — a one-sided "exceeds"
+  gate would DIVERGE from them. **Do NOT change it.** No SGT HOLD remains; the only SGT work is the
+  config-threshold wiring below (Codex #7), default pinned to `exact_sgt.py`.
+- ▶PR **[r1 #4 / Codex #7 → PR #99]** `CONFIG.pde_dt` / `sgt_threshold_sigma` were no-ops (hardcoded
+  literals won). Wired: FractalField honors `CONFIG.pde_dt`; the orchestrator SGT gates honor
+  `CONFIG.sgt_threshold_sigma`/`sgt_ema_alpha` (default pinned to `exact_sgt.py`); `vram_check` reads
+  `CONFIG.vram_cap_gb` and is called on the field loop. *PR-open, awaiting merge.*
 - ☐ `ERIS_RETRIEVAL_MODE=traditional_only` actually runs the resonant path (orchestrator.py:422) —
   rename + add a true BM25+dense mode (**Phase 3 needs a real "physics off" floor**).
 - ☐ **[r3 #12]** VRAM cap (`VRAM_CAP_GB`/`vram_check`) never enforced (config.py:103) — wire on
@@ -307,7 +316,8 @@ in a state to do what the theory says. Fix before testing.*
 
 ## The pattern across all reviews
 Four recurring failure modes, not random bugs: **computed-but-not-persisted** (snapshots,
-checkpoints), **computed-but-not-correct** (two DCRs, wrap, branch-cut, two-sided SGT, NaN),
-**configured-but-not-wired** (pde_dt, VRAM cap, traditional_only, FRT flag), **tested-but-not-proven**
-(the false-confidence tests). The physics is real and runs; it is not yet in a state to realize the
-theory. That is now mapped — not guessed.
+checkpoints), **computed-but-not-correct** (two DCRs, wrap, branch-cut, NaN), **configured-but-not-
+wired** (pde_dt, VRAM cap, traditional_only, FRT flag), **tested-but-not-proven** (the
+false-confidence tests). The physics is real and runs; it is not yet in a state to realize the
+theory. That is now mapped — not guessed. *(NOTE: the SGT two-sided gate is NOT in the "not-correct"
+list — Codex #5 was WITHDRAWN; two-sided is faithful to the filed patent. See Phase-2 Gates.)*
