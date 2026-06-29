@@ -33,18 +33,20 @@ def openai_chat_arm(base_url: str = "http://localhost:11434/v1",
                     model: str = "", api_key: str = "ollama",
                     max_tokens: int = 2048, temperature: float = 0.0,
                     system: str = "You are a careful assistant. Answer concisely and only from "
-                                  "any provided source.") -> Callable[[str], Tuple[str, int]]:
+                                  "any provided source.") -> Callable[[str], dict]:
     """Arm A — a bare model behind an OpenAI-compatible /chat/completions endpoint. Deterministic
     (temperature 0) for reproducible scoring. max_tokens defaults to 2048 (not 512): a reasoning
     model can spend hundreds of tokens thinking before the answer, and a small cap truncates it
-    mid-thought into an empty answer. Returns (text, total_tokens)."""
+    mid-thought into an empty answer. Returns {text, tokens, detail} — detail carries finish_reason
+    so a max_tokens TRUNCATION (finish_reason='length' → clipped/empty answer) is never mistaken for
+    a genuine wrong answer, plus the prompt/completion token split."""
     try:
         import requests
     except Exception as e:                       # pragma: no cover - environment-dependent
         raise RuntimeError("the `requests` package is required for the bare arm") from e
     url = base_url.rstrip("/") + "/chat/completions"
 
-    def answer(prompt: str) -> Tuple[str, int]:
+    def answer(prompt: str) -> dict:
         body = {"model": model, "temperature": temperature, "max_tokens": max_tokens,
                 "messages": [{"role": "system", "content": system},
                              {"role": "user", "content": prompt}]}
@@ -52,9 +54,17 @@ def openai_chat_arm(base_url: str = "http://localhost:11434/v1",
         r = requests.post(url, json=body, headers=headers, timeout=300)
         r.raise_for_status()
         data = r.json()
-        text = _answer_text_from_message(data["choices"][0]["message"] or {})
-        tokens = int((data.get("usage") or {}).get("total_tokens", 0))
-        return text, tokens
+        choice = (data.get("choices") or [{}])[0]
+        text = _answer_text_from_message(choice.get("message") or {})
+        usage = data.get("usage") or {}
+        tokens = int(usage.get("total_tokens", 0) or 0)
+        finish = choice.get("finish_reason")
+        detail = {"finish_reason": finish, "calls": 1,
+                  "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                  "completion_tokens": int(usage.get("completion_tokens", 0) or 0)}
+        if finish == "length":               # answer CLIPPED by max_tokens — flag it, don't hide it
+            detail["truncated"] = True
+        return {"text": text, "tokens": tokens, "detail": detail}
 
     return answer
 

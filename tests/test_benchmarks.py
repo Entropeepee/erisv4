@@ -409,5 +409,196 @@ class TestArmsHelpers(unittest.TestCase):
             {"content": "", "reasoning": "<think>hmm</think>Paris"}), "Paris")
 
 
+class TestBlackboxAuditFixes(unittest.TestCase):
+    """The 2026-06 blackbox audit found 39 places the report computed a value then dropped it.
+    These lock the high-severity surfacings so a regression can't quietly re-hide them."""
+
+    def test_faithfulness_surfaces_mode_n_spans_and_full_list(self):
+        from eris.experiments.benchmarks.scoring import faithfulness_score
+        # overlap-proxy mode (no annotated spans) — must be labelled as the CRUDE fallback
+        out = "Alpha beta gamma delta. " * 8                        # 8 unsupported sentences
+        fs = faithfulness_score(out, "totally unrelated source text")
+        self.assertEqual(fs["mode"], "overlap_proxy")
+        self.assertEqual(fs["n_spans"], 0)
+        self.assertEqual(fs["threshold"], 0.6)
+        self.assertEqual(len(fs["hallucinated"]), 5)               # display cap unchanged
+        self.assertEqual(len(fs["hallucinated_all"]), fs["unsupported"])   # FULL list, uncapped
+        self.assertGreater(fs["unsupported"], 5)
+        # spans mode — the trustworthy RAGTruth path must be labelled 'spans'
+        fs2 = faithfulness_score("A fabricated claim here.", "ctx",
+                                 hallucination_spans=[{"text": "fabricated claim"}])
+        self.assertEqual(fs2["mode"], "spans")
+        self.assertEqual(fs2["n_spans"], 1)
+
+    def test_score_results_merges_detail_not_clobber(self):
+        # a faithfulness item must KEEP the arm's hive diagnostics, not have them overwritten
+        it = BenchItem(id="r1", question="q", context="the cat sat on the mat",
+                       meta={"type": "faithfulness"})
+        res = run_arm([it], lambda p: {"text": "the cat sat on the mat.", "tokens": 3,
+                                       "detail": {"synthesis": "FULL HIVE TEXT",
+                                                  "specialist_divergence": 0.42}}, "eris")
+        score_results(res, [it])
+        d = res[0].detail
+        self.assertEqual(d["synthesis"], "FULL HIVE TEXT")          # survived
+        self.assertEqual(d["specialist_divergence"], 0.42)         # survived
+        self.assertIn("hallucination_rate", d)                      # faithfulness merged in
+        self.assertEqual(d["mode"], "overlap_proxy")
+
+    def test_multiple_choice_detail_records_letter_text_and_path(self):
+        from eris.experiments.benchmarks.scoring import multiple_choice_detail
+        it = BenchItem(id="m", question="q", choices=["apple", "banana", "cherry"], answer="B")
+        d = multiple_choice_detail("After weighing it, the answer is B because…", it)
+        self.assertTrue(d["correct"])
+        self.assertEqual(d["extracted_letter"], "B")
+        self.assertEqual(d["extracted_text"], "banana")
+        self.assertEqual(d["mc_match"], "letter")
+        # option-text path: a verbose answer that names the option but no letter
+        d2 = multiple_choice_detail("I'd say it is the banana.", it)
+        self.assertTrue(d2["correct"])
+        self.assertEqual(d2["mc_match"], "option_text")
+        # genuine miss
+        d3 = multiple_choice_detail("Definitely A.", it)
+        self.assertFalse(d3["correct"])
+        self.assertEqual(d3["mc_match"], "none")
+        self.assertEqual(d3["extracted_letter"], "A")              # what it parsed is still shown
+
+    def test_score_results_surfaces_mc_decision_in_detail(self):
+        it = BenchItem(id="m2", question="q", choices=["x", "y"], answer="A")
+        res = run_arm([it], callable_arm(lambda p: ("The answer is A.", 4)), "bare")
+        score_results(res, [it])
+        d = res[0].detail
+        self.assertEqual(d["extracted_letter"], "A")
+        self.assertEqual(d["mc_match"], "letter")
+        self.assertEqual(d["gold_letter"], "A")
+
+    def test_budget_report_flags_proxy_and_distribution(self):
+        from dataclasses import dataclass
+        items = [BenchItem(id=str(i), question="q", answer="x") for i in range(3)]
+        res = run_arm(items, lambda p: {"text": "x", "tokens": 10,
+                                        "detail": {"tokens_are_proxy": True}}, "eris")
+        b = budget_report(res)
+        self.assertEqual(b["proxy_items"], 3)
+        self.assertEqual(b["cost_basis"], "call_count_proxy")
+        self.assertEqual(b["max_tokens"], 10)
+        self.assertEqual(b["median_tokens"], 10.0)
+        self.assertEqual(b["measured"], 3)
+        # real-token arm
+        res2 = run_arm(items, callable_arm(lambda p: ("x", 20)), "bare")
+        self.assertEqual(budget_report(res2)["cost_basis"], "real_tokens")
+
+    def test_compare_surfaces_ungraded_and_cost_caveat(self):
+        items = [BenchItem(id=str(i), question="q", answer="x") for i in range(2)]
+        bare = run_arm(items, callable_arm(lambda p: ("x", 10)), "bare")
+        eris = run_arm(items, lambda p: {"text": "x", "tokens": 11,
+                                         "detail": {"tokens_are_proxy": True}}, "eris")
+        score_results(bare, items); score_results(eris, items)
+        c = compare(bare, eris)
+        self.assertIn("ungraded", c["bare"])
+        self.assertEqual(c["cost_basis"]["eris"], "call_count_proxy")
+        self.assertIn("equal_budget_caveat", c)                     # proxy → verdict qualified
+
+    def test_item_details_shows_context_chars_for_grounded_items(self):
+        it = BenchItem(id="g", question="q", context="x" * 1234, answer="a")
+        res = run_arm([it], callable_arm(lambda p: ("a", 1)), "bare")
+        rows = item_details([it], {"bare": res})
+        self.assertEqual(rows[0]["context_chars"], 1234)
+        # closed-book items carry no context_chars (nothing to ground against)
+        it2 = BenchItem(id="cb", question="q", answer="a")
+        rows2 = item_details([it2], {"bare": run_arm([it2], callable_arm(lambda p: ("a", 1)), "bare")})
+        self.assertNotIn("context_chars", rows2[0])
+
+    def test_openai_chat_arm_surfaces_finish_reason_and_truncation(self):
+        import sys, types
+        fake = types.SimpleNamespace()
+
+        class _Resp:
+            def __init__(self, data): self._d = data
+            def raise_for_status(self): pass
+            def json(self): return self._d
+
+        def post(url, json=None, headers=None, timeout=None):
+            return _Resp({"choices": [{"message": {"content": "C"}, "finish_reason": "length"}],
+                          "usage": {"total_tokens": 1500, "prompt_tokens": 1400,
+                                    "completion_tokens": 100}})
+        fake.post = post
+        orig = sys.modules.get("requests")
+        sys.modules["requests"] = fake
+        try:
+            from eris.experiments.benchmarks.arms import openai_chat_arm
+            out = openai_chat_arm(base_url="http://x/v1", model="m", api_key="k")("Question: ?")
+        finally:
+            if orig is not None:
+                sys.modules["requests"] = orig
+            else:
+                sys.modules.pop("requests", None)
+        self.assertEqual(out["text"], "C")
+        self.assertEqual(out["tokens"], 1500)
+        self.assertTrue(out["detail"]["truncated"])               # clipped ≠ wrong answer
+        self.assertEqual(out["detail"]["finish_reason"], "length")
+        self.assertEqual(out["detail"]["completion_tokens"], 100)
+
+
+class TestDotenvAndAttributable(unittest.TestCase):
+    def test_dotenv_records_shell_override_conflict(self):
+        import tempfile
+        from eris.experiments.benchmarks.run import _load_dotenv, _DOTENV_CONFLICTS
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, ".env")
+        with open(p, "w") as f:
+            f.write("ERIS_HIVE_SYNTH_CLOUD=0\nERIS_TIER_FREE=qwen/qwen-2.5-72b\n")
+        os.environ["ERIS_HIVE_SYNTH_CLOUD"] = "1"                  # stale shell value overrides file
+        os.environ.pop("ERIS_TIER_FREE", None)
+        try:
+            _load_dotenv(p)
+            self.assertEqual(os.environ["ERIS_HIVE_SYNTH_CLOUD"], "1")     # shell still wins
+            self.assertEqual(os.environ["ERIS_TIER_FREE"], "qwen/qwen-2.5-72b")  # file loaded clean
+            conflicts = {c[0]: (c[1], c[2]) for c in _DOTENV_CONFLICTS}
+            self.assertEqual(conflicts.get("ERIS_HIVE_SYNTH_CLOUD"), ("1", "0"))  # named!
+            self.assertNotIn("ERIS_TIER_FREE", conflicts)          # loaded cleanly, no conflict
+        finally:
+            os.environ.pop("ERIS_HIVE_SYNTH_CLOUD", None)
+            os.environ.pop("ERIS_TIER_FREE", None)
+
+    def test_attributable_preset_forces_one_model_over_stale_vars(self):
+        from eris.experiments.benchmarks.run import _apply_attributable_preset
+        keys = ("ERIS_BENCH_ATTRIBUTABLE", "ERIS_BENCH_MODEL", "ERIS_TIER_FREE", "ERIS_TIER_SYNTH",
+                "ERIS_TIER_CHEAP", "ERIS_HIVE_SYNTH_CLOUD")
+        saved = {k: os.environ.get(k) for k in keys}
+        try:
+            os.environ["ERIS_BENCH_ATTRIBUTABLE"] = "1"
+            os.environ["ERIS_BENCH_MODEL"] = "qwen/qwen-2.5-72b-instruct"
+            os.environ["ERIS_TIER_SYNTH"] = "anthropic/claude-3.5-sonnet"   # stale → must override
+            os.environ["ERIS_HIVE_SYNTH_CLOUD"] = "1"                       # stale → must flip off
+            self.assertTrue(_apply_attributable_preset())
+            for k in ("ERIS_TIER_FREE", "ERIS_TIER_CHEAP", "ERIS_TIER_SYNTH"):
+                self.assertEqual(os.environ[k], "qwen/qwen-2.5-72b-instruct")
+            self.assertEqual(os.environ["ERIS_HIVE_SYNTH_CLOUD"], "0")
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+    def test_attributable_preset_requires_bench_model(self):
+        from eris.experiments.benchmarks.run import _apply_attributable_preset
+        saved = {k: os.environ.get(k) for k in ("ERIS_BENCH_ATTRIBUTABLE", "ERIS_BENCH_MODEL")}
+        try:
+            os.environ["ERIS_BENCH_ATTRIBUTABLE"] = "1"
+            os.environ.pop("ERIS_BENCH_MODEL", None)
+            with self.assertRaises(SystemExit):
+                _apply_attributable_preset()
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+    def test_attributable_preset_noop_when_unset(self):
+        from eris.experiments.benchmarks.run import _apply_attributable_preset
+        saved = os.environ.get("ERIS_BENCH_ATTRIBUTABLE")
+        try:
+            os.environ.pop("ERIS_BENCH_ATTRIBUTABLE", None)
+            self.assertFalse(_apply_attributable_preset())
+        finally:
+            if saved is not None:
+                os.environ["ERIS_BENCH_ATTRIBUTABLE"] = saved
+
+
 if __name__ == "__main__":
     unittest.main()

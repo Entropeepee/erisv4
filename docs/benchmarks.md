@@ -73,6 +73,24 @@ equal-budget comparison stays honest — and an LLM-choice study is just re-runn
 model id. The gateway only activates when `ERIS_GATEWAY_BASE_URL` is set; sovereign work is never
 routed out.
 
+### Attributable runs (isolate architecture-vs-bare)
+
+A speed run (the config above) routes synthesis to a stronger cloud model, so a win is "Eris + a
+better synth model" — not a clean test of the *architecture*. For the iron-rule run that proves the
+**physics + hive add value at a fixed model**, set one switch:
+
+```bash
+ERIS_BENCH_ATTRIBUTABLE=1      # + ERIS_BENCH_MODEL already set above
+```
+
+The runner then **forces** `ERIS_BENCH_MODEL` into every slot (specialists, gap-closing, synthesis,
+and the bare arm) and turns `ERIS_HIVE_SYNTH_CLOUD` **off**, so the only variable left is the Eris
+architecture. Crucially it **overrides** any stale shell `set` (a lingering `ERIS_TIER_SYNTH=…claude…`
+from a prior window) — that lingering-env footgun is exactly what makes the Eris-arm header print
+`✗ MISMATCH — NOT attributable`. With the switch on, the header shows `✓ ATTRIBUTABLE — one model
+everywhere`. (Without the switch, the runner still **names** any stale var overriding your `.env` —
+`ERIS_HIVE_SYNTH_CLOUD = '1' (shell) vs '0' (.env)` — so you can clear it or open a fresh terminal.)
+
 ## Run
 
 Bare arm (works once the model is served):
@@ -94,7 +112,8 @@ python -m eris.experiments.benchmarks.run --benchmark frames --arm both --limit 
 
 For each question it splits the provided SOURCE back out, ingests it into a **scratch** Eris memory
 (`web_reader.ingest_text(..., title="bench")`), runs the hive over just that document
-(`hive_research(q, scope="doc", document="bench")`), and returns `(synthesis, real_tokens)`.
+(`hive_research(q, scope="doc", document="bench")`), and returns the scorable answer + real token
+cost **plus a full per-item `detail`** (see "No black boxes" below).
 
 It reads the **whole short passage**, not 6 fragments of it. A grounded QuALITY/FRAMES document is
 provided in full and the question is about the *whole* narrative ("why does X feel Y"), which is a
@@ -119,6 +138,33 @@ It is safe by construction:
   `LLMResponse.tokens_used` (Ollama/vLLM `/v1` report `usage`). If a backend reports no usage it
   falls back to the hive's LLM call count, printed to stderr as a labeled PROXY (so an approximate
   equal-budget comparison is never mistaken for an exact one).
+
+### No black boxes — what's in every item row
+
+A 0% is only useful if you can see **why**. Each `report["items"][i]` row carries the full,
+untruncated question/gold/answer, and for the Eris arm a `detail` block exposing every signal the
+hive computed and used to (not) answer — so a loss is attributable to the architecture, not a
+mystery. The fields that matter for auditing whether the physics + hive *earned their keep*:
+
+| field | what it tells you |
+|---|---|
+| `synthesis` / `synthesis_pre_ground` | the final answer text, and the version BEFORE citation-stripping (so an answer scrubbed by grounding is visible) |
+| `extraction_ok` | did the short-answer extraction succeed (else a broken extraction ≠ a wrong hive) |
+| `specialist_divergence` | did the multi-lens specialists actually disagree (≈0 ⇒ the hive collapsed to one voice; the architecture added nothing here) |
+| `confidence` | the physics readout — cos `match`, sin `unresolved`, `coherence`, `torsion` (τ): the hive's own geometric confidence in this answer |
+| `cycles` / `gaps_closed` / `open_gaps` | did the two-cycle engine run a 2nd pass, and did it close anything (or burn tokens for nothing) |
+| `elos_changed` / `elos_critique` | did the adversarial self-critique bite, and what it said was wrong |
+| `stripped_claims` / `canonized` | uncited claims deleted at grounding; whether the hive certified its own synthesis |
+| `n_active` / `n_contributors` | specialists activated vs ones that actually contributed |
+| `tier_calls` / `paid_calls` | WHICH tier/model served each call + how many were paid (catches a silent 429→local model-swap, or paid cloud spend) |
+| `hive_tokens` / `extraction_tokens` / `tokens_are_proxy` | cost split between the hive and the Eris-only extraction pass; whether the token count is real or a call-count proxy |
+| `hive_error` | an internal hive exception (a crash ≠ a reasoning loss) |
+
+Scoring rows also surface the decision itself: multiple-choice carries `extracted_letter` /
+`extracted_text` / `mc_match` (`letter` vs the looser `option_text` substring credit vs `none`), and
+faithfulness carries `mode` (`spans` = RAGTruth reference vs `overlap_proxy` = crude fallback),
+`n_spans`, and the **full** `hallucinated_all` list (not just the first 5). The run header records
+the config + `eris_routing` regime (gateway, tiers, synth-cloud) so a saved report is self-describing.
 
 Override the scratch dir / field size by writing a one-line factory that calls
 `make_eris_arm(data_dir=..., field_size=...)` and pointing `--eris-factory` at it.

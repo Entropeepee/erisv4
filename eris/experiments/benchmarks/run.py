@@ -17,12 +17,23 @@ import sys
 from typing import Callable, Optional
 
 
+# Keys present in BOTH the .env file and the shell, where the shell value DIFFERS — i.e. a stale
+# `set`/export that silently overrides the file (the explicit env always wins, by design). Recorded
+# so the runner can NAME the override instead of letting it quietly produce a non-attributable run.
+_DOTENV_CONFLICTS: list = []
+
+
 def _load_dotenv(path: str = ".env") -> int:
     """Load KEY=VALUE pairs from a .env file into os.environ — so keys + config live in ONE
     gitignored file, entered once, instead of `set` commands that vanish when the window closes.
     Does NOT override anything already set (an explicit `set`/export still wins). Dependency-free;
-    silent on a missing file. Runs BEFORE the eris imports so eris.config picks the values up."""
+    silent on a missing file. Runs BEFORE the eris imports so eris.config picks the values up.
+
+    Records any key that the shell sets to a DIFFERENT value than the file (into _DOTENV_CONFLICTS)
+    so the runner can warn that a stale `set` is overriding the .env — the exact footgun that turns
+    an intended one-model attributable run into a quietly mismatched one."""
     n = 0
+    _DOTENV_CONFLICTS.clear()
     try:
         if not os.path.exists(path):
             return 0
@@ -34,15 +45,46 @@ def _load_dotenv(path: str = ".env") -> int:
                 k, v = line.split("=", 1)
                 k = k.strip()
                 v = v.strip().strip('"').strip("'")
-                if k and k not in os.environ:           # explicit env wins over the file
-                    os.environ[k] = v
-                    n += 1
+                if not k:
+                    continue
+                if k in os.environ:                     # explicit env wins over the file
+                    if os.environ[k] != v:              # …but record it so the override is visible
+                        _DOTENV_CONFLICTS.append((k, os.environ[k], v))
+                    continue
+                os.environ[k] = v
+                n += 1
     except Exception:
         pass
     return n
 
 
-_dotenv_loaded = _load_dotenv()    # before any eris import, so config.py reads these values
+def _apply_attributable_preset() -> bool:
+    """ERIS_BENCH_ATTRIBUTABLE=1 → the IRON-RULE one-switch: force ONE model into every slot
+    (specialists, gap-closing, synthesis, AND the bare arm) so the only variable between the two
+    arms is architecture-vs-bare, never the model. This deliberately OVERRIDES any stale shell `set`
+    (e.g. a lingering `set ERIS_TIER_SYNTH=…claude…` from a prior speed run) — defeating the exact
+    footgun that prints '✗ MISMATCH'. Runs BEFORE the eris imports so eris.config binds the forced
+    values (the tier/synth-cloud config is read at import time). Returns True iff it fired."""
+    if os.environ.get("ERIS_BENCH_ATTRIBUTABLE", "").strip().lower() not in (
+            "1", "on", "true", "yes"):
+        return False
+    model = os.environ.get("ERIS_BENCH_MODEL", "").strip()
+    if not model:
+        raise SystemExit("ERIS_BENCH_ATTRIBUTABLE=1 requires ERIS_BENCH_MODEL to name the single "
+                         "model to use in every slot (e.g. qwen/qwen-2.5-72b-instruct).")
+    for k in ("ERIS_TIER_FREE", "ERIS_TIER_CHEAP", "ERIS_TIER_SYNTH"):
+        os.environ[k] = model                    # FORCE (override) — stale values must not survive
+    os.environ["ERIS_HIVE_SYNTH_CLOUD"] = "0"    # synthesis REUSES the one model, no cloud escalation
+    # route the hive through the same endpoint the bare arm uses, unless a gateway is set explicitly
+    if not os.environ.get("ERIS_GATEWAY_BASE_URL") and os.environ.get("ERIS_BENCH_BASE_URL"):
+        os.environ["ERIS_GATEWAY_BASE_URL"] = os.environ["ERIS_BENCH_BASE_URL"]
+    if not os.environ.get("ERIS_GATEWAY_API_KEY") and os.environ.get("ERIS_BENCH_API_KEY"):
+        os.environ["ERIS_GATEWAY_API_KEY"] = os.environ["ERIS_BENCH_API_KEY"]
+    return True
+
+
+_dotenv_loaded = _load_dotenv()        # before any eris import, so config.py reads these values
+_attributable = _apply_attributable_preset()   # …and the one-model override lands before config too
 
 from eris.experiments.benchmarks.core import run_arm, compare
 from eris.experiments.benchmarks.scoring import score_results
@@ -70,6 +112,22 @@ def main(argv: Optional[list] = None):    # pragma: no cover - CLI orchestration
     if _dotenv_loaded:
         print(f"[bench] loaded {_dotenv_loaded} setting(s) from .env (keys + config — entered once)",
               file=sys.stderr)
+    # NO black box for the operational env: name every stale shell var that is overriding the .env.
+    # This is the exact failure that prints '✗ MISMATCH — NOT attributable' (a lingering
+    # `set ERIS_HIVE_SYNTH_CLOUD=1` from a prior window), so say it in plain terms with the fix.
+    if _DOTENV_CONFLICTS:
+        print(f"[bench] WARNING: {len(_DOTENV_CONFLICTS)} shell env var(s) OVERRIDE your .env "
+              "(an explicit `set`/export always wins over the file):", file=sys.stderr)
+        for k, shell_v, file_v in _DOTENV_CONFLICTS:
+            print(f"[bench]   {k} = {shell_v!r} (shell)  vs  {file_v!r} (.env)", file=sys.stderr)
+        print("[bench]   → stale values like these can make a run NON-attributable. Open a FRESH "
+              "terminal (the `set` vars vanish) or clear each (`set VAR=` on Windows / "
+              "`unset VAR` on bash), then re-run. Or set ERIS_BENCH_ATTRIBUTABLE=1 to force one "
+              "model into every slot regardless.", file=sys.stderr)
+    if _attributable:
+        print(f"[bench] ATTRIBUTABLE mode: forcing {os.environ.get('ERIS_BENCH_MODEL')!r} into every "
+              "slot (specialists / gaps / synthesis / bare), hive-synth-cloud OFF — overriding any "
+              "stale shell vars. The only variable left is architecture-vs-bare.", file=sys.stderr)
 
     # Loud guard against the #1 silent-truncation footgun: too-small Ollama context window quietly
     # chops long QuALITY/FRAMES passages, so BOTH arms answer from a partial source and the numbers
@@ -93,7 +151,22 @@ def main(argv: Optional[list] = None):    # pragma: no cover - CLI orchestration
           file=sys.stderr)
 
     from eris.experiments.benchmarks.arms import default_bare_arm
-    report = {"benchmark": args.benchmark, "n": len(items)}
+    # Record the run CONFIG + the Eris routing regime IN the saved report — two reports with a
+    # different limit / hard_only / model / synth-cloud setting are otherwise indistinguishable, and
+    # the routing regime (the single biggest cost + attributability determinant) was previously only
+    # on stderr, absent from the --out JSON.
+    report = {"benchmark": args.benchmark, "n": len(items),
+              "config": {"limit": args.limit, "arm": args.arm, "hard_only": args.hard_only,
+                         "eris_factory": args.eris_factory or None,
+                         "attributable_mode": _attributable,
+                         "dotenv_conflicts": [list(c) for c in _DOTENV_CONFLICTS]}}
+    if args.arm in ("eris", "both"):
+        report["eris_routing"] = {
+            "gateway_base_url": os.environ.get("ERIS_GATEWAY_BASE_URL"),
+            "tier_free": os.environ.get("ERIS_TIER_FREE"),
+            "tier_synth": os.environ.get("ERIS_TIER_SYNTH"),
+            "hive_synth_cloud": os.environ.get("ERIS_HIVE_SYNTH_CLOUD", "0"),
+            "bench_model": os.environ.get("ERIS_BENCH_MODEL")}
     res_bare = res_eris = None
     if args.arm in ("bare", "both"):
         res_bare = score_results(run_arm(items, default_bare_arm(), "bare"), items)

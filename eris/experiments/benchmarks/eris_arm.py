@@ -262,34 +262,84 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
             ingest(context)
         meter.reset()                            # count the hive + the extraction call
         res = asyncio.run(orch.hive_research(question, scope="doc", document="bench"))
-        if isinstance(res, dict) and res.get("error"):
-            print(f"[eris-arm] hive_research returned an error: {res.get('error')}", file=sys.stderr)
+        if not isinstance(res, dict):
+            res = {}
+        hive_error = res.get("error")
+        if hive_error:                           # a hive exception, not a reasoning loss — keep it
+            print(f"[eris-arm] hive_research returned an error: {hive_error}", file=sys.stderr)
         synthesis = (res.get("synthesis_full") or res.get("synthesis") or "").strip()
+        # Cost the hive ALONE before the extraction pass: extraction is an Eris-only extra call the
+        # bare arm never makes, so split it out (visibly) instead of folding the overhead invisibly
+        # into the equal-budget number. Snapshot the meter between the two stages.
+        hive_tokens, hive_calls = meter.tokens, meter.calls
         # Extract a short, scorable answer from the synthesis (the bare arm answers directly; this
         # gives Eris the same answer FORM so exact-match/MC don't penalize the hive for verbosity).
         # If extraction yields nothing we FALL BACK to the synthesis but FLAG it (extraction_ok=
         # False), so a broken/empty extraction can't silently read as "the hive answered wrong".
         extracted = _extract_answer(remainder, synthesis) if synthesis else ""
         extraction_ok = bool(extracted)
+        extraction_tokens = meter.tokens - hive_tokens
+        extraction_calls = meter.calls - hive_calls
         answer = extracted or synthesis
         tokens = meter.tokens
+        token_proxy = False
         if tokens <= 0:
             # Distinguish "no LLM calls happened" (the hive declined with 0 sources — a legitimate
             # 0 cost) from "calls happened but no usage reported" (the real proxy case worth warning).
             tc = res.get("tier_calls", {}) or {}
             calls = sum(v for k, v in tc.items() if not str(k).startswith("_")) or meter.calls
             tokens = calls
+            token_proxy = meter.calls > 0        # a call-count substituted for real tokens
             if meter.calls > 0 and not warned["proxy"]:
                 warned["proxy"] = True
                 print("[eris-arm] WARNING: the hive made calls but the backend reported no token "
                       "usage; cost is a CALL-COUNT PROXY, not tokens — equal-budget is approximate. "
                       "Serve via an OpenAI-compatible /v1 endpoint (Ollama/vLLM) for real tokens.",
                       file=sys.stderr)
-        # Return the FULL diagnostics, not just the scored answer: the complete hive synthesis (read
-        # it in the report, untruncated), whether extraction succeeded, sources retrieved, and the
-        # raw call count — so a 0% is never a black box.
-        return {"text": answer, "tokens": int(tokens),
-                "detail": {"synthesis": synthesis, "extraction_ok": extraction_ok,
-                           "n_sources": res.get("n_sources", 0), "hive_calls": meter.calls}}
+        # Return the FULL diagnostics, not just the scored answer. Beyond the synthesis + extraction
+        # flag, surface every signal the hive COMPUTED and used to (not) answer — so a right/wrong
+        # result is attributable to the architecture, never a black box. These are exactly the
+        # fingerprints of the physics + multi-agent machinery the benchmark exists to judge:
+        # specialist_divergence (did the lenses actually disagree?), the confidence GEOMETRY
+        # (cos-match / sin-unresolved / coherence / torsion), the gaps it could/couldn't close, the
+        # adversarial Elos critique, and citation-stripping. All already on `res`; previously all but
+        # four were dropped right here. (Per the 39-finding blackbox audit, 2026-06.)
+        tier_calls = res.get("tier_calls") or {}
+        detail = {
+            "synthesis": synthesis,
+            "synthesis_pre_ground": (res.get("synthesis_pre_ground_full")
+                                     or res.get("synthesis_pre_ground") or ""),
+            "extraction_ok": extraction_ok,
+            "n_sources": res.get("n_sources", 0),
+            "hive_calls": meter.calls,
+            "hive_tokens": hive_tokens,
+            "extraction_tokens": extraction_tokens,
+            "extraction_calls": extraction_calls,
+            "tokens_are_proxy": token_proxy,
+            # — multi-agent machinery: did the hive engage, and did its second cycle do real work? —
+            "cycles": res.get("cycles"),
+            "n_active": res.get("n_active"),
+            "n_contributors": res.get("n_contributors"),
+            "specialist_divergence": res.get("specialist_divergence"),
+            "gaps": res.get("gaps"),
+            "open_gaps": res.get("open_gaps"),
+            "gaps_closed": res.get("gaps_closed"),
+            "elos_changed": res.get("elos_changed"),
+            "elos_critique": res.get("elos_critique"),
+            "stripped_claims": res.get("stripped_claims"),
+            "canonized": res.get("canonized"),
+            # — the physics readout: cos match, sin/unresolved, coherence, torsion (τ) — the hive's
+            #   OWN geometric confidence in the exact answer being scored. None when no sources. —
+            "confidence": res.get("confidence"),
+            # — cost attribution: WHICH tier/model served the calls + how many were paid —
+            "tier_calls": tier_calls,
+            "paid_calls": tier_calls.get("_paid_calls", 0),
+            # — which source previews the hive actually grounded on (retrieval-miss vs reasoning-miss) —
+            "sources": res.get("sources"),
+        }
+        if hive_error:
+            detail["hive_error"] = hive_error
+            detail["hive_traceback"] = res.get("traceback")
+        return {"text": answer, "tokens": int(tokens), "detail": detail}
 
     return _answer

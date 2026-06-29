@@ -70,18 +70,38 @@ def _extract_choice_letter(pred: str, valid: set) -> str:
     return caps[-1] if caps else ""
 
 
+def multiple_choice_detail(pred: str, item: BenchItem) -> dict:
+    """The full MC scoring DECISION, not just the bool: the gold letter, the letter the scorer
+    parsed out of the prediction, that letter's option text, and WHICH acceptance path fired —
+    'letter' (exact letter match), 'option_text' (the gold option's wording appears verbatim in a
+    verbose answer — a looser credit), or 'none'. Surfaced per item so a wrong or surprising score
+    is judgeable: a mis-parsed letter, a loose substring credit, and a genuine miss are no longer
+    indistinguishable in the report."""
+    gold_letter = _letter_for_choice(item)
+    choices = item.choices or []
+    valid = {chr(65 + i) for i in range(len(choices))}
+    extracted = _extract_choice_letter(pred or "", valid)
+    match, correct = "none", False
+    if gold_letter:
+        if extracted == gold_letter:
+            match, correct = "letter", True
+        else:
+            idx = ord(gold_letter) - 65                   # also accept the full option text
+            if 0 <= idx < len(choices) and contains_gold(pred or "", choices[idx]):
+                match, correct = "option_text", True
+
+    def _text_for(letter: str) -> str:
+        i = ord(letter) - 65 if letter else -1
+        return choices[i] if 0 <= i < len(choices) else ""
+
+    return {"correct": correct, "gold_letter": gold_letter,
+            "extracted_letter": extracted, "extracted_text": _text_for(extracted),
+            "mc_match": match}
+
+
 def multiple_choice(pred: str, item: BenchItem) -> bool:
     """Accept the gold letter (e.g. 'B', 'B.', '(B)', 'Answer: B') or the gold option text."""
-    gold_letter = _letter_for_choice(item)
-    if not gold_letter:
-        return False
-    valid = {chr(65 + i) for i in range(len(item.choices or []))}
-    if _extract_choice_letter(pred, valid) == gold_letter:
-        return True
-    idx = ord(gold_letter) - 65                       # also accept the full option text
-    if item.choices and 0 <= idx < len(item.choices):
-        return contains_gold(pred, item.choices[idx])
-    return False
+    return multiple_choice_detail(pred, item)["correct"]
 
 
 def abstained(pred: str) -> bool:
@@ -129,10 +149,15 @@ def faithfulness_score(output: str, context: str, hallucination_spans=None,
     the RAGTruth numbers (those carry spans); treat faithfulness-as-overlay on FRAMES/QuALITY as a
     rough signal, or install RAGAS for claim-level entailment (ragchecker_faithfulness)."""
     sents = _sentences(output)
+    spans = [s for s in (_norm_span(x) for x in (hallucination_spans or [])) if s]
+    # WHICH detector ran: 'spans' = the RAGTruth annotated reference (trustworthy); 'overlap_proxy'
+    # = the CRUDE content-word fallback (a rough signal only — see the docstring caveat). The report
+    # MUST carry this so a proxy number is never read as if it were reference-grade.
+    mode = "spans" if spans else "overlap_proxy"
     if not sents:
         return {"hallucination_rate": 0.0, "n_sentences": 0, "supported": 0,
-                "unsupported": 0, "hallucinated": []}
-    spans = [s for s in (_norm_span(x) for x in (hallucination_spans or [])) if s]
+                "unsupported": 0, "hallucinated": [], "hallucinated_all": [],
+                "mode": mode, "n_spans": len(spans), "threshold": threshold}
     ctx_tokens = _content_tokens(context)
     hallucinated = []
     for s in sents:
@@ -145,7 +170,11 @@ def faithfulness_score(output: str, context: str, hallucination_spans=None,
     rate = len(hallucinated) / len(sents)
     return {"hallucination_rate": round(rate, 4), "n_sentences": len(sents),
             "supported": len(sents) - len(hallucinated), "unsupported": len(hallucinated),
-            "hallucinated": hallucinated[:5]}
+            "hallucinated": hallucinated[:5],
+            # FULL list too: the [:5] above is a display convenience, but the operator must be able
+            # to read EVERY flagged sentence to audit the rate — no silent truncation of evidence.
+            "hallucinated_all": hallucinated,
+            "mode": mode, "n_spans": len(spans), "threshold": threshold}
 
 
 def ragchecker_faithfulness(output: str, context: str):     # pragma: no cover - optional dep
@@ -185,7 +214,19 @@ def score_results(results: List[ArmResult], items: List[BenchItem]) -> List[ArmR
         if it.meta.get("type") == "faithfulness":
             fs = faithfulness_score(r.text, it.context, it.meta.get("hallucination_spans"))
             r.faithfulness = fs["hallucination_rate"]
-            r.detail = fs
+            # MERGE, never overwrite: the arm's own diagnostics (full hive synthesis, extraction_ok,
+            # tier_calls, the physics confidence geometry…) must SURVIVE on faithfulness items too —
+            # exactly where you need to see HOW the judged text was produced. A plain `r.detail = fs`
+            # clobbered all of it, turning RAGTruth rows into black boxes.
+            r.detail = {**(r.detail or {}), **fs}
+        elif it.choices:
+            d = multiple_choice_detail(r.text, it)
+            r.correct = d["correct"]
+            # surface the scorer's actual decision (parsed letter + which path fired), merged onto
+            # the arm's existing detail so a wrong/surprising MC score is diagnosable.
+            r.detail = {**(r.detail or {}), "mc_match": d["mc_match"],
+                        "gold_letter": d["gold_letter"], "extracted_letter": d["extracted_letter"],
+                        "extracted_text": d["extracted_text"]}
         else:
             r.correct = score_item(r.text, it)
     return results

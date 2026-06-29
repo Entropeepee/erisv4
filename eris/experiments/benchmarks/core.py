@@ -84,12 +84,25 @@ def run_arm(items: List[BenchItem], answer_fn: Callable[[str], Any], arm: str) -
 def budget_report(results: List[ArmResult]) -> Dict[str, Any]:
     """Tokens/question for an arm — so a 'win' can be checked at a matched budget. A scaffold that
     spends 5x the tokens hasn't beaten the bare model until the budgets are equalized."""
+    import statistics
     toks = [r.tokens for r in results if r.tokens > 0]
     n = len(results)
     total = sum(r.tokens for r in results)
+    # cost basis: real backend tokens, a CALL-COUNT proxy (an arm whose backend reported no usage),
+    # or a mix. token_ratio / equal_budget are only trustworthy at 'real_tokens'; surface the rest
+    # so a proxy can never silently masquerade as a real-token budget.
+    proxy = sum(1 for r in results if (r.detail or {}).get("tokens_are_proxy"))
     return {"n": n, "total_tokens": total,
             "tokens_per_question": round(total / n, 1) if n else 0.0,
-            "measured": len(toks)}
+            # divide by MEASURED items too: errored/0-token items drag tokens_per_question down and
+            # can make an unequal-budget arm look equal. Both numbers, so the gap is visible.
+            "tokens_per_measured_question": round(total / len(toks), 1) if toks else 0.0,
+            "measured": len(toks),
+            "max_tokens": max(toks) if toks else 0,
+            "median_tokens": round(statistics.median(toks), 1) if toks else 0.0,
+            "proxy_items": proxy,
+            "cost_basis": ("real_tokens" if proxy == 0
+                           else "call_count_proxy" if proxy == n else "mixed")}
 
 
 def accuracy(results: List[ArmResult]) -> Dict[str, Any]:
@@ -116,6 +129,8 @@ def item_details(items: List[BenchItem],
         # 300 chars of a 5000-char answer is still a black box). Full question, full answer.
         row = {"id": it.id, "question": it.question,
                "gold": it.answer or ("UNANSWERABLE" if it.unanswerable else "")}
+        if it.context:                             # grounded item: how much source actually reached
+            row["context_chars"] = len(it.context) # the arms (a thin/empty source ≠ a fair miss)
         if it.choices:                             # MC: show what A/B/C/D actually SAY, so a wrong
             row["choices"] = {chr(65 + k): c for k, c in enumerate(it.choices)}  # letter is judgeable
             g = (it.answer or "").strip().upper()
@@ -173,6 +188,19 @@ def compare(arm_a: List[ArmResult], arm_b: List[ArmResult],
                  else "UNEQUAL budget — a higher-accuracy arm that also spends more tokens has "
                       "NOT cleanly won; equalize tokens/question before claiming a scaffold win"),
     }
+    # Items that fell out of BOTH the graded and the errored buckets (e.g. a faithfulness-typed
+    # item mixed into an accuracy run) silently shrink the accuracy denominator — surface the count
+    # per arm so it can never hide.
+    out[label_a]["ungraded"] = len(arm_a) - acc_a["graded"] - acc_a["errored"]
+    out[label_b]["ungraded"] = len(arm_b) - acc_b["graded"] - acc_b["errored"]
+    # The equal-budget verdict is only meaningful at real tokens — if either arm fell back to a
+    # call-count proxy, say so loudly next to the verdict instead of letting it read as gospel.
+    out["cost_basis"] = {label_a: bud_a.get("cost_basis"), label_b: bud_b.get("cost_basis")}
+    if bud_a.get("cost_basis") != "real_tokens" or bud_b.get("cost_basis") != "real_tokens":
+        out["equal_budget_caveat"] = (
+            "an arm's token count includes a CALL-COUNT proxy (its backend reported no usage) — "
+            "token_ratio_b_over_a / equal_budget are APPROXIMATE; serve via an OpenAI-compatible "
+            "/v1 endpoint (Ollama/vLLM) for real tokens before trusting the budget verdict")
     if fa_a or fa_b:                       # faithfulness benchmarks (RAGTruth): lower rate = better
         out[label_a]["faithfulness"] = fa_a
         out[label_b]["faithfulness"] = fa_b
