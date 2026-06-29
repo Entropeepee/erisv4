@@ -178,6 +178,9 @@ def create_app(
 
     # WebSocket connections for real-time metrics
     ws_connections: list = []
+    # Separate cap bucket for the field-stream sockets (/ws/field) — it lacked /ws's cap, so a
+    # client could open unbounded field sockets and starve the event loop (verified DoS).
+    field_ws_connections: list = []
 
     # ── Endpoints ─────────────────────────────────────────────
 
@@ -952,6 +955,13 @@ def create_app(
         # Whitelist the agent param so it can't probe arbitrary node names (node-enumeration leak).
         agent = sanitize_field_agent(agent, os.environ.get("ERIS_WS_FIELD_AGENTS", ""))
         await websocket.accept()
+        # Cap concurrent field sockets (reuse ERIS_WS_MAX) — /ws had this cap, /ws/field lacked it,
+        # so unbounded sockets could starve the event loop (verified DoS).
+        _field_cap = int(os.environ.get("ERIS_WS_MAX", "32"))
+        if len(field_ws_connections) >= _field_cap:
+            await websocket.close(code=1013)        # try again later
+            return
+        field_ws_connections.append(websocket)
         from eris.config import to_numpy
         node = registry.get(agent)
         field = node.field if node is not None else orchestrator.field
@@ -979,6 +989,9 @@ def create_app(
             import traceback
             traceback.print_exc()
             print(f"[WS Field Error] {e}")
+        finally:
+            if websocket in field_ws_connections:
+                field_ws_connections.remove(websocket)
 
     @app.get("/", response_class=HTMLResponse)
     async def index():
