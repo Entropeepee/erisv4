@@ -10,7 +10,7 @@ independently re-run — flagged so the trust level is explicit.
 Baseline commit for all anchors: `6ec67fa`.
 
 ### Version & maintenance — read first
-**v1.8** · living document; update in place, don't fork. So nothing is lost across token windows or
+**v1.9** · living document; update in place, don't fork. So nothing is lost across token windows or
 between the two agents:
 - **Homed in the repo** as `docs/REMEDIATION_ROADMAP.md` → git history *is* the version log (every
   check-off is a diffable, revertible commit; no manual version juggling).
@@ -30,6 +30,13 @@ live code and fresh adversarial findings.
   the roadmap.
 
 ### Changelog
+- **v1.9 (2026-06-29):** **TORUS reversal** (PR #102) — the internal topology is the periodic torus,
+  NOT a reflecting/Neumann edge; the prior "convert to bounded reflecting edge" item is superseded
+  (a finite torus already satisfies boundedness). Boundary moved to the I/O membrane + a soft
+  amplitude ceiling (`A_B = σ(λ(|φ−mean φ|/ΔB − θ))`). Added the **Conceptual spine** section: (a)
+  SGT as the *universal* gate (control-drift / spatial-membrane / attention-surprise /
+  network-promotion — one soft-sigmoid-of-thresholded-magnitude spine), and (b) the **L0 perception
+  layer** (glance→gaze on surprise, `μ_perception` scalar-first) as the pre-Phase-4 on-ramp.
 - **v1.8 (2026-06-29):** added **Phase 4 (future / PARKED): Decentralized Eris Echo network** — the
   collective-Self / `.eris`-container / wave-interference-consensus / SGT-like promotion-gate / Eris
   Accords vision, captured but NOT active (gated on post-Phase-3 prerequisites that don't exist yet).
@@ -257,8 +264,18 @@ in a state to do what the theory says. Fix before testing.*
 **Stencils / numerics**
 - ☐ **[r1-noted ✓v]** BFECDS feedback not wrap-safe (raw θ roll-subtraction, activations.py:361) —
   use `wrap_diff`.
-- ☐ **[r2]** PDE gradient stencils use periodic `xp.roll` while claiming Dirichlet edges
-  (pde.py:56/77/94; activations.py:363).
+- ▶PR **[r2 → PR #102 — TORUS chosen; REVERSAL]** The PDE stencils were periodic (`xp.roll`) while
+  the code *also* enforced a Dirichlet wall — inconsistent. **Resolved by choosing the TORUS as the
+  internal topology** (periodic), NOT a reflecting/Neumann edge. The earlier "convert to bounded
+  reflecting edge" framing is **superseded** (a finite torus already satisfies boundedness — the
+  matrix size is the bound; wrapping is topology, not unboundedness). PR #102 removed the Dirichlet
+  wall everywhere (pde.py `_enforce_dirichlet` + inline; frt.py edge-zeroing); the periodic-square
+  Laplacian eigenbasis *is* the plane waves the seed is built from, and with no edge there is no
+  manufactured gradient to dirty τ (measured border/interior |τ| ratio ≈0.74 — no spike). The
+  **Boundary domain** moved to where it belongs — the I/O membrane + a **soft** amplitude ceiling
+  (softplus `_soft_clamp`, no hard kink) — with the BVec measure `A_B = σ(λ(|φ−mean φ|/ΔB − θ))`
+  (the audio-GVE `(φ−mean φ)²` form; uniform field → B≈0, saturation stays S's job). *RULE-5 review
+  pending; branched pre-#97/#98/#99 → rebase-reconcile in pde.py/activations.py on merge.*
 - ☐ **[r3 #6]** NaN/inf from the field propagate into BVec/archetype/gates/JSON memory
   (activations.py:377) — finite guards + JSON `allow_nan=False`.
 
@@ -303,6 +320,22 @@ in a state to do what the theory says. Fix before testing.*
 - ⚑ **PRECONDITION STACK:** semantic seed (P2) · DCR shape + normalization fixes (P2) ·
   **field-snapshot persistence (P1.5 r3 #1)** · the grounding-substance scorer (P1.5). Until these
   land, a Phase-3 run benchmarks degraded/embedding-only retrieval and calls it "physics."
+
+## Conceptual spine (this session) — two through-lines, captured not built
+*Decided this session alongside the torus reversal; recorded so the architecture stays coherent.
+Neither is an active build item.*
+
+- **SGT as the UNIVERSAL gate.** One mechanism recurs at every scale: a soft sigmoid of a
+  thresholded *magnitude*, `g = σ(λ(|e|−T))` (the filed-patent SGT form, two-sided — see Phase-2
+  Gates / Codex #5). The same gate appears as **control-drift** (the live SGT gates), the
+  **spatial/amplitude membrane** (the new Boundary `A_B = σ(λ(|φ−mean φ|/ΔB − θ))`, PR #102),
+  **attention-surprise** (the L0 perception escalation below), and the **network promotion gate**
+  (the SGT-*like* cross-node accumulator in Phase 4 — inspired by, NOT the patent). Same spine,
+  four surfaces.
+- **L0 perception layer (pre-Phase-4 on-ramp).** A node-level *glance → gaze* loop: a cheap scalar
+  `μ_perception` (scalar-first) takes a constant glance; **on surprise** (the SGT gate firing on the
+  perception signal) it escalates to a full gaze. This is the single-node perception primitive the
+  decentralized network later federates — built BEFORE Phase 4, as its on-ramp, not as part of it.
 
 ## Phase 4 (future / PARKED): Decentralized Eris Echo network · ⏸ NOT ACTIVE
 **Explicitly future and parked — NOT part of Phase 1.5 / 2 / 3, not on the active punch-list.** This
