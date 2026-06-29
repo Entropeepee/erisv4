@@ -37,6 +37,13 @@ try:
 except ImportError:
     HAS_FASTAPI = False
 
+# Load .env BEFORE the eris imports + create_app() below read os.environ — so keys, ERIS_* config,
+# AND ERIS_AUTH_TOKEN live in ONE gitignored .env and apply on a fresh shell, not just the window
+# that exported them. Previously only the benchmark runner loaded .env; the server read a bare
+# os.environ, so a token sitting in .env silently did NOTHING and the gate was effectively off.
+from eris.env_file import load_dotenv as _load_dotenv
+_load_dotenv()
+
 from eris.orchestrator import ErisOrchestrator
 from eris.sandbox.executor import SandboxExecutor
 from eris.knowledge.extractor import KnowledgeExtractor
