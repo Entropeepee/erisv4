@@ -63,6 +63,15 @@ class TTSEngine:
             except Exception as e:
                 logger.warning(f"TTS provider failed ({e}); falling back to edge-tts")
 
+        # edge-tts ships the TEXT off-box to Microsoft Azure. OFF by default (privacy) — opt in
+        # explicitly with ERIS_TTS_ALLOW_CLOUD=1, or configure a local provider via ERIS_TTS_BASE_URL.
+        if os.environ.get("ERIS_TTS_ALLOW_CLOUD", "0").strip().lower() not in (
+                "1", "on", "true", "yes"):
+            logger.warning("edge-tts fallback is OFF (ERIS_TTS_ALLOW_CLOUD unset) — not sending text "
+                           "to Microsoft. Set ERIS_TTS_BASE_URL for local TTS, or ERIS_TTS_ALLOW_CLOUD=1 "
+                           "to allow the cloud fallback.")
+            return None
+
         import edge_tts
 
         if not voice_id:

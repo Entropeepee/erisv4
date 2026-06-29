@@ -190,6 +190,28 @@ def create_app(
     # WebSocket connections for real-time metrics
     ws_connections: list = []
 
+    # Request-size caps (ON by default, generous) + an opt-in per-client rate limiter
+    # (ERIS_RATE_PER_MIN, default 0 = off) — so one caller can't exhaust RAM/CPU/disk with an
+    # oversized body or a request flood. Oversize → 413; a flood → 429.
+    from eris.server.limits import RateLimiter, char_cap, byte_cap, client_of
+    _rate = RateLimiter(int(os.environ.get("ERIS_RATE_PER_MIN", "0") or 0))
+    _max_chat = char_cap("ERIS_MAX_CHAT_CHARS", 100_000)
+    _max_ingest = char_cap("ERIS_MAX_INGEST_CHARS", 2_000_000)
+    _max_tts = char_cap("ERIS_MAX_TTS_CHARS", 5_000)
+    _max_stt = byte_cap("ERIS_MAX_STT_MB", 25)
+
+    def _rate_or_429(request):
+        if not _rate.allow(client_of(request)):
+            return JSONResponse({"error": "rate limit exceeded — slow down"}, status_code=429)
+        return None
+
+    def _too_big(text, cap, label):
+        if len(text or "") > cap:
+            return JSONResponse(
+                {"error": f"{label} too large ({len(text or '')} chars > {cap} cap)"},
+                status_code=413)
+        return None
+
     # ── Endpoints ─────────────────────────────────────────────
 
     @app.get("/api/profiles")
@@ -200,8 +222,14 @@ def create_app(
                 "default": profiles.default().id}
 
     @app.post("/chat")
-    async def chat(req: ChatRequest):
+    async def chat(req: ChatRequest, request: Request):
         """Main conversation endpoint."""
+        _r = _rate_or_429(request)
+        if _r:
+            return _r
+        _b = _too_big(req.message, _max_chat, "message")
+        if _b:
+            return _b
         prof = profiles.get(req.profile)
         async with governor.foreground():
             result = await orchestrator.process(
@@ -458,10 +486,13 @@ def create_app(
                 status_code=501)
 
     @app.post("/v1/chat/completions")
-    async def chat_completions(req: OpenAIChatRequest):
+    async def chat_completions(req: OpenAIChatRequest, request: Request):
         """OpenAI-compatible endpoint. Routes by `model` to a node (WILLOW I.5):
         model:"willow" -> the Willow node, model:"eris" (default) -> the OverSoul.
         Used by NVIDIA ACE and the Unreal NPC plugins."""
+        _r = _rate_or_429(request)
+        if _r:
+            return _r
         message_text = ""
         system_context = ""
         for msg in req.messages:
@@ -469,6 +500,9 @@ def create_app(
                 system_context += msg.get("content", "") + "\n"
             elif msg.get("role") == "user":
                 message_text += msg.get("content", "") + "\n"
+        _b = _too_big(message_text + system_context, _max_chat, "messages")
+        if _b:
+            return _b
 
         agent = registry.get(req.model)
         if agent is not None and agent.name != "eris":
@@ -666,9 +700,16 @@ def create_app(
         return FileResponse(path, filename=safe)
 
     @app.post("/ingest")
-    async def ingest(req: IngestRequest):
+    async def ingest(req: IngestRequest, request: Request):
         """Ingest text into the knowledge base."""
-        descriptors = extractor.extract_text(req.text, title=req.title)
+        _r = _rate_or_429(request)
+        if _r:
+            return _r
+        _b = _too_big(req.text, _max_ingest, "ingest text")
+        if _b:
+            return _b
+        # Off the event loop — extract/embed is CPU-heavy and was blocking it synchronously.
+        descriptors = await asyncio.to_thread(extractor.extract_text, req.text, title=req.title)
         return {
             "chunks_created": len(descriptors),
             "bvecs": [d.bvec.as_dict() if d.bvec else None for d in descriptors],
@@ -826,8 +867,14 @@ def create_app(
         return {"voices": tts_engine.get_voices(), "default": {"engine": "pyttsx3", "id": ""}}
 
     @app.post("/api/tts/generate")
-    async def generate_tts(req: TTSGenerateRequest):
+    async def generate_tts(req: TTSGenerateRequest, request: Request):
         """Generate TTS audio."""
+        _r = _rate_or_429(request)
+        if _r:
+            return _r
+        _b = _too_big(req.text, _max_tts, "TTS text")
+        if _b:
+            return _b
         import re
         # Strip common markdown to prevent reading asterisks/hashes out loud
         clean_text = re.sub(r'[*_`#~]', '', req.text)
@@ -887,7 +934,19 @@ def create_app(
         from eris.interface import stt
         if not stt.is_configured():
             return JSONResponse({"error": "no STT service configured"}, status_code=503)
+        _r = _rate_or_429(request)
+        if _r:
+            return _r
+        # Reject an oversized body via Content-Length BEFORE buffering it into RAM (the exhaustion
+        # vector); also re-check after read for chunked uploads with no Content-Length.
+        _clen = int(request.headers.get("content-length", "0") or 0)
+        if _clen > _max_stt:
+            return JSONResponse({"error": f"audio too large ({_clen} > {_max_stt} byte cap)"},
+                                status_code=413)
         audio = await request.body()
+        if len(audio) > _max_stt:
+            return JSONResponse({"error": f"audio too large ({len(audio)} > {_max_stt} byte cap)"},
+                                status_code=413)
         ctype = request.headers.get("content-type", "audio/wav")
         try:
             text = await asyncio.to_thread(
