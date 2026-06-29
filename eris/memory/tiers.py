@@ -169,6 +169,35 @@ def consolidate_records(records: List[Any], threshold: float = 0.92):
 
 # ─── Memory Record ────────────────────────────────────────────────────────
 
+def _snapshot_to_list(a: "Optional[np.ndarray]"):
+    """Serialize an optional 2D field snapshot (phi/theta) for JSONL — or None. Drops a snapshot
+    that is non-finite (NaN/inf would be invalid JSON and would poison any later re-evolution),
+    persisting the record embedding-only rather than a corrupt field."""
+    if a is None:
+        return None
+    try:
+        arr = np.asarray(a, dtype=np.float32)
+    except (ValueError, TypeError):
+        return None
+    if arr.ndim != 2 or arr.size == 0 or not np.all(np.isfinite(arr)):
+        return None
+    return arr.tolist()
+
+
+def _snapshot_from_list(v):
+    """Restore a 2D field snapshot from JSON with dtype/shape/finite validation. Returns None on any
+    problem (a bad snapshot must NOT crash reload — the record is still usable embedding-only)."""
+    if v is None:
+        return None
+    try:
+        arr = np.array(v, dtype=np.float32)        # ragged/non-numeric → ValueError → None
+    except (ValueError, TypeError):
+        return None
+    if arr.ndim != 2 or arr.size == 0 or not np.all(np.isfinite(arr)):
+        return None
+    return arr
+
+
 @dataclass
 class MemoryRecord:
     """A single memory entry with computed BFECDS and metadata.
@@ -225,6 +254,14 @@ class MemoryRecord:
         }
         if self.embedding is not None:
             d["embedding"] = self.embedding.tolist()
+        # Persist the field-state snapshots (phi/theta) too — they were omitted, so field memory was
+        # ephemeral across restart (MTM/LTM reloaded embedding-only). Validated finite before write.
+        _phi = _snapshot_to_list(self.phi_snapshot)
+        if _phi is not None:
+            d["phi_snapshot"] = _phi
+        _theta = _snapshot_to_list(self.theta_snapshot)
+        if _theta is not None:
+            d["theta_snapshot"] = _theta
         return d
 
     @classmethod
@@ -240,6 +277,8 @@ class MemoryRecord:
             access_count=d.get("access_count", 0),
             last_accessed=d.get("last_accessed", time.time()),
             tier=d.get("tier", "stm"),
+            phi_snapshot=_snapshot_from_list(d.get("phi_snapshot")),
+            theta_snapshot=_snapshot_from_list(d.get("theta_snapshot")),
         )
 
 
