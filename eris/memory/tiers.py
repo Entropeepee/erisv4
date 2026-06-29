@@ -169,6 +169,50 @@ def consolidate_records(records: List[Any], threshold: float = 0.92):
 
 # ─── Memory Record ────────────────────────────────────────────────────────
 
+def _snapshot_to_list(a: "Optional[np.ndarray]"):
+    """Serialize an optional 2D field snapshot (phi/theta) for JSONL — or None. Drops a snapshot
+    that is non-finite (NaN/inf would be invalid JSON and would poison any later re-evolution),
+    persisting the record embedding-only rather than a corrupt field."""
+    if a is None:
+        return None
+    try:
+        arr = np.asarray(a, dtype=np.float32)
+    except (ValueError, TypeError):
+        return None
+    if arr.ndim != 2 or arr.size == 0 or not np.all(np.isfinite(arr)):
+        return None
+    return arr.tolist()
+
+
+def _snapshot_from_list(v):
+    """Restore a 2D field snapshot from JSON with dtype/shape/finite validation. Returns None on any
+    problem (a bad snapshot must NOT crash reload — the record is still usable embedding-only)."""
+    if v is None:
+        return None
+    try:
+        arr = np.array(v, dtype=np.float32)        # ragged/non-numeric → ValueError → None
+    except (ValueError, TypeError):
+        return None
+    if arr.ndim != 2 or arr.size == 0 or not np.all(np.isfinite(arr)):
+        return None
+    return arr
+
+
+def _snapshot_pair_from_lists(phi_v, theta_v):
+    """Restore a (phi, theta) field-snapshot PAIR. Each side is validated independently
+    (_snapshot_from_list), then the pair is checked for SHAPE CONSISTENCY: phi and theta are the
+    field on the SAME grid, so a snapshot is only meaningful when they share a shape. Codex #7 —
+    validated independently, a mismatched pair (e.g. phi 2×2, theta 1×1) both load as non-None and
+    DCR would then compute on inconsistent geometry. When both are present but their shapes differ,
+    drop the WHOLE pair → (None, None), i.e. embedding-only fallback, rather than load a mismatched
+    pair. (A torn pair — one side missing — is a separate capture bug; left as-is here.)"""
+    phi = _snapshot_from_list(phi_v)
+    theta = _snapshot_from_list(theta_v)
+    if phi is not None and theta is not None and phi.shape != theta.shape:
+        return None, None
+    return phi, theta
+
+
 @dataclass
 class MemoryRecord:
     """A single memory entry with computed BFECDS and metadata.
@@ -225,11 +269,22 @@ class MemoryRecord:
         }
         if self.embedding is not None:
             d["embedding"] = self.embedding.tolist()
+        # Persist the field-state snapshots (phi/theta) too — they were omitted, so field memory was
+        # ephemeral across restart (MTM/LTM reloaded embedding-only). Validated finite before write.
+        _phi = _snapshot_to_list(self.phi_snapshot)
+        if _phi is not None:
+            d["phi_snapshot"] = _phi
+        _theta = _snapshot_to_list(self.theta_snapshot)
+        if _theta is not None:
+            d["theta_snapshot"] = _theta
         return d
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "MemoryRecord":
         emb = np.array(d["embedding"], dtype=np.float32) if "embedding" in d else None
+        # Restore phi/theta as a SHAPE-CONSISTENT pair — a mismatched pair is dropped (Codex #7),
+        # so reload never hands DCR a phi/theta on inconsistent grids.
+        phi, theta = _snapshot_pair_from_lists(d.get("phi_snapshot"), d.get("theta_snapshot"))
         return cls(
             text=d["text"],
             bvec=BVec.from_dict(d["bvec"]),
@@ -240,6 +295,8 @@ class MemoryRecord:
             access_count=d.get("access_count", 0),
             last_accessed=d.get("last_accessed", time.time()),
             tier=d.get("tier", "stm"),
+            phi_snapshot=phi,
+            theta_snapshot=theta,
         )
 
 

@@ -71,10 +71,9 @@ All eight landed on `main`; each Tier-3 item passed a real-server exploit re-run
 means anything.* **Building now: r3 #1 + r1 #2/#3. The rest HOLD for Codex round-4** (concurrency /
 shared-mutable-state / long-run loop audit will widen them — do the durability cluster once, informed
 by r4).
-- ▶PR ⚑ **[r3 #1 ✓v]** Field snapshots never serialized — `to_dict`/`from_dict` omit
-  `phi/theta_snapshot`, so after restart MTM/LTM are embedding-only (tiers.py:214/231). **DONE —
-  PR #92:** serialize phi/theta with dtype/shape/finite validation; reload survives. **Phase-3
-  precondition.** *Awaiting owner merge.*
+- ✓done **[#92, r3 #1]** Field snapshots now persisted — `to_dict`/`from_dict` serialize
+  `phi/theta_snapshot` with dtype/shape/finite validation; MTM/LTM reload survives a restart
+  (tiers.py). **Phase-3 precondition cleared.**
 - ▶PR **[r1 #2/#3 ✓v]** "Grounding" checks citation-ID-resolution, not claim SUPPORT — a fabrication
   with a live id is canonized as fact (calibration.py:80; research.py:468). **DONE — PR #93:**
   QUOTE-AND-VERIFY substance scorer (`eris/reasoning/grounding.py`) wired into verify_grounding +
