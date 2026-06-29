@@ -308,6 +308,7 @@ def run_two_cycle_research(
     goal_bvec: Optional[BVec] = None, max_specialists: int = 5, single_pass: bool = False,
     regime: str = "research", log: Optional[Callable[[str], None]] = None,
     map_fn: Optional[Callable[[Callable, List], List]] = None,
+    inference_mode: bool = False,
 ) -> ResearchResult:
     """Run the broad→synthesis→refined→canonize cycle. `retriever(query)->[sources]` is the
     existing RAG pipeline; `model(prompt)->text` is the local model. Specialists default to
@@ -315,6 +316,12 @@ def run_two_cycle_research(
     given (citation-grounded)."""
     _log = log or (lambda m: None)
     synth = synth_model or model                       # deep model for comprehension-heavy steps
+    # inference_mode (ERIS_HIVE_TASK=inference): for COMPREHENSION tasks the answer is an inference
+    # the text SUPPORTS but never states verbatim ("why does X feel Y"). The default strict-grounding
+    # prompts + the Elos strike-the-weakest-claim pass are tuned to DELETE exactly such an inference
+    # (right for factual/IP QA, wrong here). inference_mode (a) reframes the synth/canon prompts to
+    # STATE the best-supported inference, and (b) SKIPS the Elos strike pass. ADDITIVE + OPT-IN:
+    # strict grounding stays the hard default; nothing changes unless this is set.
     # Specialists reason INDEPENDENTLY → they can run concurrently (the Tribe is conceptually
     # parallel). map_fn defaults to sequential (deterministic for tests); the orchestrator passes
     # a thread-pool mapper. Results preserve input order; hub posting happens AFTER the gather so
@@ -376,18 +383,27 @@ def run_two_cycle_research(
     cross = hub.query(winner.bvec, top_k=2) if winner is not None else []
     # Show the TOP findings only (context budget — a small model truncates an over-long prompt).
     top_findings = sorted(c1, key=lambda f: f.confidence, reverse=True)[:3]
+    # Step (3) differs by mode: strict marks support-vs-inference (and the canon prompt then
+    # deletes the inference); inference_mode asks for the best-supported inference outright.
+    _synth_step3 = (
+        "(3) state the best-supported INFERENCE the sources IMPLY about the question — the answer "
+        "may be implied rather than stated verbatim, so give your most defensible reading and cite "
+        "the passages that point to it, rather than withholding it as 'not stated'. "
+        if inference_mode else
+        "(3) mark what the sources SUPPORT vs what is inference. ")
     synth_prompt = (
         f"You are Kairos, integrating the Tribe's findings on: {topic}\n\n"
         f"FINDINGS:\n" + "\n".join(f"- {f.specialist_id}: {f.content}" for f in top_findings) +
         (("\n\nCross-links:\n" + "\n".join(f"- {f.content}" for f in cross)) if cross else "") +
         f"\n\nSOURCES:\n{src1}\n\nSynthesize with real comprehension: (1) state the CENTRAL "
         f"mechanism/claim the sources establish; (2) show how the findings connect or CONFLICT; "
-        f"(3) mark what the sources SUPPORT vs what is inference. Ground each claim [s:i]. Then "
-        f"list genuine open GAPS as bullets.")
+        f"{_synth_step3}Ground each claim [s:i]. Then list genuine open GAPS as bullets.")
     _log("synthesis — Kairos integrating…")
     synthesis = (synth(synth_prompt) or "").strip()
     elos_critique = ""
-    if any(s.id == "elos" for s in active):
+    # SKIP the Elos strike-the-weakest-claim pass in inference_mode: that pass deletes the single
+    # least-cited claim, which on a comprehension item is exactly the required inference.
+    if any(s.id == "elos" for s in active) and not inference_mode:
         elos_critique = (model(
             f"As Elos (adversarial), try to FALSIFY this synthesis using ONLY the sources. "
             f"Identify the SINGLE weakest claim — the one least supported by the sources. This "
@@ -433,10 +449,17 @@ def run_two_cycle_research(
     all_sources = _distinct(ctx1 + ctx2)
     refinements = "\n".join(f"- {f.content}" for f in c2 if f.content.strip()
                             and not f.metadata.get("echo"))
+    # Strict (default): "assert nothing the sources don't support" — deletes an unstated inference.
+    # inference_mode: explicitly PERMIT the well-supported inference (cite the passages that imply it).
+    _canon_ground = (
+        "ground EVERY claim with [s:i]. The answer may be an INFERENCE the sources SUPPORT but never "
+        "state verbatim — state your best-supported inference and cite the passages that IMPLY it; "
+        "do NOT omit a well-supported inference merely because no single sentence states it literally"
+        if inference_mode else
+        "ground EVERY claim with [s:i] and assert nothing the sources don't support")
     canon_prompt = (
         f"Refine this synthesis on '{topic}' into its final, defensible form. Integrate the "
-        f"gap-closures below into ONE coherent passage; ground EVERY claim with [s:i] and assert "
-        f"nothing the sources don't support"
+        f"gap-closures below into ONE coherent passage; " + _canon_ground
         + ((f". Address this critique: {elos_critique}"
             f" — for the claim Elos flagged, EITHER ground it with a specific [s:i] from the "
             f"sources OR remove it entirely; do not merely restate it.") if elos_critique else "") +

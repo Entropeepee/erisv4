@@ -214,6 +214,18 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
         print(f"[eris-arm] hive → GATEWAY {os.environ.get('ERIS_GATEWAY_BASE_URL', '?')} | "
               f"specialists+gaps={_free} | synth={_synth} | bare={_bare} | {_verdict}",
               file=sys.stderr)
+        # FAIL LOUD in attributable mode: a measurement run must NOT proceed if the slots disagree
+        # (a stale `set ERIS_TIER_SYNTH=…` has slipped through three times). Refuse rather than emit
+        # numbers that conflate architecture with model. Only enforced when the operator asked for
+        # attributability (ERIS_BENCH_ATTRIBUTABLE); a normal speed run still just prints the verdict.
+        _attrib_mode = os.environ.get("ERIS_BENCH_ATTRIBUTABLE", "").strip().lower() in (
+            "1", "on", "true", "yes")
+        if _attrib_mode and not _one:
+            raise RuntimeError(
+                f"ERIS_BENCH_ATTRIBUTABLE is set but the slots are NOT one model "
+                f"(specialists={_free}, synth={_synth}, bare={_bare}). A stale shell `set` is "
+                f"overriding the .env — open a fresh terminal or clear the conflicting var. "
+                f"Refusing to run a non-attributable measurement.")
     else:
         print(f"[eris-arm] hive model → LOCAL Ollama ({os.environ.get('ERIS_LOCAL_MODEL', 'gpt-oss:20b')})"
               " — set ERIS_GATEWAY_BASE_URL/KEY + ERIS_TIER_* to route the hive to OpenRouter for speed.",
@@ -245,8 +257,17 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
              "answer format EXACTLY — if it asks for a single letter, output ONLY that letter; "
              "otherwise answer as briefly as possible (a name, number, or date) with no "
              f"explanation.\n\nANALYSIS:\n{synthesis}\n\nTASK:\n{remainder}\n\nFinal answer:")
+        # Honor the ablation's deterministic-decode pin so the extraction step doesn't reintroduce
+        # sampling noise (default unset → the mediator's own default temperature, unchanged).
+        _et = os.environ.get("ERIS_HIVE_TEMPERATURE")
+        _ekw = {}
         try:
-            resp = run_blocking(orch.mediator.generate(prompt=p, system=""), timeout=120)
+            if _et not in (None, ""):
+                _ekw["temperature"] = float(_et)
+        except ValueError:
+            pass
+        try:
+            resp = run_blocking(orch.mediator.generate(prompt=p, system="", **_ekw), timeout=120)
             return (getattr(resp, "text", "") or "").strip()
         except Exception as e:
             print(f"[eris-arm] extraction call FAILED ({type(e).__name__}: {e}) — flagging item",
@@ -334,6 +355,9 @@ def make_eris_arm(data_dir: str = "eris_bench_data",
             # — cost attribution: WHICH tier/model served the calls + how many were paid —
             "tier_calls": tier_calls,
             "paid_calls": tier_calls.get("_paid_calls", 0),
+            # — cap==slice diagnostic: did retrieval truncate, or only permute? (B-vs-C hinges on it) —
+            "retrieval_stats": res.get("retrieval_stats"),
+            "inference_mode": res.get("inference_mode"),
             # — which source previews the hive actually grounded on (retrieval-miss vs reasoning-miss) —
             "sources": res.get("sources"),
         }

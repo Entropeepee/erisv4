@@ -847,6 +847,23 @@ class ErisOrchestrator:
         # GLNCS/nullspace common-mode removal before field resonance (coherence) — default ON,
         # A/B it off with ERIS_HIVE_RESONANCE_DENOISE=0.
         _denoise = os.environ.get("ERIS_HIVE_RESONANCE_DENOISE", "1") != "0"
+        # Deterministic decode for measurement (ablation): ERIS_HIVE_TEMPERATURE pins EVERY hive
+        # model call (specialists, synth, gaps, digester) to a fixed temperature. Unset → the
+        # backend default (0.7) is unchanged. Set to 0 for a reproducible A/B where arm differences
+        # are the config, not sampling noise.
+        _hive_temp_raw = os.environ.get("ERIS_HIVE_TEMPERATURE")
+        try:
+            _hive_temp = float(_hive_temp_raw) if _hive_temp_raw not in (None, "") else None
+        except ValueError:
+            _hive_temp = None
+        # ERIS_HIVE_TASK=inference → comprehension grounding (permit the supported inference, skip
+        # the Elos strike pass). Default "" → strict grounding (unchanged). Read at call time so an
+        # ablation can toggle it per-arm in one process.
+        _inference_mode = os.environ.get("ERIS_HIVE_TASK", "").strip().lower() == "inference"
+        # cap==slice instrumentation: did the [:_max_src] truncation ever actually drop a candidate,
+        # or only permute a non-truncated list? If it never truncates, the resonance rerank cannot
+        # SELECT — it can only reorder — so B (resonance off) must equal C (resonance on).
+        _retrieval_stats = {"cap": None, "max_candidates": 0, "truncated_any": False, "calls": 0}
         _goal_text = document or topic
         goal_bvec = _text_to_bvec(_goal_text)
         _goal_field = None
@@ -982,6 +999,15 @@ class ErisOrchestrator:
                 # order, defeating the resonance design for the flagship "read this paper" path.
                 led = _rerank([t for t in cands if t in lead_text])
                 rest = _rerank([t for t in cands if t not in lead_text])
+                # Record whether the cap actually truncated this pool (cap==slice diagnostic): the
+                # rerank can only SELECT when there are more candidates than the cap; otherwise it
+                # just permutes a list it returns whole.
+                _n_cand = len(led) + len(rest)
+                _retrieval_stats["calls"] += 1
+                _retrieval_stats["cap"] = _max_src
+                _retrieval_stats["max_candidates"] = max(_retrieval_stats["max_candidates"], _n_cand)
+                if _n_cand > _max_src:
+                    _retrieval_stats["truncated_any"] = True
                 return (led + rest)[:_max_src]
             except Exception as e:
                 import traceback
@@ -1004,8 +1030,10 @@ class ErisOrchestrator:
             failure on a sovereign call RAISES, it does not silently degrade to a cloud backend
             that may be sitting in self.mediator. OPEN may fall back to direct local."""
             from eris.interface.sovereignty import SovereigntyError
+            _temp_kw = {} if _hive_temp is None else {"temperature": _hive_temp}
             try:
-                resp = run_blocking(contractor.generate(sens, tier, prompt, system=sys_prompt))
+                resp = run_blocking(contractor.generate(sens, tier, prompt, system=sys_prompt,
+                                                         **_temp_kw))
                 return getattr(resp, "text", "") or ""
             except SovereigntyError:
                 raise
@@ -1015,7 +1043,8 @@ class ErisOrchestrator:
                 if sens is Sensitivity.SOVEREIGN:
                     raise
                 try:                                   # OPEN only: last-ditch direct local
-                    resp = run_blocking(self.mediator.generate(prompt=prompt, system=sys_prompt))
+                    resp = run_blocking(self.mediator.generate(prompt=prompt, system=sys_prompt,
+                                                               **_temp_kw))
                     return getattr(resp, "text", "") or ""
                 except Exception:
                     return ""
@@ -1078,13 +1107,16 @@ class ErisOrchestrator:
                 topic, retriever=_rag, model=_reason, moe_gate=self.moe_gate, hub=self.hub,
                 thought_stream=self.thought_stream, embed_fn=_embed,
                 synth_model=synth_model, digester=digester, single_pass=(mode == "single"),
-                max_specialists=max_specialists, log=_log, map_fn=_map_fn)
+                max_specialists=max_specialists, log=_log, map_fn=_map_fn,
+                inference_mode=_inference_mode)
             return {"topic": res.topic, "thought_id": res.thought_id, "gaps": res.gaps,
                     "open_gaps": res.open_gaps,
                     "n_contributors": res.n_contributors, "n_active": res.n_active,
                     "n_sources": res.n_sources, "stripped_claims": res.stripped_claims,
                     "cycles": res.cycles, "canonized": res.thought_id is not None,
                     "sources": res.sources, "sensitivity": str(sens.value),
+                    "retrieval_stats": dict(_retrieval_stats),   # cap==slice diagnostic (truncated?)
+                    "inference_mode": _inference_mode,
                     "tier_calls": dict(run_costs),   # per-tier call counts + paid (per-run, no race)
                     # OUTCOME measures (graded by hive_ab, not tautologies)
                     "specialist_divergence": res.specialist_divergence,
