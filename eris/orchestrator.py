@@ -664,11 +664,13 @@ class ErisOrchestrator:
         _phi_np = to_numpy(self.field.phi)
         _theta_np = to_numpy(self.field.theta)
         if self.field_size > 64:
-            # Simple 2x2 block average downsampling
+            # Downsample to 32×32 for storage. φ is block-averaged; θ is a PHASE and MUST be
+            # aggregated CIRCULARLY (Codex #4) — arithmetic-averaging θ across the 2π branch cut
+            # corrupts the stored phase (and the DCR integral that later reads it).
+            from eris.retrieval.field_interference import resample_field
             target = 32
-            factor = self.field_size // target
-            _phi_np = _phi_np[:target*factor, :target*factor].reshape(target, factor, target, factor).mean(axis=(1, 3))
-            _theta_np = _theta_np[:target*factor, :target*factor].reshape(target, factor, target, factor).mean(axis=(1, 3))
+            _phi_np = resample_field(_phi_np, (target, target))
+            _theta_np = resample_field(_theta_np, (target, target), circular=True)
         phi_snap = _phi_np.astype(np.float32)
         theta_snap = _theta_np.astype(np.float32)
 
