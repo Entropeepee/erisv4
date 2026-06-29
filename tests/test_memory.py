@@ -177,7 +177,10 @@ class TestInterference:
         rec = MemoryRecord(text="self", bvec=BVec(E=0.5),
                            phi_snapshot=phi, theta_snapshot=theta)
         result = compute_interference(rec, rec)
-        assert result.total > 0.9, f"Self-interference should be ~1.0, got {result.total}"
+        # RAW DCR integral (Codex #3): self-interference is the field energy mean(φ²) — POSITIVE,
+        # and the regime is amplitude-invariant 'resonant'. (It is no longer normalized to ~1.0.)
+        assert result.total > 0, f"Self-interference should be positive, got {result.total}"
+        assert result.regime == "resonant"
         assert result.used_field_integral is True
 
     def test_opposing_phases_conflict(self):
@@ -190,7 +193,8 @@ class TestInterference:
         rec_a = MemoryRecord(text="a", bvec=BVec(), phi_snapshot=phi, theta_snapshot=theta_a)
         rec_b = MemoryRecord(text="b", bvec=BVec(), phi_snapshot=phi, theta_snapshot=theta_b)
         result = compute_interference(rec_a, rec_b)
-        assert result.total < -0.5, f"Opposing phases should conflict: R={result.total}"
+        # raw integral: φ²·cos(π) = −0.25 here — negative (conflict), regime amplitude-invariant.
+        assert result.total < 0, f"Opposing phases should conflict: R={result.total}"
         assert result.regime == "conflicting"
 
     def test_csba_coupling_no_field_snapshots(self):
@@ -243,7 +247,8 @@ class TestInterference:
             MemoryRecord(text="a", bvec=BVec(E=0.9), phi_snapshot=phi, theta_snapshot=theta),
             MemoryRecord(text="b", bvec=BVec(E=0.8), phi_snapshot=phi, theta_snapshot=theta + 0.1),
         ]
-        resonances = find_resonances(mems, threshold=0.5)
+        # raw scale: φ=0.5, near-aligned θ → total ≈ 0.25, so the threshold is on the raw integral.
+        resonances = find_resonances(mems, threshold=0.2)
         assert len(resonances) >= 1
 
 

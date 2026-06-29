@@ -87,21 +87,23 @@ def _field_integral(phi_a, theta_a, phi_b, theta_b) -> InterferenceResult:
     tb = theta_b[:min_h, :min_w]
 
     integrand = pa * pb * np.cos(ta - tb)
-    raw = float(xp.mean(integrand))
+    # Codex #3: the RAW DCR integral, per canon — R_ij = ∫ φᵢ·φⱼ·cos(θᵢ−θⱼ) dx. The old code
+    # divided by the geometric mean of field energies, which ERASED amplitude (φ≡1 and φ≡2 both
+    # scored 1 for identical phase). Keep it amplitude-preserving: a stronger field couples more.
+    total = float(xp.mean(integrand))            # mean = the discretized integral measure
+    elastic = float(np.mean(np.maximum(integrand, 0.0)))    # raw resonant energy
+    plastic = float(np.mean(np.maximum(-integrand, 0.0)))   # raw conflicting energy
 
-    # Normalize by geometric mean of field energies
+    # Regime is a SIGN/balance classification, kept amplitude-INVARIANT (a weak but perfectly
+    # aligned pair still reads 'resonant') by normalizing ONLY for this threshold — the reported
+    # total/elastic/plastic stay raw.
     energy_a = float(np.mean(pa ** 2))
     energy_b = float(np.mean(pb ** 2))
     norm = np.sqrt(max(energy_a * energy_b, 1e-20))
-    total = raw / norm
-
-    # Decompose into elastic/plastic via the sign structure
-    elastic = float(np.mean(np.maximum(integrand, 0.0))) / max(norm, 1e-20)
-    plastic = float(np.mean(np.maximum(-integrand, 0.0))) / max(norm, 1e-20)
-
-    if total > 0.3:
+    coupling_coeff = total / norm
+    if coupling_coeff > 0.3:
         regime = "resonant"
-    elif total < -0.3:
+    elif coupling_coeff < -0.3:
         regime = "conflicting"
     else:
         regime = "orthogonal"

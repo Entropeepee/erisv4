@@ -41,14 +41,68 @@ import numpy as np
 #       critical transition). "Is torsion the tangent?" No — torsion is the sine channel λ;
 #       the tangent is λ/κ, its ratio to curvature.
 
+def circular_mean(values) -> float:
+    """Mean of angles done on the CIRCLE — mean of the unit vectors e^{iθ}, then the angle of the
+    resultant. θ is a PHASE: arithmetic-averaging it is wrong at the branch cut (mean of 0.01 and
+    2π−0.01 is ≈π, the OPPOSITE phase; the circular mean is ≈0, correct). Returns 0.0 for an empty
+    or all-zero-resultant input (no defined mean direction)."""
+    a = np.asarray(values, dtype=np.float64).ravel()
+    if a.size == 0:
+        return 0.0
+    z = np.exp(1j * a).mean()
+    return float(np.angle(z)) if abs(z) > 1e-12 else 0.0
+
+
+def _block_or_nearest(arr, th: int, tw: int):
+    """Downsample `arr` (2D, real or complex) to (th, tw). Exact block-MEAN when the target evenly
+    divides the source (the power-of-two field case); else average over linearly-spaced index
+    ranges (handles non-divisor shapes / upsample). dtype-agnostic so it serves the circular path."""
+    sh, sw = arr.shape
+    if sh == th and sw == tw:
+        return arr
+    if th and tw and sh % th == 0 and sw % tw == 0:
+        fh, fw = sh // th, sw // tw
+        return arr.reshape(th, fh, tw, fw).mean(axis=(1, 3))
+    ri = np.linspace(0, sh, th + 1).astype(int)
+    ci = np.linspace(0, sw, tw + 1).astype(int)
+    out = np.empty((th, tw), dtype=arr.dtype)
+    for i in range(th):
+        a0, a1 = ri[i], max(ri[i] + 1, ri[i + 1])
+        for j in range(tw):
+            b0, b1 = ci[j], max(ci[j] + 1, ci[j + 1])
+            out[i, j] = arr[a0:a1, b0:b1].mean()
+    return out
+
+
+def resample_field(field, shape, *, circular: bool = False):
+    """Resample a 2D field to `shape`. φ (magnitude) is block-averaged directly; θ (phase) MUST be
+    `circular=True` so it is averaged on the circle (e^{iθ} block-mean → angle), never arithmetically
+    across the 2π branch cut."""
+    field = np.asarray(field, dtype=np.float64)
+    th, tw = int(shape[0]), int(shape[1])
+    if field.shape == (th, tw):
+        return field
+    if circular:
+        return np.angle(_block_or_nearest(np.exp(1j * field), th, tw))
+    return _block_or_nearest(field, th, tw)
+
+
 def _common(phi_q, theta_q, phi_s, theta_s):
+    """Bring two fields onto a COMMON grid before the DCR integral. Codex #4: the old path
+    flatten-truncated to the first N row-major cells, comparing the WRONG spatial region (a 96×96
+    signal in the lower-right of a 128×128 query lands in the truncated tail). Now both fields are
+    resampled to the common (element-wise minimum) shape — φ block-averaged, θ averaged CIRCULARLY."""
     phi_q = np.asarray(phi_q, dtype=float); theta_q = np.asarray(theta_q, dtype=float)
     phi_s = np.asarray(phi_s, dtype=float); theta_s = np.asarray(theta_s, dtype=float)
-    if phi_q.shape != phi_s.shape:
+    if phi_q.shape == phi_s.shape:
+        return phi_q, theta_q, phi_s, theta_s
+    if phi_q.ndim != 2 or phi_s.ndim != 2:        # non-2D safety: fall back to flatten-truncate
         n = min(phi_q.size, phi_s.size)
-        phi_q, theta_q = phi_q.flat[:n], theta_q.flat[:n]
-        phi_s, theta_s = phi_s.flat[:n], theta_s.flat[:n]
-    return phi_q, theta_q, phi_s, theta_s
+        return phi_q.flat[:n], theta_q.flat[:n], phi_s.flat[:n], theta_s.flat[:n]
+    th = min(phi_q.shape[0], phi_s.shape[0])
+    tw = min(phi_q.shape[1], phi_s.shape[1])
+    return (resample_field(phi_q, (th, tw)), resample_field(theta_q, (th, tw), circular=True),
+            resample_field(phi_s, (th, tw)), resample_field(theta_s, (th, tw), circular=True))
 
 
 def field_resonance(phi_q, theta_q, phi_s, theta_s) -> float:
