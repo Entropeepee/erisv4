@@ -132,13 +132,45 @@ class TestRunRetrospective(unittest.TestCase):
 
 
 class TestGroundingGuard(unittest.TestCase):
+    # The cited source TEXT for the substance check. The claim under test is judged against this.
+    SRC = {"a": "All twelve shards reported success during the migration."}
+
+    @staticmethod
+    def _judge(label, quote):
+        """Stub local judge returning a fixed LABEL + QUOTE in the scorer's wire format."""
+        return lambda prompt: f'LABEL: {label}\nQUOTE: "{quote}"\nREASON: stub\n'
+
     def test_fact_without_source_demoted(self):
+        # (1) resolution: cited id doesn't exist in the reviewed set → demoted, no judge needed.
         c = verify_grounding({"text": "x", "tier": "fact", "source_id": "nope"}, {"a"})
         self.assertEqual(c["tier"], "speculation")
 
-    def test_fact_with_source_kept(self):
-        c = verify_grounding({"text": "x", "tier": "fact", "source_id": "a"}, {"a", "b"})
+    def test_fact_with_real_support_kept(self):
+        # (2) substance: id resolves AND the source SUPPORTS the claim (quote is verbatim) → fact.
+        c = verify_grounding(
+            {"text": "Every shard succeeded.", "tier": "fact", "source_id": "a"}, {"a", "b"},
+            source_texts=self.SRC,
+            model=self._judge("SUPPORTED", "All twelve shards reported success during the migration."))
         self.assertEqual(c["tier"], "fact")
+
+    def test_fact_with_resolving_id_but_no_support_demoted(self):
+        # THE false-confidence fix: the id resolves, but the source does NOT back the claim (the
+        # judge's quote is fabricated → forced UNSUPPORTED) → demoted to speculation, never 'fact'.
+        c = verify_grounding(
+            {"text": "The migration cut costs by 40%.", "tier": "fact", "source_id": "a"}, {"a"},
+            source_texts=self.SRC,
+            model=self._judge("SUPPORTED", "Costs were cut by forty percent."))  # not in source
+        self.assertEqual(c["tier"], "speculation")
+        self.assertIn("does not support", c["note"])
+
+    def test_inferred_kept_as_inference_tier_with_provenance(self):
+        # source IMPLIES (not states) the claim → its own 'inference' tier, carrying provenance.
+        c = verify_grounding(
+            {"text": "The migration finished.", "tier": "fact", "source_id": "a"}, {"a"},
+            source_texts=self.SRC,
+            model=self._judge("INFERRED", "All twelve shards reported success during the migration."))
+        self.assertEqual(c["tier"], "inference")
+        self.assertTrue(c["provenance"]["spans"])
 
     def test_bridge_untouched(self):
         c = verify_grounding({"text": "x", "tier": "bridge", "source_id": "nope"}, {"a"})
