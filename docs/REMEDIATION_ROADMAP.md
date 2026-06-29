@@ -74,10 +74,13 @@ by r4).
 - ✓done **[#92, r3 #1]** Field snapshots now persisted — `to_dict`/`from_dict` serialize
   `phi/theta_snapshot` with dtype/shape/finite validation; MTM/LTM reload survives a restart
   (tiers.py). **Phase-3 precondition cleared.**
-- ☐ **[r1 #2/#3 ✓v]** "Grounding" checks citation-ID-resolution, not claim SUPPORT — a fabrication
-  with a live id is canonized as fact (calibration.py:80; research.py:468). Replace with a
-  substance/entailment check; fix the 2 false-confidence tests. **Build as the Phase-3 faithfulness
-  scorer (design once, serves both). — BUILDING.**
+- ▶PR **[r1 #2/#3 ✓v]** "Grounding" checks citation-ID-resolution, not claim SUPPORT — a fabrication
+  with a live id is canonized as fact (calibration.py:80; research.py:468). **DONE — PR #93:**
+  QUOTE-AND-VERIFY substance scorer (`eris/reasoning/grounding.py`) wired into verify_grounding +
+  retrospect + the hive canonization gate; SUPPORTED→fact, INFERRED→new 'inference' tier with
+  provenance, UNSUPPORTED/CONTRADICTED→speculation (never canonized). Same scorer IS the Phase-3
+  faithfulness metric (design once, serves both). The 2 false-confidence tests fixed + demote-on-
+  unsupported cases added; 749 tests green. *Awaiting owner merge (no auto-merge).*
 - ⏸ **[r3 #7]** Non-atomic MTM/LTM saves (tiers.py:313/405/414). *HOLD for r4.*
 - ⏸ **[r1 #5]** Thought-stream write `OSError` swallowed (thought_stream.py:84-89). *HOLD for r4.*
 - ⏸ **[r3 #11]** Corrupt conversation file → thread overwritten empty (conversations.py:49/106). *HOLD for r4.*

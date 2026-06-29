@@ -177,9 +177,14 @@ def run_retrospective(thought_stream: ThoughtStream, topic: str,
     still_open = [c for c in (parsed.get("still_open") or []) if isinstance(c, dict)]
     mind_changes = [c for c in (parsed.get("mind_changes") or []) if isinstance(c, dict)]
 
-    # Grounding check (Part B.1): a 'fact/grounded' claim must cite a reviewed id;
-    # otherwise it is NOT grounded — demote it rather than ship a labeled fabrication.
-    now_grounded = [verify_grounding(dict(c), allowed) for c in now_grounded]
+    # Grounding check (Part B.1): a 'fact/grounded' claim must (1) cite a reviewed id AND
+    # (2) be SUBSTANTIVELY supported by that thought's text — quote-and-verify, not mere
+    # id-resolution. A claim citing a live id whose text doesn't back it is demoted (or kept as
+    # 'inference' if only implied); only an actually-supported claim ships as 'fact'. The reviewed
+    # thoughts' own text are the sources; `generate` is the local judge.
+    source_texts = {t.id: t.text for t in items}
+    now_grounded = [verify_grounding(dict(c), allowed, source_texts=source_texts, model=generate)
+                    for c in now_grounded]
 
     retro = Retrospective(
         id=uuid.uuid4().hex[:12], topic=topic, timestamp=time.time(),
