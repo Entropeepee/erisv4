@@ -157,6 +157,11 @@ def http_reranker(base_url: Optional[str] = None, model: Optional[str] = None,
     base = (base_url or CONFIG.rerank_base_url or "").rstrip("/")
     if not base:
         return None
+    # Egress guard (r3 #10): candidate documents sent to rerank are the owner's content. A REMOTE
+    # rerank URL would ship them off-box — refuse unless consented, so callers fall back to RRF-only.
+    from eris.interface.accelerators import check_egress_or_warn
+    if not check_egress_or_warn("rerank", base):
+        return None
     mdl = model or CONFIG.rerank_model or "reranker"
     to = timeout if timeout is not None else CONFIG.accel_timeout_s
 

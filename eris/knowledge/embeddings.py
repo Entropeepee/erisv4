@@ -173,6 +173,14 @@ def _provider_embeddings(texts):
     base = (CONFIG.embed_base_url or "").rstrip("/")
     if not base:
         return None
+    # Egress guard (r3 #10): texts to embed are the owner's content. Refuse a REMOTE provider URL
+    # unless explicitly consented — fall back to in-process rather than ship content off-box.
+    from eris.interface.accelerators import egress_allowed
+    _ok, _why = egress_allowed("embeddings", base)
+    if not _ok:
+        _warn_once(f"[embeddings] {_why} Falling back to in-process embeddings.")
+        _PROVIDER_HEALTHY = False
+        return None
     try:
         data = _post_json(
             f"{base}/embeddings",
