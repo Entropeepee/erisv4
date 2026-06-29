@@ -132,6 +132,18 @@ class TestBudgetAndCompare(unittest.TestCase):
         self.assertTrue(rows[0]["eris"]["correct"])
         self.assertEqual(rows[0]["eris"]["tokens"], 900)
 
+    def test_item_details_shows_mc_option_texts(self):
+        # so a wrong letter is judgeable: we must SEE what A/B/C/D say + the chosen option's text
+        it = BenchItem(id="q", question="?", choices=["she felt controlled", "she was bored",
+                                                      "she was tired"], answer="A")
+        res = run_arm([it], callable_arm(lambda p: ("C", 5)), "eris")
+        score_results(res, [it])
+        rows = item_details([it], {"eris": res})
+        self.assertEqual(rows[0]["choices"]["A"], "she felt controlled")
+        self.assertEqual(rows[0]["gold_text"], "she felt controlled")
+        self.assertEqual(rows[0]["eris"]["answer_text"], "she was tired")   # what 'C' actually said
+        self.assertFalse(rows[0]["eris"]["correct"])
+
     def test_budget_and_accuracy_helpers(self):
         items = [BenchItem(id=str(i), question="q", answer="x") for i in range(2)]
         res = run_arm(items, callable_arm(lambda p: ("x", 50)), "bare")
