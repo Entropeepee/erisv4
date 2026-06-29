@@ -32,9 +32,27 @@ Usage:
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Tuple, Optional
+import logging
 
 from eris.config import xp, to_numpy
 import numpy as np
+
+_logger = logging.getLogger(__name__)
+_NAN_WARN = {"n": 0}                              # rate-limit the quarantine log
+
+
+def quarantine_nonfinite(arr, fill: float = 0.0, label: str = "field"):
+    """Replace any non-finite (NaN / ±inf) entries with `fill` so a corrupt field value can NEVER
+    propagate into BVec / gates / routing / memory (Codex #9). Returns (clean_array, n_bad). Logs
+    (rate-limited) when it fires — a quarantine event is a real signal, not a silent reset."""
+    finite = xp.isfinite(arr)
+    n_bad = int(to_numpy(xp.sum(~finite)))
+    if n_bad:
+        arr = xp.where(finite, arr, xp.asarray(fill, dtype=arr.dtype))
+        if _NAN_WARN["n"] < 20:
+            _NAN_WARN["n"] += 1
+            _logger.warning("[field] quarantined %d non-finite %s value(s) → %s", n_bad, label, fill)
+    return arr, n_bad
 
 
 # ─── Archetype Reference Vectors ─────────────────────────────────────────
@@ -353,6 +371,13 @@ def compute_bvec_from_field(
     theta = xp.asarray(theta, dtype=xp.float32)
     tau = xp.asarray(tau, dtype=xp.float32)
     phi_prev = xp.asarray(phi_prev, dtype=xp.float32)
+
+    # Codex #9: a non-finite field value here would make B/F/E/C/D/S NaN and flow straight into
+    # routing, prompt metadata and memory. Quarantine BEFORE any reduction so the BVec is finite.
+    phi, _ = quarantine_nonfinite(phi, 0.0, "phi")
+    theta, _ = quarantine_nonfinite(theta, 0.0, "theta")
+    tau, _ = quarantine_nonfinite(tau, 0.0, "tau")
+    phi_prev, _ = quarantine_nonfinite(phi_prev, 0.0, "phi_prev")
 
     # B: Boundary — fraction of field at boundary clamp
     b_raw = float(to_numpy(xp.mean(phi > boundary_threshold)))
