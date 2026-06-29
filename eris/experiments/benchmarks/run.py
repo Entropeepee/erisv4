@@ -16,31 +16,11 @@ import os
 import sys
 from typing import Callable, Optional
 
-
-def _load_dotenv(path: str = ".env") -> int:
-    """Load KEY=VALUE pairs from a .env file into os.environ — so keys + config live in ONE
-    gitignored file, entered once, instead of `set` commands that vanish when the window closes.
-    Does NOT override anything already set (an explicit `set`/export still wins). Dependency-free;
-    silent on a missing file. Runs BEFORE the eris imports so eris.config picks the values up."""
-    n = 0
-    try:
-        if not os.path.exists(path):
-            return 0
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                k = k.strip()
-                v = v.strip().strip('"').strip("'")
-                if k and k not in os.environ:           # explicit env wins over the file
-                    os.environ[k] = v
-                    n += 1
-    except Exception:
-        pass
-    return n
-
+# ONE loader for the whole project (the server imports the same module) — no duplicated copy to drift.
+# eris.env_file depends only on os/sys (eris/__init__.py is empty), so importing it here does NOT bind
+# eris.config early; the .env still loads before any heavy eris import.
+from eris.env_file import (load_dotenv as _load_dotenv, report_env_sources as _report_env_sources,
+                           DOTENV_CONFLICTS as _DOTENV_CONFLICTS)
 
 _dotenv_loaded = _load_dotenv()    # before any eris import, so config.py reads these values
 
@@ -70,6 +50,9 @@ def main(argv: Optional[list] = None):    # pragma: no cover - CLI orchestration
     if _dotenv_loaded:
         print(f"[bench] loaded {_dotenv_loaded} setting(s) from .env (keys + config — entered once)",
               file=sys.stderr)
+    # Surface where the model/tier/attributability vars resolved from (shell vs .env) and warn LOUDLY
+    # on any stale-shell-over-.env conflict — the exact silent footgun behind the prior mismatches.
+    _report_env_sources()
 
     # Loud guard against the #1 silent-truncation footgun: too-small Ollama context window quietly
     # chops long QuALITY/FRAMES passages, so BOTH arms answer from a partial source and the numbers
