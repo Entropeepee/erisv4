@@ -53,6 +53,46 @@ from eris.metacognition.dream_journal import DreamJournal
 logger = logging.getLogger("eris.dreaming")
 
 
+# ── Autonomous-loop COST GUARD ───────────────────────────────────────────────────────────────
+# The idle dream loop's condense/refine step calls PAID cloud Claude (ask_expert.ask). That key is
+# normally set for the INTERACTIVE deep-mediator escalation — but the unattended dream loop runs on
+# the crawl cadence, so left ungated it spends real money every cycle with no ceiling. So the paid
+# dream path is OFF by default (ERIS_DREAM_CLOUD), and even when enabled it is capped per process
+# (ERIS_DREAM_CLOUD_MAX, default 50) with a visible budget line on every paid call.
+import threading as _threading
+
+_DREAM_COST_LOCK = _threading.Lock()
+_dream_cloud_calls = 0
+
+
+def _dream_cloud_enabled() -> bool:
+    return os.environ.get("ERIS_DREAM_CLOUD", "0").strip().lower() in ("1", "on", "true", "yes")
+
+
+def _dream_cloud_max() -> int:
+    try:
+        return max(0, int(os.environ.get("ERIS_DREAM_CLOUD_MAX", "50")))
+    except ValueError:
+        return 50
+
+
+def _dream_cloud_spend() -> bool:
+    """Charge one paid dream call against the per-process ceiling. Returns True if the call may
+    proceed (and logs a visible budget line), False once the ceiling is spent. Thread-safe."""
+    global _dream_cloud_calls
+    with _DREAM_COST_LOCK:
+        cap = _dream_cloud_max()
+        if _dream_cloud_calls >= cap:
+            logger.warning("[dream-cost] paid-cloud ceiling reached (%d/%d) — skipping the paid "
+                           "condense/refine call; raise ERIS_DREAM_CLOUD_MAX to allow more.",
+                           _dream_cloud_calls, cap)
+            return False
+        _dream_cloud_calls += 1
+        logger.info("[dream-cost] paid-cloud condense/refine %d/%d (ERIS_DREAM_CLOUD on) — set "
+                    "ERIS_DREAM_CLOUD=0 to disable.", _dream_cloud_calls, cap)
+        return True
+
+
 def _run_blocking(coro, timeout: float = 180):
     """Run an async coroutine to completion from a synchronous context — whether
     or not an event loop is already running (the dream cycle runs in a worker
@@ -425,6 +465,11 @@ class DreamingLoop:
         used_claude). Dormant unless ANTHROPIC_API_KEY is set."""
         from eris.knowledge import ask_expert
         if not ask_expert.is_available():
+            return None, None, False
+        # COST GUARD: the paid-cloud dream path is OFF by default — even though ANTHROPIC_API_KEY is
+        # set (for the interactive deep-mediator), the UNATTENDED dream loop must not spend money on
+        # the crawl cadence unless explicitly enabled, and then only up to a per-process ceiling.
+        if not _dream_cloud_enabled() or not _dream_cloud_spend():
             return None, None, False
         feeling = self._regime_feeling(regime)
         steer = ("a more focused sub-topic, since I am making progress and want to go deeper"
