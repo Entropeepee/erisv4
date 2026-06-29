@@ -1080,12 +1080,16 @@ class ErisOrchestrator:
                 topic, retriever=_rag, model=_reason, moe_gate=self.moe_gate, hub=self.hub,
                 thought_stream=self.thought_stream, embed_fn=_embed,
                 synth_model=synth_model, digester=digester, single_pass=(mode == "single"),
+                # quote-and-verify substance gate runs on the LOCAL model — it's a cheap mechanical
+                # entailment check and must never burn the paid synth tier.
+                judge_model=_local,
                 max_specialists=max_specialists, log=_log, map_fn=_map_fn)
             return {"topic": res.topic, "thought_id": res.thought_id, "gaps": res.gaps,
                     "open_gaps": res.open_gaps,
                     "n_contributors": res.n_contributors, "n_active": res.n_active,
                     "n_sources": res.n_sources, "stripped_claims": res.stripped_claims,
                     "cycles": res.cycles, "canonized": res.thought_id is not None,
+                    "faithfulness": res.faithfulness,   # quote-and-verify substance metric (Phase-3)
                     "sources": res.sources, "sensitivity": str(sens.value),
                     "tier_calls": dict(run_costs),   # per-tier call counts + paid (per-run, no race)
                     # OUTCOME measures (graded by hive_ab, not tautologies)

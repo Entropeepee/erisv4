@@ -5,6 +5,7 @@ import os
 os.environ.setdefault("ERIS_GPU", "0")
 os.environ.setdefault("ERIS_EMBEDDINGS", "off")
 
+import re
 import tempfile
 import unittest
 
@@ -18,6 +19,20 @@ GOAL = BVec(B=0.4, F=0.5, E=0.4, C=0.4, D=0.2, S=0.3)
 
 def _retriever(query):
     return [f"Source about {query[:30]} — fact A.", "Second source — fact B."]
+
+
+def _model_with_faithful_judge(synth_text):
+    """A stub model that drives the engine AND, when handed the quote-and-verify JUDGE prompt,
+    rubber-stamps SUPPORTED by quoting the cited source's first sentence VERBATIM (so the span
+    actually verifies). Lets a canonization test exercise the real substance gate without a live
+    judge — the gate's discrimination is tested directly in test_grounding_substance.py."""
+    def _m(prompt):
+        if "supports a CLAIM" in prompt:                     # the grounding.judge_claim prompt
+            src = prompt.split("SOURCE:")[-1].strip()
+            sent = (re.split(r"(?<=[.!?])\s+", src)[0].strip() or src[:60])
+            return f'LABEL: SUPPORTED\nQUOTE: "{sent}"\nREASON: stub\n'
+        return synth_text
+    return _m
 
 
 class TestTribeResearch(unittest.TestCase):
@@ -94,7 +109,8 @@ class TestTribeResearch(unittest.TestCase):
         path = os.path.join(tempfile.mkdtemp(), "t.jsonl")
         ts = ThoughtStream(path=path)
         res = run_two_cycle_research("emergence", retriever=_retriever,
-                                     model=lambda p: "Grounded [s:0].", specialists=TRIBE[:2],
+                                     model=_model_with_faithful_judge("Grounded [s:0]."),
+                                     specialists=TRIBE[:2],
                                      goal_bvec=GOAL, thought_stream=ts,
                                      embed_fn=lambda t: np.array([0.1, 0.2, 0.3], dtype=np.float32))
         stored = ts.get(res.thought_id)
@@ -103,11 +119,31 @@ class TestTribeResearch(unittest.TestCase):
     def test_canonizes_into_thought_stream(self):
         path = os.path.join(tempfile.mkdtemp(), "thoughts.jsonl")
         ts = ThoughtStream(path=path)
+        # Citations resolve AND the substance gate confirms a supported claim → canonized.
         res = run_two_cycle_research("emergence", retriever=_retriever,
-                                     model=lambda p: "Grounded synthesis [s:0].",
+                                     model=_model_with_faithful_judge("Grounded synthesis [s:0]."),
                                      specialists=TRIBE[:2], goal_bvec=GOAL, thought_stream=ts)
         self.assertIsNotNone(res.thought_id)
         self.assertEqual(ts.get(res.thought_id).topic, "emergence")
+        self.assertGreaterEqual(res.faithfulness.get("faithful", 0), 1)
+
+    def test_resolving_but_unsupported_synthesis_is_not_canonized(self):
+        # THE hive false-confidence fix: the citation [s:0] RESOLVES, but the judge finds no
+        # supporting span (it returns UNSUPPORTED) → NOT canonized, though still returned.
+        path = os.path.join(tempfile.mkdtemp(), "thoughts.jsonl")
+        ts = ThoughtStream(path=path)
+
+        def model(prompt):
+            if "supports a CLAIM" in prompt:                 # judge: nothing supports it
+                return "LABEL: UNSUPPORTED\nQUOTE: \"\"\nREASON: source is silent\n"
+            return "An unsupported but well-cited claim [s:0]."
+
+        res = run_two_cycle_research("emergence", retriever=_retriever, model=model,
+                                     specialists=TRIBE[:2], goal_bvec=GOAL, thought_stream=ts)
+        self.assertTrue(res.synthesis)                       # visible for inspection
+        self.assertIsNone(res.thought_id)                    # but NOT canonized
+        self.assertEqual(ts.size(), 0)
+        self.assertEqual(res.faithfulness.get("faithful", 0), 0)
 
     def test_gaps_parsing_skips_section_headers(self):
         from eris.tribe.research import _gaps_from

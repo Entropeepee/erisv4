@@ -42,6 +42,23 @@ def _cited_ids(text: str) -> set:
     return ids
 
 
+def _claim_source_pairs(grounded_text: str, sources: List[str]) -> List[tuple]:
+    """Split a grounded synthesis into (sentence, cited-source-text) pairs for the SUBSTANCE check
+    (quote-and-verify). Only sentences that cite a resolvable [s:i] are scored — an uncited
+    sentence is honest framing / a negative finding, not a grounded factual claim, so it is not
+    judged (mirrors _ground_citations' keep rule). A sentence's source is the concatenation of the
+    source texts it actually cites."""
+    pairs = []
+    allowed = set(range(len(sources)))
+    for sent in re.split(r"(?<=[.!?])\s+", grounded_text or ""):
+        ids = _cited_ids(sent) & allowed
+        if not ids:
+            continue
+        src = "\n\n".join(sources[i] for i in sorted(ids))
+        pairs.append((sent.strip(), src))
+    return pairs
+
+
 # Content-word helper for OUTCOME metrics (specialist divergence, gap closure, Elos edit).
 # NOTE: hive_ab.py has an identical _content_words/_STOP, but tribe/ cannot import experiments/
 # (hive_ab imports this module → circular). Kept in sync by hand; a shared util is a future tidy.
@@ -87,6 +104,10 @@ class ResearchResult:
     specialist_divergence: float = 0.0   # 1 − mean pairwise content-word Jaccard over cycle-1
     gaps_closed: int = 0                 # named gaps a cycle-2 finding genuinely addressed
     elos_changed: bool = False           # did the synthesis change from cycle-1 to final
+    # SUBSTANCE (quote-and-verify): the Phase-3 faithfulness metric over the canonized synthesis —
+    # {n, faithful, faithfulness, hallucination_rate, supported/inferred/unsupported/contradicted}.
+    # Empty {} when the gate didn't run (no thought_stream / nothing resolved).
+    faithfulness: dict = field(default_factory=dict)
 
 
 def _format_sources(sources: List[str], digester: Optional[Callable[[str], List[str]]] = None
@@ -308,6 +329,7 @@ def run_two_cycle_research(
     goal_bvec: Optional[BVec] = None, max_specialists: int = 5, single_pass: bool = False,
     regime: str = "research", log: Optional[Callable[[str], None]] = None,
     map_fn: Optional[Callable[[Callable, List], List]] = None,
+    judge_model: Optional[Model] = None, faithfulness_gate: bool = True,
 ) -> ResearchResult:
     """Run the broad→synthesis→refined→canonize cycle. `retriever(query)->[sources]` is the
     existing RAG pipeline; `model(prompt)->text` is the local model. Specialists default to
@@ -315,6 +337,7 @@ def run_two_cycle_research(
     given (citation-grounded)."""
     _log = log or (lambda m: None)
     synth = synth_model or model                       # deep model for comprehension-heavy steps
+    judge = judge_model or synth                        # local judge for the quote-and-verify gate
     # Specialists reason INDEPENDENTLY → they can run concurrently (the Tribe is conceptually
     # parallel). map_fn defaults to sequential (deterministic for tests); the orchestrator passes
     # a thread-pool mapper. Results preserve input order; hub posting happens AFTER the gather so
@@ -464,8 +487,25 @@ def run_two_cycle_research(
     contributors = {f.specialist_id for f in (c1 + c2)
                     if not f.metadata.get("echo") and not f.metadata.get("empty")}
 
+    # SUBSTANCE GATE (quote-and-verify): citation RESOLUTION (resolved >= 1) is necessary but NOT
+    # sufficient — a fabrication carrying a live [s:i] resolves yet states nothing the source backs.
+    # Before canonizing, judge each cited sentence against its source: a synthesis is canon-worthy
+    # only if at least ONE cited claim is genuinely SUPPORTED/INFERRED by a span that occurs in the
+    # source. This is the SAME scorer as the Phase-3 faithfulness metric (one definition, two uses).
+    # The synthesis text stays visible either way; only canonization to long-term memory is gated.
+    faith: dict = {}
+    if faithfulness_gate and grounded and resolved >= 1:
+        from eris.reasoning.grounding import score_claims, faithfulness as _faithfulness
+        pairs = _claim_source_pairs(grounded, all_sources)
+        if pairs:
+            faith = _faithfulness(score_claims(pairs, judge))
+            _log(f"faithfulness: {faith['faithful']}/{faith['n']} claims supported "
+                 f"(hallucination_rate={faith['hallucination_rate']})")
+    # Canon-worthy = resolves AND (gate off OR at least one claim genuinely supported).
+    substance_ok = (not faithfulness_gate) or (faith.get("faithful", 0) >= 1)
+
     thought_id = None
-    if thought_stream is not None and grounded and resolved >= 1:
+    if thought_stream is not None and grounded and resolved >= 1 and substance_ok:
         try:
             from eris.memory.thought_stream import link_and_store
             # store WITH a semantic embedding (else thought_stream.retrieve skips it and the
@@ -475,6 +515,9 @@ def run_two_cycle_research(
             thought_id = getattr(t, "id", None)
         except Exception:
             thought_id = None
+    elif thought_stream is not None and grounded and resolved >= 1 and not substance_ok:
+        _log("NOT canonized — citations resolve but no claim is substantively supported "
+             "(quote-and-verify); returned for inspection only")
 
     return ResearchResult(
         topic=topic, synthesis=synthesis_out, thought_id=thought_id, gaps=gaps,
@@ -486,4 +529,4 @@ def run_two_cycle_research(
         n_active=len(active), stripped_claims=stripped,
         elos_critique=elos_critique, cycles=2 if gaps else 1,
         specialist_divergence=specialist_divergence, gaps_closed=gaps_closed,
-        elos_changed=elos_changed)
+        elos_changed=elos_changed, faithfulness=faith)
