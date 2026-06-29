@@ -17,7 +17,8 @@ Usage:
     from eris.server.app import create_app
 
     app = create_app()
-    # Run with: uvicorn eris.server.app:app --host 0.0.0.0 --port 8000
+    # Run with: uvicorn eris.server.app:app --host 127.0.0.1 --port 8000
+    # (localhost-only by default; expose remotely via an authenticated tunnel, not --host 0.0.0.0)
 """
 
 from __future__ import annotations
@@ -1064,7 +1065,11 @@ if __name__ == "__main__":
         # `/ws` connection with "keepalive ping failed". We don't need it: the
         # cockpit stream already sends vitals every ~2s, which keeps the socket
         # warm on its own. (ws_ping_interval=None turns the buggy ping off.)
-        uvicorn.run("eris.server.app:app", host="0.0.0.0", port=8001, reload=True,
+        # Bind 127.0.0.1 by default (localhost-only). External (LAN/phone) exposure is an explicit
+        # opt-in via ERIS_BIND_HOST and is REFUSED without ERIS_AUTH_TOKEN — an unauthenticated
+        # public bind hands the box (files, IP, cognitive field) to anyone on the network.
+        from eris.server.bind import resolve_bind_host
+        uvicorn.run("eris.server.app:app", host=resolve_bind_host(), port=8001, reload=True,
                     ws_ping_interval=None, ws_ping_timeout=None)
     else:
         print("FastAPI not installed. Run: pip install fastapi uvicorn")
