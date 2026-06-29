@@ -6,11 +6,11 @@ Every item is file:line-verified by an adversarial process. Items re-run against
 (chat) are marked **✓v**; the rest are Codex/swarm-verified (concrete repro, file:line) but not
 independently re-run — flagged so the trust level is explicit.
 
-**Legend:** `✓done` · `▶PR open` · `☐todo` · `⚑Phase-3 precondition`
+**Legend:** `✓done` · `◐ partly done (core merged, item still open)` · `▶PR open` · `☐todo` · `⚑Phase-3 precondition`
 Baseline commit for all anchors: `6ec67fa`.
 
 ### Version & maintenance — read first
-**v1.3** · living document; update in place, don't fork. So nothing is lost across token windows or
+**v1.6** · living document; update in place, don't fork. So nothing is lost across token windows or
 between the two agents:
 - **Homed in the repo** as `docs/REMEDIATION_ROADMAP.md` → git history *is* the version log (every
   check-off is a diffable, revertible commit; no manual version juggling).
@@ -30,6 +30,22 @@ live code and fresh adversarial findings.
   the roadmap.
 
 ### Changelog
+- **v1.6 (2026-06-29):** **#92 / #93 / #94 MERGED to `main`** (disjoint code; roadmap reconciled).
+  Full suite green on main (780). Phase-1.5 r3 #1 cleared; r1 #2/#3 core landed (stays OPEN for
+  scorer-coverage); r3 #10 + Codex #1/#3 closed. **Next: PR #96** (egress hardening — Codex #2/#5,
+  reuses the merged host helper).
+- **v1.5 (2026-06-29):** PR #94 (egress) independently audited by **Codex + chat** — converged.
+  Added the **"Codex PR#94 audit — egress (6 findings)"** section. **#1 (P0 host-class bypass) + #3
+  (status-probe egress) folded into #94** (re-review required before merge); #2 + #5 (TTS +
+  sovereignty host-class) → **planned PR #96** (reuses #94's loopback helper, build after #94); #4 +
+  #6 (ask_expert / autonomous web-study) → **Cloud/web egress-consent workstream** (DESIGN CALL
+  pending — do not build). Recorded the guard's verified-good skeleton.
+- **v1.4 (2026-06-29):** folded the **Codex round-4 static audit** (main @ `6ec67fa`, all 11
+  findings + 1 verified-clean) into a new section with file:line/severity/status; added the
+  **Build order & conflicts** section + the **scorer-coverage** write-inventory. In flight:
+  **PR #92** (field snapshots, r3 #1), **PR #93** (grounding substance, r1 #2/#3), **PR #94**
+  (accelerator egress, r3 #10) — all PR-open, cleared, awaiting owner merge. r4 #2/#4 and r1 #2/#3
+  kept OPEN (the scorer is not yet wired into prompt-assembly or study.py).
 - **v1.3 (2026-06-29):** Phase 1 security MERGED — #83→#90 all landed on `main`
   (`c68d3ff`…`5928494`); 42 security tests green; the three Tier-3 items (#85/#86/#87) each passed
   the real-server exploit re-run before merge. Phase 1 boxes flipped to ✓done. Homed the doc in the
@@ -61,35 +77,149 @@ All eight landed on `main`; each Tier-3 item passed a real-server exploit re-run
 - ✓done **[#90]** Autonomous-loop cost guard — paid dream/condense path OFF by default + per-process
   ceiling + visible budget signal. *Verified by tracing the call is gated (0 paid calls / 5 default
   cycles), not just a passing test.*
-- ▶PR **[Codex r3 #10]** Loopback-guard ALL "local" accelerator URLs — embed, rerank, STT, VLM,
-  *not just* edge_tts. **DONE — PR #94:** shared `egress_allowed`/`is_loopback_url` in
-  `accelerators.py`; default-DENY remote unless `ERIS_ALLOW_REMOTE_<NAME>`/`ERIS_ALLOW_REMOTE_ACCEL`;
-  wired into embeddings (→ in-process fallback), rerank (→ RRF-only), STT + VLM (→ raise). Tests
-  cover loopback/remote detection, default-deny, consent scoping, no-network-on-refusal.
-  *Awaiting owner merge (no auto-merge).*
+- ✓done **[Codex r3 #10 + PR#94 audit #1/#3 → PR #94 MERGED]** Egress guard + **host-classification
+  hardening** for ALL "local" accelerator URLs — embed, rerank, STT, VLM (not just edge_tts). Shared
+  `egress_allowed`/`is_loopback_url`/`host_of` in `accelerators.py`; default-DENY remote unless
+  `ERIS_ALLOW_REMOTE_<NAME>`/`ERIS_ALLOW_REMOTE_ACCEL`; wired into embeddings (→ in-process), rerank
+  (→ RRF-only), STT + VLM (→ raise). Closed **Codex #1 (P0 host-class bypass)** and **#3 (status-probe
+  egress)** — re-read by chat (fail-closed direction + probe gate confirmed).
 
 ## Phase 1.5 — Memory integrity & durability · ▶ IN PROGRESS
 *Owner's own data — journals, research, field memory — must be trustworthy before any physics test
-means anything.* **Building now: r3 #1 + r1 #2/#3. The rest HOLD for Codex round-4** (concurrency /
-shared-mutable-state / long-run loop audit will widen them — do the durability cluster once, informed
-by r4).
-- ✓done **[#92, r3 #1]** Field snapshots now persisted — `to_dict`/`from_dict` serialize
-  `phi/theta_snapshot` with dtype/shape/finite validation; MTM/LTM reload survives a restart
-  (tiers.py). **Phase-3 precondition cleared.**
-- ▶PR **[r1 #2/#3 ✓v]** "Grounding" checks citation-ID-resolution, not claim SUPPORT — a fabrication
-  with a live id is canonized as fact (calibration.py:80; research.py:468). **DONE — PR #93:**
-  QUOTE-AND-VERIFY substance scorer (`eris/reasoning/grounding.py`) wired into verify_grounding +
-  retrospect + the hive canonization gate; SUPPORTED→fact, INFERRED→new 'inference' tier with
-  provenance, UNSUPPORTED/CONTRADICTED→speculation (never canonized). Same scorer IS the Phase-3
-  faithfulness metric (design once, serves both). The 2 false-confidence tests fixed + demote-on-
-  unsupported cases added; 749 tests green. *Awaiting owner merge (no auto-merge).*
-- ⏸ **[r3 #7]** Non-atomic MTM/LTM saves (tiers.py:313/405/414). *HOLD for r4.*
+means anything.* **r3 #1 MERGED (#92); r1 #2/#3 core MERGED (#93, stays OPEN for scorer-coverage);
+the durability cluster below is informed by Codex round-4 — see the round-4 section + Build order.**
+- ✓done ⚑ **[r3 #1 ✓v → PR #92 MERGED]** Field snapshots now serialized — `to_dict`/`from_dict`
+  persist `phi/theta_snapshot` with dtype/shape/finite validation; MTM/LTM reload survives a restart
+  (tiers.py). Includes the round-4 #7 follow-up (a shape-mismatched phi/theta pair → embedding-only
+  fallback). **Phase-3 precondition cleared.**
+- ◐ **[r1 #2/#3 ✓v → PR #93 MERGED, item STILL OPEN]** "Grounding" checked citation-ID-resolution,
+  not claim SUPPORT — a fabrication with a live id was canonized as fact (calibration.py:80;
+  research.py:468). PR #93: QUOTE-AND-VERIFY substance scorer (`eris/reasoning/grounding.py`) wired
+  into verify_grounding + retrospect + the hive canonization gate (per-sentence canon, round-4 #1 fix
+  folded on). Same scorer IS the Phase-3 faithfulness metric. **Core merged, item STILL OPEN** until
+  the scorer is wired into the *remaining* generated-write paths (study.py, dream/reflection) and
+  prompt-assembly — see r4 #4 and the scorer-coverage workstream.
+- ⏸ **[r3 #7]** Non-atomic MTM/LTM saves (tiers.py:313/405/414). *HOLD for r4 durability cluster.*
 - ⏸ **[r1 #5]** Thought-stream write `OSError` swallowed (thought_stream.py:84-89). *HOLD for r4.*
 - ⏸ **[r3 #11]** Corrupt conversation file → thread overwritten empty (conversations.py:49/106). *HOLD for r4.*
-- ⏸ **[r1 #1 ✓v]** `orchestrator.field` shared singleton, no foreground lock (governor.py:38). *HOLD
-  for r4. NOTE: overlaps orchestrator.py with #87 — rebase on merged state when reached. The
-  localhost bind already de-risks this race to self-induced-only, so no exposure pressure.*
+- ⏸ **[r1 #1 ✓v ≈ r4 #1]** `orchestrator.field` shared singleton, no foreground lock (governor.py:38)
+  — **subsumed by round-4 #1 (P0 concurrency)**, which widens it to moe_gate/workspace/goal_network.
+  See r4 #1. *Land AFTER #93 (shared orchestrator.py).*
 - ⏸ **[r3 #3]** `all_records(limit=N)` tail-slice drops the current session (tiers.py:498). *HOLD for r4.*
+
+## Codex round-4 — static audit of `main` @ `6ec67fa` · the 11 findings
+*All silent (no crash, wrong/leaky behavior). Severity P0→P2 as Codex graded. **FIX-FIRST: r4 #1**
+— serialize foreground turns around shared cognitive state first; otherwise every other correctness
+fix can be invalidated by a concurrent request borrowing the wrong goal/winner/context. Status +
+merge-gate per finding; sequencing in **Build order & conflicts** below.*
+
+- ☐ **[r4 #1 · P0]** Concurrent chats use the WRONG MoE goal / working-memory prompt — two foreground
+  requests overwrite shared `moe_gate`/`workspace`/`goal_network` mid-turn, so A's specialist
+  selection is scored against B's goal and A's prompt can carry B's broadcast bullet
+  (server/app.py:195; orchestrator.py:469,496,1198). **Serialize foreground turns around shared
+  cognitive state, or make MoE/workspace/goal per-turn.** *Touches orchestrator.py → land AFTER #93.
+  Subsumes the old r1 #1 field-lock item.*
+- ☐ **[r4 #2 · P0]** Free/generated reflection enters the live prompt as "what she knows" —
+  introspection/ponder/reflection are stored then injected under "Use this memory / already read"
+  with no tier or re-grounding (dreaming.py:568,886; orchestrator.py:437,1183). **>> NOT closed by
+  #93** — prompt-assembly (orchestrator.py ~1186-1194) still injects memory as "already read" with
+  no tier caveat; the new 'inference' tier is cosmetic at consumption. **OPEN.** *Touches
+  orchestrator.py → AFTER #93; part of scorer-coverage.*
+- ⏸ **[r4 #3 · P1]** Subjective dreams recursively dream on prior dreams forever — a dream reads the
+  last thought-stream items (incl. prior dreams) and writes a new dream back; after one dream exists,
+  "no new day" no longer stops the next (dreaming.py:973,982,1008; thought_stream.py:89).
+  **Standing-wave / Eris-2.0-collapse risk.** *HELD loop/dream cluster — deliberate decision before
+  building; do NOT start as filler.*
+- ☐ **[r4 #4 · P1]** Index-time study Q&A stores model hallucinations — generated Q&A/propositions
+  stored as `study:*` with no quote/source check (study.py:108,113; comprehend.py:17,43). **>> NOT
+  closed by #93** — study.py canonization is unwired from the scorer. **OPEN.** *AFTER #93;
+  scorer-coverage (study first — highest retrieved-as-fact risk).*
+- ⏸ **[r4 #5 · P1]** Dream-cycle tension processing starves newer serious tensions — `run_cycle`
+  slices the first `max_tensions` candidates before gating and never marks old ones processed, so old
+  gated-out entries block later high-risk ones forever (dreaming.py:186,191; autobiography.py:176).
+  *HELD loop/dream cluster.*
+- ☐ **[r4 #6 · P1]** Embedding-only retrieval lets irrelevant STM outrank correct LTM — with only
+  `query_embedding`, every STM record scores 1.0 while LTM semantic hits cap ~0.8, so recent chat
+  outranks the studied source (tiers.py:580,607; study.py:247). *Touches tiers.py → land AFTER #92.
+  Relates to the Phase-2 "LTM discards cosine" retrieval-scoring items.*
+- ☐ **[r4 #7 · P1]** Raw memory can spoof prompt section headers — retrieved memory is concatenated
+  unescaped into `_assemble_prompt`; a stored passage can inject fake `[The person says]` /
+  `[Your inner state]` sections (orchestrator.py:437,1177,1184). **Escape/neutralize section markers
+  in retrieved text.** *Touches orchestrator.py → AFTER #93.*
+- ☐ **[r4 #8 · P2]** Failed autonomous-study attempts suppress retries — a topic with `chunks:0` +
+  error is still written to `study_reports.jsonl` and topic-selection treats all reported topics as
+  "recent," so it's never retried (study.py:155,170,48; curiosity.py:61). *Independent (study.py +
+  curiosity.py).*
+- ☐ **[r4 #9 · P2]** Hive retrieval cache reuses an index for a different same-length pool —
+  `_index_cache` keyed only by `len(recs)`; a changed record set of the same length reuses a stale
+  `HybridIndex` (orchestrator.py:862,955; hybrid.py:129). **Key the cache on content identity, not
+  length.** *Touches orchestrator.py → AFTER #93.*
+- ☐ **[r4 #10 · P2]** Confidence math collapses contradiction into orthogonality —
+  `resonance_confidence` clamps negative cosine to 0, so opposite evidence and unrelated evidence give
+  the same `match=0 / unresolved=1` geometry (confidence.py:38,40; dreaming.py:1114). *Independent;
+  relates to Phase-2 confidence/DCR work.*
+- ⏸ **[r4 #11 · P2]** Pending dream questions dropped during drain — `get_and_clear_questions` copies
+  a list then clears it; a background append between the two ops is lost (dreaming.py:208,1160;
+  server/app.py:567). *HELD loop/dream cluster (small, but grouped with the dream-concurrency work).*
+
+### Scorer-coverage workstream (from the #93 write-inventory)
+Wire `judge_claim` / tiering into the *ungated* generated-write paths so nothing reaches fact-tier
+without quote-and-verify. **Prioritize by retrieved-as-fact risk — study + dream-derived "lessons"
+first.** All gate AFTER #93 (need the scorer on `main`).
+- ☐ Study Q&A / propositions (**r4 #4**) — study.py:108,113; comprehend.py:17,43.
+- ☐ Every dream / introspection / reflection write — dreaming.py:607,613,698,713,813,931,1057,1175.
+- ☐ Federation writes — federation.py:29.
+- ☐ Deep-read writes — deep_read.py:231.
+- ☐ Prompt-assembly tier caveat (**r4 #2**) — orchestrator.py ~1186-1194: inject memory WITH its tier,
+  not as bare "already read."
+
+## Codex PR#94 audit — egress (6 findings)
+*PR #94 independently audited by Codex + chat (converged). The guard's skeleton is sound (see
+verified-good); these are the host-classification gaps + the same-module completeness items.*
+- ✓done **[#1 · P0]** `is_loopback_url` accepted a public DNS name that merely starts with `127.` or
+  ends with `.localhost` (e.g. `127.0.0.1.evil.com`, `evil.localhost`) → content shipped off-box with
+  NO consent (accelerators.py:38,40). **Fix:** robust `ipaddress`-based, fail-closed classifier
+  (exact-`localhost` only for names; `is_loopback` for IP literals; userinfo/`%`-encoding/IPv4-mapped
+  handled). **MERGED in #94.**
+- ☐ **[#2 · P1]** TTS provider URL unguarded — raw text goes off-box *before* the edge_tts guard
+  (tts.py:19,27,66). **Fix:** guard via the shared `egress_allowed`/`is_loopback_url` helper. **→ PR #96.**
+- ✓done **[#3 · P1]** Status probe egresses to a remote URL by default — `_reachable` GETs configured
+  URLs, leaking source IP/UA (accelerators.py:86,115; app.py:924). **Fix:** gate `_reachable` with
+  `egress_allowed`; a denied remote URL is "not probed." **MERGED in #94.**
+- ☐ **[#4 · P1]** `ask_expert` sends research Q/context to Anthropic with no per-path consent
+  (research.py:65,68; ask_expert.py:49,72). **→ Cloud/web egress-consent workstream (design pending).**
+- ☐ **[#5 · P1/P2]** Sovereignty treats `.local` as local, so prompts go off-box
+  (sovereignty.py:80,90; orchestrator.py:253). **Fix:** apply the shared host classifier. **→ PR #96.**
+- ☐ **[#6 · P2]** Autonomous web/study egress unguarded — DuckDuckGo / Wikipedia / page fetch / r.jina
+  (web_search.py:200,237; web_reader.py:57; study.py:148; orchestrator.py:1344). **→ Cloud/web
+  egress-consent workstream.**
+
+### Planned: PR #96 — egress hardening (TTS + sovereignty host-class)
+Codex #2 + #5. Apply #94's `is_loopback_url`/`host_of` helper to the TTS provider URL and the
+sovereignty `.local` classification. **Reuses #94's helper → build AFTER #94 merges.**
+
+### Workstream: Cloud/web egress consent (Codex #4 + #6)
+`ask_expert`/cloud-LLM escalation + autonomous web/study fetches (search, wiki, page-fetch) need a
+per-path consent/policy layer distinct from the accelerator guard (these are *intended* outbound
+calls, not misconfig). **DESIGN CALL pending — do NOT build yet.**
+
+## Build order & conflicts
+*Two PRs owned the contested files; everything else sequences around them.* **#92 (`tiers.py`) and
+#93 (`orchestrator.py` + grounding) are now MERGED to `main`** — the "after #9x" gates below are
+satisfied; the items can start against current main.
+- **AFTER #93** (shares `orchestrator.py`, or needs the scorer on `main`): r4 #1 (concurrency),
+  r4 #2 (tier-at-prompt), r4 #7 (header-spoof), r4 #9 (cache key), r4 #4 (study-gate), and the whole
+  scorer-coverage workstream.
+- **AFTER #92** (shares `tiers.py`): r4 #6 (STM-vs-LTM score).
+- **r4 #1 FIRST among the orchestrator items** — serialize foreground turns around shared cognitive
+  state before the others; a concurrent request borrowing the wrong goal/winner/context invalidates
+  the rest.
+- **Independent** (no held-file conflict, schedule freely): r4 #8 (study retries), r4 #10 (confidence
+  contradiction).
+- **HELD — loop/dream cluster, deliberate decision before building** (standing-wave risk; do NOT
+  start as filler): r4 #3 (recursive dreams), r4 #5 (tension starvation), r4 #11 (pending questions).
+- **Keep OPEN regardless of #93 merge:** r1 #2/#3 and r4 #2/#4 — the scorer exists but is not yet
+  wired into prompt-assembly or the study/dream write paths.
 
 ## Phase 2 — Physics & math correctness · ☐ NOT STARTED
 *The architecture runs and the live path is load-bearing, but almost none of the physics is currently
@@ -160,9 +290,16 @@ in a state to do what the theory says. Fix before testing.*
 ---
 
 ## Verified-good (Codex "clean" section)
+- **[PR#94 egress, Codex + chat]** Default-deny consent parsing is correct — only `1/on/true/yes`
+  enable; `0/false`/empty/unset do NOT. The guard runs BEFORE the network call at all four content
+  sites (embeddings/rerank/STT/VLM) with safe fallbacks. *Skeleton confirmed by both reads; the host
+  classifier + status probe were the gaps (folded into #94).*
 - **τ vorticity matches the canon scalar curl ∇ρ×∇θ** (sign + axis) apart from the known
   boundary-stencil issue — the core torsion math is correct.
 - No additional CPU/GPU math divergence beyond the known `xp.roll` boundary + the VRAM-cap no-op.
+- **[r4 clean]** `local_coherence()` matches its stated 4-neighborhood + self Kuramoto order parameter
+  apart from the already-known periodic-boundary behavior; no serious live-path `beta_star` issue
+  beyond its limited/inert wiring.
 
 ## The pattern across all reviews
 Four recurring failure modes, not random bugs: **computed-but-not-persisted** (snapshots,
