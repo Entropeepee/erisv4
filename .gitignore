@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 node_modules/
 .env
+.env.*
+*.env
+!.env.example
 
 # Tier 5 grokking experiment artifacts
 grok_kb/
