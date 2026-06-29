@@ -113,7 +113,11 @@ def _split_source(prompt: str) -> Tuple[str, str]:
 
 
 def default_bare_arm() -> Callable[[str], Tuple[str, int]]:
-    """Arm A from env: ERIS_BENCH_BASE_URL, ERIS_BENCH_MODEL (e.g. your local Ollama model)."""
+    """Arm A from env: ERIS_BENCH_BASE_URL, ERIS_BENCH_MODEL, ERIS_BENCH_API_KEY. Points at local
+    Ollama by default, or any OpenAI-compatible cloud endpoint (e.g. OpenRouter:
+    base_url=https://openrouter.ai/api/v1, model=qwen/qwen-2.5-72b-instruct, a real Bearer key) —
+    which both SPEEDS UP the run and lets you compare LLM choices by swapping ERIS_BENCH_MODEL."""
     return openai_chat_arm(
         base_url=os.environ.get("ERIS_BENCH_BASE_URL", "http://localhost:11434/v1"),
-        model=os.environ.get("ERIS_BENCH_MODEL", ""))
+        model=os.environ.get("ERIS_BENCH_MODEL", ""),
+        api_key=os.environ.get("ERIS_BENCH_API_KEY", "ollama"))
