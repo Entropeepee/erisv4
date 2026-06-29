@@ -71,13 +71,17 @@ All eight landed on `main`; each Tier-3 item passed a real-server exploit re-run
 means anything.* **Building now: r3 #1 + r1 #2/#3. The rest HOLD for Codex round-4** (concurrency /
 shared-mutable-state / long-run loop audit will widen them — do the durability cluster once, informed
 by r4).
-- ☐ ⚑ **[r3 #1 ✓v]** Field snapshots never serialized — `to_dict`/`from_dict` omit
-  `phi/theta_snapshot`, so after restart MTM/LTM are embedding-only (tiers.py:214/231). Serialize
-  with dtype/shape/finite validation; test reload survives. **Phase-3 precondition. — BUILDING.**
-- ☐ **[r1 #2/#3 ✓v]** "Grounding" checks citation-ID-resolution, not claim SUPPORT — a fabrication
-  with a live id is canonized as fact (calibration.py:80; research.py:468). Replace with a
-  substance/entailment check; fix the 2 false-confidence tests. **Build as the Phase-3 faithfulness
-  scorer (design once, serves both). — BUILDING.**
+- ▶PR ⚑ **[r3 #1 ✓v]** Field snapshots never serialized — `to_dict`/`from_dict` omit
+  `phi/theta_snapshot`, so after restart MTM/LTM are embedding-only (tiers.py:214/231). **DONE —
+  PR #92:** serialize phi/theta with dtype/shape/finite validation; reload survives. **Phase-3
+  precondition.** *Awaiting owner merge.*
+- ▶PR **[r1 #2/#3 ✓v]** "Grounding" checks citation-ID-resolution, not claim SUPPORT — a fabrication
+  with a live id is canonized as fact (calibration.py:80; research.py:468). **DONE — PR #93:**
+  QUOTE-AND-VERIFY substance scorer (`eris/reasoning/grounding.py`) wired into verify_grounding +
+  retrospect + the hive canonization gate; SUPPORTED→fact, INFERRED→new 'inference' tier with
+  provenance, UNSUPPORTED/CONTRADICTED→speculation (never canonized). Same scorer IS the Phase-3
+  faithfulness metric (design once, serves both). The 2 false-confidence tests fixed + demote-on-
+  unsupported cases added; 749 tests green. *Awaiting owner merge (no auto-merge).*
 - ⏸ **[r3 #7]** Non-atomic MTM/LTM saves (tiers.py:313/405/414). *HOLD for r4.*
 - ⏸ **[r1 #5]** Thought-stream write `OSError` swallowed (thought_stream.py:84-89). *HOLD for r4.*
 - ⏸ **[r3 #11]** Corrupt conversation file → thread overwritten empty (conversations.py:49/106). *HOLD for r4.*
