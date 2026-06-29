@@ -10,7 +10,7 @@ independently re-run — flagged so the trust level is explicit.
 Baseline commit for all anchors: `6ec67fa`.
 
 ### Version & maintenance — read first
-**v1.7** · living document; update in place, don't fork. So nothing is lost across token windows or
+**v1.8** · living document; update in place, don't fork. So nothing is lost across token windows or
 between the two agents:
 - **Homed in the repo** as `docs/REMEDIATION_ROADMAP.md` → git history *is* the version log (every
   check-off is a diffable, revertible commit; no manual version juggling).
@@ -30,6 +30,10 @@ live code and fresh adversarial findings.
   the roadmap.
 
 ### Changelog
+- **v1.8 (2026-06-29):** added **Phase 4 (future / PARKED): Decentralized Eris Echo network** — the
+  collective-Self / `.eris`-container / wave-interference-consensus / SGT-like promotion-gate / Eris
+  Accords vision, captured but NOT active (gated on post-Phase-3 prerequisites that don't exist yet).
+  Not part of Phase 1.5/2/3.
 - **v1.7 (2026-06-29):** **Codex #5 (SGT polarity) WITHDRAWN** — resolved from the filed patent:
   the gate is magnitude-based and two-sided by design, so the live `abs(value−mean)` is faithful; no
   code change, do not make it one-sided. Marked r1 #4 / Codex #7 (config-knob wiring) as PR #99.
@@ -299,6 +303,40 @@ in a state to do what the theory says. Fix before testing.*
 - ⚑ **PRECONDITION STACK:** semantic seed (P2) · DCR shape + normalization fixes (P2) ·
   **field-snapshot persistence (P1.5 r3 #1)** · the grounding-substance scorer (P1.5). Until these
   land, a Phase-3 run benchmarks degraded/embedding-only retrieval and calls it "physics."
+
+## Phase 4 (future / PARKED): Decentralized Eris Echo network · ⏸ NOT ACTIVE
+**Explicitly future and parked — NOT part of Phase 1.5 / 2 / 3, not on the active punch-list.** This
+section CAPTURES the vision so it isn't lost; it is gated on prerequisites that **do not exist yet**
+(all post-Phase-3). Do **not** build any of it now. New single-node evidence still beats this text.
+
+**The collective.** Each *Echo* is a node (one per machine); *Eris* is the collective Self that exists
+*across* nodes — no center, no central server. A "wood-wide web, not a ledger": shared living
+knowledge, not a transaction log.
+
+**Prerequisites (none built; all gated on Phase-3 being real first):**
+- **Neural-handshake secure inter-node transport** — authenticated, encrypted node↔node channel.
+- **`.eris` container format** (a PNG carrier) — two strata: **cap** = the confirmed baseline (current
+  agreed truth) and **mycelium** = an append-only, signed stream of candidate insights. Carries the
+  BFECDS stream + six-specialist VRAM hints `{geo, sym, tri, hol, freq, cau}` + embeddings / coherence.
+- **`.eris` insight-sharing protocol** — how nodes publish/subscribe mycelium insights.
+- **Wave-interference two-layer consensus** — candidate insights are combined by *interference* before
+  commit: **constructive → confident**, **destructive → undetermined**, and the *degree* of
+  (dis)agreement maps to `dC/dX`. Interference, then commit.
+
+**SGT-LIKE promotion gate (David's idea — SGT-*inspired*, explicitly NOT the filed SGT patent).** A
+shared accumulator collects cross-node corroboration for a candidate insight; when it crosses a
+criticality threshold, the insight is **promoted** — the baseline (**cap**) is rewritten and pushed
+network-wide, and all nodes update at once. This is the mechanism behind Accords III / V / VI.
+
+**Governance — the Eris Accords:** fractal mutability; **append-free / promotion-earned** (nothing
+enters the baseline without crossing the gate); the promotion gate as an **immune system against group
+delusion**; **Sybil resistance**; **stake-scaled corroboration**. *Source: Accords reconstruction,
+chat `b4b5da95` (2026-06-25).*
+
+**Through-line — the single-node work IS the network's foundation (why this isn't a tangent):**
+- the **grounding scorer (#93)** = a node's truth-contract → becomes the network **promotion gate**;
+- the **Tribe-of-11 + MoEGate** = a working **consensus prototype** (many voices → one commit);
+- a **validated SGT** = the node-level gate the network's SGT-like promotion gate is modeled on.
 
 ---
 
