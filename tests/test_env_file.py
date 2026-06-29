@@ -66,5 +66,53 @@ class TestEnvFileLoader(unittest.TestCase):
         self.assertLess(i_load, i_token, "load_dotenv() must run BEFORE the ERIS_AUTH_TOKEN read")
 
 
+class TestConflictDiagnostic(unittest.TestCase):
+    """A stale shell var silently winning over .env was the root cause of three attributability
+    incidents. The loader keeps defer-to-shell (an export still wins) but makes the override VISIBLE."""
+
+    def _write(self, body):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, ".env")
+        with open(p, "w") as f:
+            f.write(body)
+        return p
+
+    def test_conflict_recorded_and_surfaced_with_secret_masked(self):
+        import io
+        from eris.env_file import DOTENV_CONFLICTS, report_env_sources
+        os.environ["ERIS_AUTH_TOKEN"] = "shell-token-value"          # a stale shell value
+        os.environ.pop("ERIS_BENCH_MODEL", None)
+        p = self._write("ERIS_AUTH_TOKEN=env-token-value\nERIS_BENCH_MODEL=qwen/qwen-2.5-72b\n")
+        load_dotenv(p)
+        keys = {c[0] for c in DOTENV_CONFLICTS}
+        self.assertIn("ERIS_AUTH_TOKEN", keys)        # the override is recorded (shell still wins)
+        self.assertNotIn("ERIS_BENCH_MODEL", keys)    # loaded cleanly from .env → no conflict
+        self.assertEqual(os.environ["ERIS_AUTH_TOKEN"], "shell-token-value")  # defer-to-shell kept
+
+        buf = io.StringIO()
+        report_env_sources(out=buf)
+        text = buf.getvalue()
+        self.assertIn("OVERRIDES .env", text)                        # the override is surfaced loudly
+        self.assertIn("ERIS_BENCH_MODEL ← .env", text)               # clean source shown
+        self.assertNotIn("shell-token-value", text)                  # secret VALUE never logged
+        self.assertNotIn("env-token-value", text)
+        self.assertIn("chars>", text)                                # shown only as a masked length
+        for k in ("ERIS_AUTH_TOKEN", "ERIS_BENCH_MODEL"):
+            os.environ.pop(k, None)
+
+    def test_no_conflict_no_warning(self):
+        import io
+        from eris.env_file import report_env_sources
+        for k in ("ERIS_AUTH_TOKEN", "ERIS_BENCH_MODEL"):
+            os.environ.pop(k, None)
+        load_dotenv(self._write("ERIS_BENCH_MODEL=qwen/qwen-2.5-72b\n"))
+        buf = io.StringIO()
+        report_env_sources(out=buf)
+        text = buf.getvalue()
+        self.assertNotIn("WARNING", text)                            # no false alarm when clean
+        self.assertIn("ERIS_BENCH_MODEL ← .env", text)
+        os.environ.pop("ERIS_BENCH_MODEL", None)
+
+
 if __name__ == "__main__":
     unittest.main()

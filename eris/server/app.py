@@ -41,8 +41,11 @@ except ImportError:
 # AND ERIS_AUTH_TOKEN live in ONE gitignored .env and apply on a fresh shell, not just the window
 # that exported them. Previously only the benchmark runner loaded .env; the server read a bare
 # os.environ, so a token sitting in .env silently did NOTHING and the gate was effectively off.
-from eris.env_file import load_dotenv as _load_dotenv
+from eris.env_file import load_dotenv as _load_dotenv, report_env_sources as _report_env_sources
 _load_dotenv()
+# Surface where ERIS_AUTH_TOKEN / model / tier vars resolved from (shell vs .env) and warn on any
+# conflict — a stale shell var silently winning over .env was the root cause of prior incidents.
+_report_env_sources()
 
 from eris.orchestrator import ErisOrchestrator
 from eris.sandbox.executor import SandboxExecutor
