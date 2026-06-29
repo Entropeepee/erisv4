@@ -116,6 +116,11 @@ def item_details(items: List[BenchItem],
         # 300 chars of a 5000-char answer is still a black box). Full question, full answer.
         row = {"id": it.id, "question": it.question,
                "gold": it.answer or ("UNANSWERABLE" if it.unanswerable else "")}
+        if it.choices:                             # MC: show what A/B/C/D actually SAY, so a wrong
+            row["choices"] = {chr(65 + k): c for k, c in enumerate(it.choices)}  # letter is judgeable
+            g = (it.answer or "").strip().upper()
+            if len(g) == 1 and g.isalpha():
+                row["gold_text"] = row["choices"].get(g, "")
         if (it.meta or {}).get("fetch"):           # FRAMES: how many linked articles actually loaded
             row["source_fetch"] = it.meta["fetch"]
         for label, m in by.items():
@@ -123,6 +128,10 @@ def item_details(items: List[BenchItem],
             if r is None:
                 continue
             cell = {"answer": (r.text or ""), "tokens": r.tokens}
+            if it.choices:                         # MC: also show the TEXT of the chosen letter
+                a = (r.text or "").strip().upper()
+                if len(a) == 1 and a.isalpha():
+                    cell["answer_text"] = row["choices"].get(a, "")
             if r.correct is not None:
                 cell["correct"] = r.correct
             if r.faithfulness is not None:
