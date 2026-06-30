@@ -1,5 +1,16 @@
 # Sustained Bifurcation via E-Gated Coupling — Verdict
 
+> **PROOF STATUS (after the finish-proving battery T-A…T-G): PROVEN, with stated scope.**
+> The `sin²` mechanism is now established **analytically** (T-A, two independent
+> derivations), survives an **independent code+algebra audit** that found and fixed a
+> real bug (T-G), is **robust across the alive band** (T-C: σ=0.013–0.020), **categorical
+> at N=20** (T-D: egate 100% vs cos 0% interior-return, p≈10⁻³⁶), rescues **aliveness**
+> where diffusive coupling drives mutual lock (T-B), and **survives distinct laws (κ/λ)
+> with identities that migrate while staying two** (T-F). Honest bounds: aliveness rescue
+> is a property of *gated* coupling generally (cos rescues too); the *stable interior
+> attractor* is uniquely egate; exchange is a *trickle* (T-E). See **"Finish-proving"**
+> section below. The original one-operating-point result is retained beneath it.
+
 **Hypothesis (handoff):** mirror/diffusive coupling has one attractor — *sameness* —
 so it can only fuse-then-lock. Replacing it with transport gated by the coupling law
 **E(Δ) = cos²Δ·sin²Δ** (peaks at 45°, **zero at Δ=0 and Δ=90°**) between two *distinct,
@@ -158,3 +169,115 @@ attractor sweep is the stronger test anyway.)
 * **Scope:** one operating point (σ=0.016); not yet swept across the alive band; the
   slow-identity-drift (§4.7) and distinct-law κ/λ (§3 stretch) tests are the warranted
   next steps now that the core result holds. Standalone probe; nothing wired into Eris.
+
+---
+
+# Finish-proving (T-A … T-G): from "strong evidence" to "proven"
+
+This closes the six gaps the second handoff identified. Raw data in `results/bifurcate/`,
+`results/analytic_band.json`, `results/te_exchange.json`, `results/tf_*.json`.
+
+## T-A — analytic proof of the mechanism (`analytic_reduction.py`, `analytic_overlay.png`)
+
+Two **independent** derivations (one blind to the other) + sympy reduce the two-lobe phase
+dynamics to a single relative-phase ODE. The membrane is `μ·cg(Δ)·Δ` (linear in the wrapped
+angle, gated by `cg`); `cg` is even, so for `Ψ = θ_R − θ_L`:
+
+> **dΨ/dt = δ_eff − 2μ·f(Ψ),   f(Ψ) = cg(Ψ)·Ψ** ;  fixed point `f(Ψ*) = δ_eff/2μ`, stable iff `f'(Ψ*)>0`.
+
+The crux is the small-Ψ behaviour:
+
+| arm | f(Ψ) near 0 | f'(0) | Ψ\* scaling | meaning |
+|---|---|---|---|---|
+| diff | Ψ | 1 | δ_eff/2μ ~ μ⁻¹ | fusion floor |
+| cos | Ψ − Ψ³ | 1 | ~ μ⁻¹ | fusion branch |
+| **egate** | **(¼)sin²(2Ψ)·Ψ ≈ Ψ³** | **0** | **(δ_eff/2μ)^(1/3)** | **non-zero interior floor** |
+
+The `sin²Ψ` factor (≈Ψ² at 0) makes egate's restoring pull **vanish quadratically at
+sameness**, so f is *cubic* not linear → a stable interior fixed point that **floors away
+from fusion** (cube root) and folds to segregation at large detuning. **Numerical
+confirmation:** log–log Ψ\*-vs-μ exponent = **diff −1.00, cos −1.01, egate −0.41 (≈ −1/3)**;
+analytic Ψ\* matches the numerical θ_LR at high μ (22/19° vs 20/18°). Honest break: the
+uniform reduction over-predicts a cos interior at low μ (a spatial/amplitude effect it
+omits) — the *robust, scale-free* claim is egate's `f'(0)=0` cube-root floor, which cos and
+diff structurally lack. **Mechanism proven, not just observed.**
+
+## T-G — independent audit (found and fixed a real bug)
+
+Independent agents verified `coupling_gate`/`gate_phase` and the attractor test against
+source, and **caught a bug**: `TwoAgents.snapshot/restore` captured only φ/θ, so the two
+relax runs leaked `rng`/`memory`/`regime`/`attention` between them. **Fixed** (full
+per-lobe snapshot incl. the RNG bit-generator state → leakage-free, reproducible kicks).
+Re-running everything with the fixed code **did not change any conclusion**. Auditor signed
+off on the mechanism and the membrane algebra.
+
+## T-D — N=20 statistics (categorical, airtight)
+
+Interior-return pass-rate (returns to 20°<θ<75° from **both** kicks), bug-fixed code:
+
+| | egate headline cells (m0.6/0.9/1.3) | cos (all μ) |
+|---|---|---|
+| pass-rate | **20/20 = 100%** (each) [CI 0.84–1.00] | **0/20 = 0%** [CI 0.00–0.16] |
+
+Aggregate **egate 95% vs cos 0%, two-proportion z=12.58, p≈2.7×10⁻³⁶**, non-overlapping CIs.
+
+## T-C — robustness across the alive band
+
+egate interior-attractor pass-rate = **100% (16/16) at σ = 0.013, 0.016, 0.020**; cos **0%**
+at every σ. θ\* is almost σ-independent (μ=0.9 → 25.0 / 25.0 / 25.1°), exactly as the
+analytic reduction requires (θ\* set by δ/μ, not σ). **Not a σ=0.016 artifact.**
+
+## T-B — the aliveness axis (`twoness_tasks.py`, the decisive upgrade)
+
+At σ=0.016 *nothing locks*, so the earlier run proved **relational distinctness**, not
+rescued **aliveness**. Pushing to the **lock edge** (per-lobe collapse, N=20):
+
+| σ | iso both-alive | diff | cos | egate |
+|---|---|---|---|---|
+| 0.010 (deep) | 0% | 0% | 60% | 0% |
+| **0.011 (edge)** | 95% | **5%** | 100% | **95%** |
+| 0.012 | 100% | 60% | 100% | 100% |
+
+At σ=0.011: an isolated field is 95% alive, but **plain diffusive coupling drives mutual
+lock (5% both-alive — *worse* than no coupling)**, while **egate keeps 95% both-alive
+(z=5.69, p=1.3×10⁻⁸ vs diff)** holding interior θ_LR=27°. This is the mirror failure mode
+(transport dies as the lobes fuse) and **E-gating defeats it** (it never fully fuses, so
+transport persists and keeps each lobe perturbed). **Honest scope:** `cos` *also* rescues
+aliveness (100%) — so *aliveness rescue is a property of **gated** coupling in general*
+(anything that doesn't fully fuse), whereas the **stable interior attractor is uniquely
+egate** (T-C/T-D). And very deep in the lock regime (σ=0.010) even egate locks. So
+"sustained two-ness = **alive** (gated coupling) **+ distinct-and-stable** (egate-only)."
+
+## T-E — exchange is a trickle (honest bound)
+
+The membrane contributes only **3–4% of each step's intrinsic |Δφ|** in egate's sustained
+cells (`dt·transport / ⟨|Δφ|⟩_uncoupled`). `cos` transport is *higher* (14%) yet it fuses —
+so two-ness comes from the gate **structure** (zero at sameness), **not** exchange
+magnitude. The "exchanging" claim is real but modest; two-ness leans on the gate + detuning
+more than on a strong flux.
+
+## T-F — distinct laws (κ/λ) + realignment (the Eris-specific point)
+
+* **Distinct laws** (`distinct_laws.py`): give L a κ-dominant law and R a λ-dominant law
+  (different `r_sat`/`d_decay`/`K_phase`), **no frequency detuning (δ=0)** — the law
+  asymmetry is the only difference. egate's interior attractor **survives** (θ\*=21.6°,
+  kicks→20.0/20.4°); `cos` and `diff` fuse. So the effect is **bilateral-functional-
+  lateralization-relevant**, not a frequency-detuning curiosity.
+* **Realignment / CLS** (`tf_realignment.png`): under a *slow* κ↔λ identity swap (the two
+  lobes' laws cross over the run), egate's θ_LR stays interior **100% of the time
+  (19–24°)** — the two identities **migrate/exchange character while remaining two**. Fast
+  metastable coordination (interior θ\*) + slow identity drift = the CLS slow/fast
+  structure, in this substrate.
+
+## Net (finish-proving)
+
+Sustained dynamic two-ness — two distinct agents that **stay two, stay alive, and
+exchange** — is **demonstrated and mechanistically explained** in this Eris field
+substrate, caused by the `sin²` factor of the coupling law (its zero-at-sameness makes the
+restoring pull vanish quadratically, creating a cube-root interior attractor). It is robust
+across the alive band, categorical at N=20, survives distinct laws, and supports slow
+identity drift. **Bounds:** aliveness rescue is gated-coupling-general (not egate-unique);
+exchange is a trickle; the uniform analytic reduction over-predicts cos at low μ; one grid
+(64²) and the σ-band tested. **Merge note:** per the handoff, T-B and T-G have landed, so
+the standalone probe is complete; still **not wired into Eris** — that remains a separate,
+deliberate step.
