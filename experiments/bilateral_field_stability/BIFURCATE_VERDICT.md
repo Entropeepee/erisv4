@@ -346,13 +346,16 @@ reusing the multi-neighbour `others` path.
   are the same E-gated law at different n.
 * **N-channel conserved budget:** the total amplitude `Σ_i Σ_cells φ_i` is conserved by the N
   membranes to **~10⁻¹⁶** for N=3,4,6 (R1 extends to N channels).
-* **Scaling (honest).** All-to-all coupling sums N−1 neighbours, so the fusion pressure grows
-  ~ (N−1)·μ; the pairwise angle θ\* **shrinks with N** (≈22°/18°/15° at μ=0.9 for N=3/4/6) and
-  by **N=6 the all-to-all interior collapses toward fusion at μ≥0.9** (sustained only at lower
-  μ≈0.6). So **sustained N-ness persists but gets harder with N** — the band shifts to lower μ
-  (μ ~ 1/(N−1)); ring topology (fixed degree 2) holds the angle better but its
-  decoherence-return on large rings (N=6) is messy. No clean critical-N collapse was reached
-  through N=6 when μ is matched, but the trend predicts one for all-to-all at fixed μ.
+* **Scaling — topology is decisive (C4).** All-to-all coupling sums N−1 neighbours, so the
+  fusion pressure grows ~ (N−1)·μ and the pairwise angle θ\* **shrinks with N** (≈22°/18°/15°
+  at μ=0.9 for N=3/4/6). **N=6 all-to-all does NOT sustain the interior attractor** (0/8;
+  θ\*≈15°, below the 20° interior cut — it has fused). **Ring topology (bounded degree 2)
+  sustains to N=6** (8/8 *both-interior*, θ\*≈39°) — though on a 6-ring the two kicks return to
+  *different* interior points (≈26° and ≈59°), i.e. an interior **manifold** of stable
+  configurations rather than a single θ\*. **Architecture-relevant reading:** a **sparse /
+  stigmergic hive (bounded degree) preserves N-ness**; **dense all-to-all coupling fuses as N
+  grows** (band ~ μ∝1/(N−1)). So the decentralized-node hive has dynamical support *only if it
+  stays sparse*.
 
 ## R3 — exponent cleanup (overclaim corrected) — `r3_exponent.py`, `r2_r3.png`
 
