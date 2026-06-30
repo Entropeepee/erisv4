@@ -1,0 +1,554 @@
+{
+ "key": "single_0.006",
+ "records": [
+  {
+   "seed": 0,
+   "collapsed": false,
+   "outcome": "ALIVE",
+   "collapse_step": null,
+   "tvar": 2.7359371311083653e-05,
+   "svar": 0.0007441337402495679,
+   "kur": 0.9475390412058694
+  },
+  {
+   "seed": 1,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 692,
+   "tvar": 2.8892057142738994e-05,
+   "svar": 0.0006341209562035369,
+   "kur": 0.9488401732726937
+  },
+  {
+   "seed": 2,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 709,
+   "tvar": 2.8571912522456518e-05,
+   "svar": 0.0006715524905788171,
+   "kur": 0.9469267398275081
+  },
+  {
+   "seed": 3,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 689,
+   "tvar": 2.5546835319003016e-05,
+   "svar": 0.000654602086263734,
+   "kur": 0.9478350401931237
+  },
+  {
+   "seed": 4,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 708,
+   "tvar": 2.760217995442215e-05,
+   "svar": 0.0006439644327296979,
+   "kur": 0.948117227532727
+  },
+  {
+   "seed": 5,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 621,
+   "tvar": 2.7002974878334766e-05,
+   "svar": 0.0005901950278404781,
+   "kur": 0.950731238601388
+  },
+  {
+   "seed": 6,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 652,
+   "tvar": 2.253387849799269e-05,
+   "svar": 0.0006399070513090724,
+   "kur": 0.9470528618492361
+  },
+  {
+   "seed": 7,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 621,
+   "tvar": 2.861458079775428e-05,
+   "svar": 0.0005627886697206879,
+   "kur": 0.9485694001000924
+  },
+  {
+   "seed": 8,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 628,
+   "tvar": 2.8054840039785067e-05,
+   "svar": 0.0005859747655825754,
+   "kur": 0.9459865226148741
+  },
+  {
+   "seed": 9,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 588,
+   "tvar": 2.6718818426528152e-05,
+   "svar": 0.0005208613269261815,
+   "kur": 0.9485785988739193
+  },
+  {
+   "seed": 10,
+   "collapsed": false,
+   "outcome": "ALIVE",
+   "collapse_step": null,
+   "tvar": 2.8946325199876634e-05,
+   "svar": 0.0008518709357358493,
+   "kur": 0.9421017767949956
+  },
+  {
+   "seed": 11,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 616,
+   "tvar": 2.8517003946549195e-05,
+   "svar": 0.0005851649499096323,
+   "kur": 0.9501249179667353
+  },
+  {
+   "seed": 12,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 610,
+   "tvar": 2.914478854174269e-05,
+   "svar": 0.0005750314987066917,
+   "kur": 0.9463931349835327
+  },
+  {
+   "seed": 13,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 709,
+   "tvar": 2.6931916486862513e-05,
+   "svar": 0.0006826603748561839,
+   "kur": 0.9491786924525539
+  },
+  {
+   "seed": 14,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 527,
+   "tvar": 2.628289747421316e-05,
+   "svar": 0.0005015944439913195,
+   "kur": 0.9507472825838917
+  },
+  {
+   "seed": 15,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 630,
+   "tvar": 2.9331926088152766e-05,
+   "svar": 0.0006553568912843738,
+   "kur": 0.945247374020096
+  },
+  {
+   "seed": 16,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 642,
+   "tvar": 2.8417341280870225e-05,
+   "svar": 0.0006312359384244041,
+   "kur": 0.948021186610974
+  },
+  {
+   "seed": 17,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 720,
+   "tvar": 2.8407893365452274e-05,
+   "svar": 0.0006797849170089818,
+   "kur": 0.9474355988748273
+  },
+  {
+   "seed": 18,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 652,
+   "tvar": 2.7607668299371424e-05,
+   "svar": 0.000644221947118455,
+   "kur": 0.9437555301588045
+  },
+  {
+   "seed": 19,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 759,
+   "tvar": 2.774635362170023e-05,
+   "svar": 0.0007242545365026877,
+   "kur": 0.9478681853714027
+  },
+  {
+   "seed": 20,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 640,
+   "tvar": 2.7261294725792032e-05,
+   "svar": 0.0006434694815725944,
+   "kur": 0.9454619665701347
+  },
+  {
+   "seed": 21,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 679,
+   "tvar": 2.3596258283351008e-05,
+   "svar": 0.0006071263040089148,
+   "kur": 0.9507511637518953
+  },
+  {
+   "seed": 22,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 607,
+   "tvar": 2.698817962851867e-05,
+   "svar": 0.0006033876975742281,
+   "kur": 0.9482522627451434
+  },
+  {
+   "seed": 23,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 583,
+   "tvar": 2.7066429151133068e-05,
+   "svar": 0.0005081244159112249,
+   "kur": 0.9512751494891267
+  },
+  {
+   "seed": 24,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 734,
+   "tvar": 2.4559979599195543e-05,
+   "svar": 0.0006763195733172464,
+   "kur": 0.9481399970858122
+  },
+  {
+   "seed": 25,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 667,
+   "tvar": 2.7443325911314884e-05,
+   "svar": 0.0006285825739856626,
+   "kur": 0.9466811940374256
+  },
+  {
+   "seed": 26,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 775,
+   "tvar": 2.837130862242633e-05,
+   "svar": 0.0007986144516271967,
+   "kur": 0.9442995778611762
+  },
+  {
+   "seed": 27,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 582,
+   "tvar": 2.8873601907776225e-05,
+   "svar": 0.0005427075939559642,
+   "kur": 0.9495651403551792
+  },
+  {
+   "seed": 28,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 474,
+   "tvar": 2.3952017858967598e-05,
+   "svar": 0.00044763043632578477,
+   "kur": 0.9559041013799863
+  },
+  {
+   "seed": 29,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 653,
+   "tvar": 2.8067436907325945e-05,
+   "svar": 0.0005935193273277635,
+   "kur": 0.948652278389129
+  },
+  {
+   "seed": 30,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 781,
+   "tvar": 2.8891628585216604e-05,
+   "svar": 0.0006964309457749622,
+   "kur": 0.9503125945438273
+  },
+  {
+   "seed": 31,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 684,
+   "tvar": 2.5408778704907384e-05,
+   "svar": 0.000621761167602831,
+   "kur": 0.9503393920431831
+  },
+  {
+   "seed": 32,
+   "collapsed": false,
+   "outcome": "ALIVE",
+   "collapse_step": null,
+   "tvar": 2.9431345690439012e-05,
+   "svar": 0.0008468943086067538,
+   "kur": 0.9420597568563968
+  },
+  {
+   "seed": 33,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 600,
+   "tvar": 2.8764978311667927e-05,
+   "svar": 0.000551671017659264,
+   "kur": 0.949687109793417
+  },
+  {
+   "seed": 34,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 680,
+   "tvar": 2.9484648992011164e-05,
+   "svar": 0.0006677215115437284,
+   "kur": 0.9457259782670785
+  },
+  {
+   "seed": 35,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 675,
+   "tvar": 2.6618836361948002e-05,
+   "svar": 0.0006796803955676146,
+   "kur": 0.9465759054856886
+  },
+  {
+   "seed": 36,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 715,
+   "tvar": 2.9980290529246725e-05,
+   "svar": 0.0007292572049346336,
+   "kur": 0.9469983655511559
+  },
+  {
+   "seed": 37,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 593,
+   "tvar": 2.8425115429260815e-05,
+   "svar": 0.0005294332685604392,
+   "kur": 0.9514117304863912
+  },
+  {
+   "seed": 38,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 727,
+   "tvar": 2.7408728317732755e-05,
+   "svar": 0.0006359395838300454,
+   "kur": 0.952005024472294
+  },
+  {
+   "seed": 39,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 625,
+   "tvar": 2.3607783961890982e-05,
+   "svar": 0.0005299393444845818,
+   "kur": 0.9532332983004568
+  },
+  {
+   "seed": 40,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 745,
+   "tvar": 2.596606813057679e-05,
+   "svar": 0.0007706200729896823,
+   "kur": 0.9474710188920827
+  },
+  {
+   "seed": 41,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 794,
+   "tvar": 2.8973806022457513e-05,
+   "svar": 0.000768758527177649,
+   "kur": 0.9442805879473919
+  },
+  {
+   "seed": 42,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 693,
+   "tvar": 2.7834925126644302e-05,
+   "svar": 0.0006439656949998417,
+   "kur": 0.9501110779649771
+  },
+  {
+   "seed": 43,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 652,
+   "tvar": 2.8069840298971286e-05,
+   "svar": 0.0006301043186288267,
+   "kur": 0.9475533607754567
+  },
+  {
+   "seed": 44,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 643,
+   "tvar": 2.7752128507890664e-05,
+   "svar": 0.0006188194801636988,
+   "kur": 0.9474552229897507
+  },
+  {
+   "seed": 45,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 734,
+   "tvar": 2.6976231956363094e-05,
+   "svar": 0.0006840975222733988,
+   "kur": 0.9477312364339202
+  },
+  {
+   "seed": 46,
+   "collapsed": false,
+   "outcome": "ALIVE",
+   "collapse_step": null,
+   "tvar": 3.023803013101554e-05,
+   "svar": 0.000799112641563929,
+   "kur": 0.9437199174167459
+  },
+  {
+   "seed": 47,
+   "collapsed": false,
+   "outcome": "ALIVE",
+   "collapse_step": null,
+   "tvar": 3.098038080407964e-05,
+   "svar": 0.0007762368136170695,
+   "kur": 0.9456450413211662
+  },
+  {
+   "seed": 48,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 675,
+   "tvar": 2.638946976779407e-05,
+   "svar": 0.0006402975537279171,
+   "kur": 0.9486610552028744
+  },
+  {
+   "seed": 49,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 623,
+   "tvar": 2.4639527669964695e-05,
+   "svar": 0.0005586789293815934,
+   "kur": 0.9491998345705701
+  },
+  {
+   "seed": 50,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 656,
+   "tvar": 2.9684862478012548e-05,
+   "svar": 0.000630363713662898,
+   "kur": 0.9454966522150375
+  },
+  {
+   "seed": 51,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 608,
+   "tvar": 2.849435783240748e-05,
+   "svar": 0.0005472995233268987,
+   "kur": 0.952636282900285
+  },
+  {
+   "seed": 52,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 565,
+   "tvar": 2.827354651856681e-05,
+   "svar": 0.0005295340851816999,
+   "kur": 0.9469789918578411
+  },
+  {
+   "seed": 53,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 747,
+   "tvar": 2.7151917307035057e-05,
+   "svar": 0.000672426274446141,
+   "kur": 0.9490329081271829
+  },
+  {
+   "seed": 54,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 750,
+   "tvar": 2.9816516550023398e-05,
+   "svar": 0.0007629552377992788,
+   "kur": 0.9452356530473225
+  },
+  {
+   "seed": 55,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 535,
+   "tvar": 2.8652381241338665e-05,
+   "svar": 0.0005030267313534475,
+   "kur": 0.9490251335162199
+  },
+  {
+   "seed": 56,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 546,
+   "tvar": 2.9447882491976906e-05,
+   "svar": 0.0005173477414647708,
+   "kur": 0.9518920920560738
+  },
+  {
+   "seed": 57,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 693,
+   "tvar": 2.541730305398673e-05,
+   "svar": 0.0006428427960400945,
+   "kur": 0.9530685612449988
+  },
+  {
+   "seed": 58,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 715,
+   "tvar": 2.8535853858171536e-05,
+   "svar": 0.0006640305533088127,
+   "kur": 0.9483303748932034
+  },
+  {
+   "seed": 59,
+   "collapsed": true,
+   "outcome": "LOCK",
+   "collapse_step": 693,
+   "tvar": 2.6694034615959708e-05,
+   "svar": 0.000654887932083595,
+   "kur": 0.9491441866687222
+  }
+ ],
+ "meta": {
+  "N": 60,
+  "T": 800,
+  "arm": "single",
+  "args": [
+   "0.006"
+  ],
+  "done": true
+ }
+}
