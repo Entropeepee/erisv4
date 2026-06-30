@@ -120,5 +120,13 @@ JSON for audit.
 
 ## Results & verdict
 
-See `VERDICT.md` (written from the full run's raw numbers) and
-`results/collapse_vs_mu_full.png`.
+**Decisive answer: YES** — partial coupling (μ ≈ 0.1) cuts collapse from **70% → 30%**
+(n=60, p≈1.2×10⁻⁵), while μ=0 is inert and μ≥0.3 is *worse* than a single field.
+See **`VERDICT.md`** for the full raw table and interpretation.
+
+Figures: `results/collapse_vs_mu_cool.png` (the metastable, fair-fight regime —
+**the headline**) and `results/collapse_vs_mu_full.png` (the maximally-hot σ=0.004
+regime, single=100%, where the lock is too deterministic for the membrane to help).
+
+Raw data: `results/sweep_cool.json`, `results/sweep_full.json`,
+`results/scan_cool.log` (the σ-criticality scan).
