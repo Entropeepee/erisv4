@@ -130,3 +130,25 @@ regime, single=100%, where the lock is too deterministic for the membrane to hel
 
 Raw data: `results/sweep_cool.json`, `results/sweep_full.json`,
 `results/scan_cool.log` (the σ-criticality scan).
+
+### Adversarial controls (T1–T4) — **`CONTROLS_VERDICT.md`**
+
+The 70%→30% result was then put through an adversarial control battery
+(`controls.py` + `analyze.py` + `verify_extra.py`, reusing the same dynamics). Two
+conclusions:
+
+1. **Real and mirror-specific.** Matched noise of the membrane's measured power
+   (white 65% / colored 68%) can't reproduce it; *only* mirror coupling helps —
+   mutual-non-mirror coupling does nothing (82% ≈ single 70%, p=0.136) and
+   one-way/frozen partners *hurt* (98–100%). All shams are significantly worse than
+   mirror (p<1e-7). A threshold-free Mann-Whitney rank test confirms mirror is the
+   most temporally-active arm (p≤1e-5 vs single, ≤2e-7 vs shams).
+2. **Delay, not prevention.** The absolute effect size is threshold-inflated (collapse
+   is a hard cut through a **unimodal** cluster — Hartigan dip p=0.70, GMM BIC favors
+   1 component), and a long-T check shows the σ=0.007 regime is **monostable**: mirror
+   coupling only *postpones* lock, and by T≈1200 **every** architecture is 100% locked.
+   The "30%" is a T=800 snapshot of a slow relaxation, not a stable alive state.
+
+Figures: `results/verify_delay_curve.png` (the decisive delay-not-prevention curve),
+`results/controls_bars.png`, `results/controls_unimodality.png`. Raw data:
+`results/controls/`, `results/verify_extra.json`. Full write-up: **`CONTROLS_VERDICT.md`**.

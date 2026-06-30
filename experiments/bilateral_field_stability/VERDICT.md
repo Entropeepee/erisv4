@@ -1,5 +1,16 @@
 # VERDICT — Does bifurcation reduce collapse?
 
+> **⚠️ READ `CONTROLS_VERDICT.md` ALONGSIDE THIS — it materially qualifies the claim
+> below.** An adversarial control battery (T1–T4 + long-T) established two things:
+> (1) the membrane effect is **real and specifically mirror-structured** (matched noise
+> can't reproduce it; only mirror coupling, not any co-evolving partner, helps); but
+> (2) what it does is **DELAY collapse, not prevent it** — at σ=0.007 the regime is
+> monostable and by T≈1200 *every* architecture (single and bilateral) is 100% locked.
+> The "70% → 30%" below is a **T=800 clock reading**, threshold-inflated and read from a
+> *unimodal* cluster. Honest statement: *mirror coupling specifically postpones lock*;
+> it does **not** create a sustained alive state. Treat the numbers here as the
+> *discovery* pass and `CONTROLS_VERDICT.md` as the *audited* conclusion.
+
 **YES.** A bilateral (two-lobe) coherence field with **partial** corpus-callosum
 coupling resists standing-wave collapse far better than a single field — and the
 benefit has the exact band structure the bilateral hypothesis predicts. Too little
