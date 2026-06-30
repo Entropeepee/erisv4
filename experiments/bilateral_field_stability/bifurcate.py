@@ -189,11 +189,15 @@ def run_cell(kind, delta, mu, N, T, sigma, gate_phase=False):
           flush=True)
 
 
-def attractor_test(kind, delta, mu, sigma, seed, T_settle=1500, T_relax=1000, gate_phase=False):
-    """Settle, record theta*, then perturb theta_LR BOTH ways and watch for return."""
+def attractor_test(kind, delta, mu, sigma, seed, T_settle=1500, T_relax=1000, gate_phase=False,
+                   params=None, params_R=None):
+    """Settle, record theta*, then perturb theta_LR BOTH ways and watch for return.
+    params/params_R (optional) override the regime -- params_R != params gives the two
+    lobes DISTINCT LAWS (T-F kappa/lambda lateralization)."""
     run_cell_seed.sigma = sigma
-    p = regime(sigma)
-    ta = TwoAgents(64, p, mu=mu, kind=kind, delta=delta, seed=seed, gate_phase=gate_phase)
+    p = params if params is not None else regime(sigma)
+    ta = TwoAgents(64, p, mu=mu, kind=kind, delta=delta, seed=seed, gate_phase=gate_phase,
+                   params_R=params_R)
     for t in range(T_settle):
         ta.step()
     base = np.mean([ta.theta_LR() for _ in _peek(ta, 50)])
