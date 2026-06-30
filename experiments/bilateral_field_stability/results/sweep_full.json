@@ -1,0 +1,249 @@
+{
+  "config": {
+    "nseed": 60,
+    "T": 800,
+    "mu_sweep": [
+      0.0,
+      0.01,
+      0.05,
+      0.1,
+      0.3,
+      0.6
+    ],
+    "grid": 64,
+    "phi_init": 0.85,
+    "jitter": 0.04,
+    "thresholds": {
+      "window": 30,
+      "n_consec": 30,
+      "eps_lock": 3e-05,
+      "eps_flat": 0.0002,
+      "eps_noise": 0.15,
+      "diverge": 1000.0
+    },
+    "regime": {
+      "r_sat": 0.85,
+      "d_decay": 0.2,
+      "sigma_noise": 0.004,
+      "sigma_phase": 0.004,
+      "omega_spread": 0.25
+    }
+  },
+  "single": {
+    "collapse_fraction": 1.0,
+    "outcomes": {
+      "LOCK": 60
+    },
+    "median_collapse_step": 549.0,
+    "mean_temporal_var_final": 2.7572437683259993e-05,
+    "mean_kuramoto_final": 0.9438605388978193,
+    "mean_spatial_var_final": 0.0005500881578961238
+  },
+  "bilateral": {
+    "0.0": {
+      "lobe_L": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 549.0,
+        "mean_temporal_var_final": 2.7572437683259993e-05,
+        "mean_kuramoto_final": 0.9438605388978193,
+        "mean_spatial_var_final": 0.0005500881578961238
+      },
+      "lobe_R": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 562.0,
+        "mean_temporal_var_final": 2.718225786179588e-05,
+        "mean_kuramoto_final": 0.9439769025753402,
+        "mean_spatial_var_final": 0.000551899236631463
+      },
+      "combined": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 429.0,
+        "mean_temporal_var_final": 2.6071592365085862e-05,
+        "mean_kuramoto_final": 0.8485462079181469,
+        "mean_spatial_var_final": 0.0004416357630872912
+      }
+    },
+    "0.01": {
+      "lobe_L": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 557.0,
+        "mean_temporal_var_final": 2.7557939380826636e-05,
+        "mean_kuramoto_final": 0.9437100717318967,
+        "mean_spatial_var_final": 0.0005418459340187603
+      },
+      "lobe_R": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 544.0,
+        "mean_temporal_var_final": 2.686129107830704e-05,
+        "mean_kuramoto_final": 0.9435935217241593,
+        "mean_spatial_var_final": 0.0005449519457355498
+      },
+      "combined": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 431.5,
+        "mean_temporal_var_final": 2.624622657054298e-05,
+        "mean_kuramoto_final": 0.8517827417374153,
+        "mean_spatial_var_final": 0.0004401809218709
+      }
+    },
+    "0.05": {
+      "lobe_L": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 579.0,
+        "mean_temporal_var_final": 2.728912044042022e-05,
+        "mean_kuramoto_final": 0.9424894472581573,
+        "mean_spatial_var_final": 0.0005901961567703018
+      },
+      "lobe_R": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 573.0,
+        "mean_temporal_var_final": 2.7142617122126714e-05,
+        "mean_kuramoto_final": 0.9420231982359025,
+        "mean_spatial_var_final": 0.0005869217308377112
+      },
+      "combined": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 449.0,
+        "mean_temporal_var_final": 2.640278518084436e-05,
+        "mean_kuramoto_final": 0.8635285654101169,
+        "mean_spatial_var_final": 0.00047574186006667913
+      }
+    },
+    "0.1": {
+      "lobe_L": {
+        "collapse_fraction": 0.9666666666666667,
+        "outcomes": {
+          "LOCK": 58,
+          "ALIVE": 2
+        },
+        "median_collapse_step": 664.5,
+        "mean_temporal_var_final": 2.7798833256184467e-05,
+        "mean_kuramoto_final": 0.9412963267760499,
+        "mean_spatial_var_final": 0.0008066993122946594
+      },
+      "lobe_R": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 668.0,
+        "mean_temporal_var_final": 2.7440068918419692e-05,
+        "mean_kuramoto_final": 0.9413323987211804,
+        "mean_spatial_var_final": 0.0007993384245378905
+      },
+      "combined": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 475.5,
+        "mean_temporal_var_final": 2.6861176741703388e-05,
+        "mean_kuramoto_final": 0.873724466846398,
+        "mean_spatial_var_final": 0.0005857351413631755
+      }
+    },
+    "0.3": {
+      "lobe_L": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 592.0,
+        "mean_temporal_var_final": 2.709275340495262e-05,
+        "mean_kuramoto_final": 0.9471117919026849,
+        "mean_spatial_var_final": 0.0007654870092790664
+      },
+      "lobe_R": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 595.0,
+        "mean_temporal_var_final": 2.665112374576473e-05,
+        "mean_kuramoto_final": 0.9478012631554472,
+        "mean_spatial_var_final": 0.0007625146019667354
+      },
+      "combined": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 466.5,
+        "mean_temporal_var_final": 2.632656519293134e-05,
+        "mean_kuramoto_final": 0.8994558462740342,
+        "mean_spatial_var_final": 0.0008369525401116699
+      }
+    },
+    "0.6": {
+      "lobe_L": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 437.5,
+        "mean_temporal_var_final": 2.7098746876323727e-05,
+        "mean_kuramoto_final": 0.9496491430326494,
+        "mean_spatial_var_final": 0.0006055297632570291
+      },
+      "lobe_R": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 436.5,
+        "mean_temporal_var_final": 2.704425981142986e-05,
+        "mean_kuramoto_final": 0.9497400422662944,
+        "mean_spatial_var_final": 0.0006068458606696721
+      },
+      "combined": {
+        "collapse_fraction": 1.0,
+        "outcomes": {
+          "LOCK": 60
+        },
+        "median_collapse_step": 401.0,
+        "mean_temporal_var_final": 2.675548647629328e-05,
+        "mean_kuramoto_final": 0.9477760751122353,
+        "mean_spatial_var_final": 0.000630050082660934
+      }
+    }
+  },
+  "timing": {
+    "single_total_s": 153.36693477630615,
+    "single_per_run_s": 2.5561155796051027,
+    "bilateral_per_run_s": 5.937917046414482,
+    "wall_time_ratio_bil_over_single": 2.323023690240109
+  },
+  "controllability": {
+    "determinism_L2_same_seed": 0.0,
+    "seed_separation_L2_diff_seed": 0.13215391923117772,
+    "descriptor_finite": true,
+    "descriptor_max_abs": 0.9116083408601763
+  }
+}
