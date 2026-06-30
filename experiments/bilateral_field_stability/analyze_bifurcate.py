@@ -54,8 +54,9 @@ def main():
     summary = {"egate": {}, "cos": {}, "diff": {}, "iso": {}}
 
     for kind in ["egate", "cos"]:
-        print(f"\n### {kind.upper()}  (mean theta_LR deg | within-run drift std | both-alive | class)")
-        print(f"{'mu\\delta':>9} | " + " | ".join(f"d={d}" for d in DELTAS))
+        print(f"\n### {kind.upper()}  (mean theta_LR deg / within-run drift std / both-alive%)")
+        hdr = "mu\\delta"
+        print(f"{hdr:>9} | " + " | ".join(f"d={d}" for d in DELTAS))
         for m in MUS:
             cells = [cell_stats(kind, d, m) for d in DELTAS]
             row = f"{m:>9} | "
@@ -113,7 +114,7 @@ def make_plots():
                 c = cell_stats(kind, d, m)
                 if c:
                     mark = {"sustained": "S", "fusion": "F", "segregation": "X"}[c["class"]]
-                    ax.text(j, i, f"{grid[i,i if False else j]:.0f}\n{mark}", ha="center", va="center",
+                    ax.text(j, i, f"{grid[i, j]:.0f}\n{mark}", ha="center", va="center",
                             color="w" if grid[i, j] < 60 else "k", fontsize=8)
     axes[0].set_ylabel("coupling mu")
     fig.colorbar(im, ax=axes, label="theta_LR (deg): 0=fusion, 90=orthogonal")
