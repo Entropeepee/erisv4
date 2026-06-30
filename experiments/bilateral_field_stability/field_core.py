@@ -76,6 +76,24 @@ def local_coherence(theta):
     return np.abs(z)
 
 
+def coupling_gate(delta, kind):
+    """Per-cell membrane-transport gate as a function of the phase-relatedness
+    angle delta = wrap(theta_other - theta_self).
+      diff  -> 1                         (plain diffusive; one attractor = sameness)
+      cos   -> cos^2(delta)              (maximal at alignment; fuses -- neg. control)
+      egate -> cos^2(delta)*sin^2(delta) (= 1/4 sin^2(2 delta); the established
+               coupling law E(theta): peaks at 45 deg, ZERO at 0 and 90 deg, so the
+               membrane never rewards collapsing distinctions -- the 'keep sin' rule).
+    """
+    if kind == "diff":
+        return 1.0
+    if kind == "cos":
+        return np.cos(delta) ** 2
+    if kind == "egate":
+        return (np.cos(delta) ** 2) * (np.sin(delta) ** 2)
+    raise ValueError(f"unknown coupling kind {kind!r}")
+
+
 # --------------------------------------------------------------------------- #
 #  Parameters -- mirrors pde.py:PDEParams (defaults identical)
 # --------------------------------------------------------------------------- #
@@ -194,7 +212,7 @@ class SingleField:
         memory_bias = self.p.memory_coupling * (self.memory - self.phi)
         return dphi, memory_bias
 
-    def _phase_step(self, theta_other=None, mu=0.0):
+    def _phase_step(self, theta_other=None, mu=0.0, coupling_kind="diff", gate_phase=False):
         p = self.p
         ph = np.exp(1j * self.theta)
         nbr = (np.roll(ph, 1, 0) + np.roll(ph, -1, 0)
@@ -202,9 +220,13 @@ class SingleField:
         coupling = np.imag(np.conj(ph) * nbr)
         g = hill_power(self.phi, p.hp_alpha, self._hp_beta, 1.0, 0.0)
         dtheta = self.omega0 + p.K_phase * g * coupling
-        # membrane phase exchange (wrap-safe), Robin/Newton-cooling
+        # membrane phase exchange (wrap-safe), Robin/Newton-cooling.
+        # Plain diffusive by default; gate_phase=True applies the same E-gate as the
+        # amplitude transport (the optional `egate_phase` variant).
         if theta_other is not None and mu != 0.0:
-            dtheta = dtheta + mu * wrap_diff(theta_other, self.theta)
+            d = wrap_diff(theta_other, self.theta)
+            cg = coupling_gate(d, coupling_kind) if gate_phase else 1.0
+            dtheta = dtheta + mu * cg * d
         noise = self.rng.standard_normal(self.phi.shape)
         self.theta = (self.theta + p.dt * dtheta
                       + p.sigma_phase * np.sqrt(p.dt) * noise) % (2 * np.pi)
@@ -214,10 +236,16 @@ class SingleField:
         """Standalone single-lobe step (no coupling)."""
         self.step_with_coupling(None, None, 0.0)
 
-    def step_with_coupling(self, phi_other, theta_other, mu):
-        """One integration step. If phi_other/theta_other given and mu!=0, a
-        Robin membrane term mu*(other - self) is added to BOTH the amplitude and
-        (wrap-safe) the phase update -- the permeable-callosum coupling."""
+    def step_with_coupling(self, phi_other, theta_other, mu,
+                           coupling_kind="diff", gate_phase=False):
+        """One integration step. If phi_other/theta_other given and mu!=0, a membrane
+        term mu*g(delta)*(other - self) is added to the amplitude update (and, with
+        gate_phase, to the phase update). g is the per-cell coupling_gate of the
+        phase-relatedness angle delta=wrap(theta_other-theta_self):
+          coupling_kind='diff'  -> g=1               (plain diffusive; the mirror class)
+          coupling_kind='cos'   -> g=cos^2(delta)    (fuses; negative control)
+          coupling_kind='egate' -> g=cos^2 sin^2     (E-gated; vanishes at sameness)
+        Defaults reproduce the original plain-diffusive coupling exactly."""
         p = self.p
         self.phi_prev = self.phi.copy()
         self.tau = vorticity(self.phi, self.theta)
@@ -238,15 +266,21 @@ class SingleField:
 
         phi_new = (self.phi + p.dt * self.attention * (dphi + memory_bias)
                    + p.sigma_noise * np.sqrt(p.dt) * eta)
-        # --- membrane amplitude exchange (Robin / Newton-cooling) ---
+        # --- membrane amplitude exchange, E-gated by phase relatedness ---
+        self._last_transport = 0.0
         if phi_other is not None and mu != 0.0:
-            phi_new = phi_new + p.dt * mu * (phi_other - self.phi)
+            d = wrap_diff(theta_other, self.theta)
+            cg = coupling_gate(d, coupling_kind)
+            transport = mu * cg * (phi_other - self.phi)
+            phi_new = phi_new + p.dt * transport
+            self._last_transport = float(np.mean(np.abs(transport)))  # ⟨mu·g·|Δφ|⟩
 
         # soft ceiling is the 'B' op above; here the hard clip (non-negativity
         # floor + amplitude ceiling) -- pde.py:step's xp.clip(.,0,B_max-1e-4)
         self.phi = np.clip(phi_new, 0.0, p.B_max - 1e-4)
 
-        self._phase_step(theta_other=theta_other, mu=mu)
+        self._phase_step(theta_other=theta_other, mu=mu,
+                         coupling_kind=coupling_kind, gate_phase=gate_phase)
         self.theta_prev = self.theta.copy()
         self.tau = vorticity(self.phi, self.theta)
         self.step_count += 1

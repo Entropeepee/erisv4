@@ -2,3 +2,9 @@ __pycache__/
 *.pyc
 results/*_run.log
 results/scan_cool.log
+results/stage_a.log
+results/stage_a2.log
+results/diag_*.log
+results/diag_gp_*.log
+results/muscan.log
+results/bifurcate_sweep.log
