@@ -10,6 +10,15 @@
 > is a property of *gated* coupling generally (cos rescues too); the *stable interior
 > attractor* is uniquely egate; exchange is a *trickle* (T-E). See **"Finish-proving"**
 > section below. The original one-operating-point result is retained beneath it.
+>
+> **R-series (post-clarification):** the E-gated membrane **earns a conservation reading**
+> (R1: it re-splits an exactly-conserved amplitude budget Q at rate `E(θ)=¼sin²2θ`, peaking
+> at equal-partition, vanishing at sameness *and* orthogonality — with the honest bound that
+> sum-conservation is generic and only the *rate shape* is egate-specific); **two-ness
+> generalises to N-ness** (R2: interior attractors + a conserved N-channel budget for N=3,4,6,
+> harder with N); and the one scaling **overclaim is corrected** (R3: the floor is sub-linear
+> ≈ μ^−0.6 on the reduced variable Ψ, **not −⅓** in-band — that's only the μ→∞ asymptote).
+> Next layer (κ-wiring/P300) deliberately **not started**. **Not merged; not wired into Eris.**
 
 **Hypothesis (handoff):** mirror/diffusive coupling has one attractor — *sameness* —
 so it can only fuse-then-lock. Replacing it with transport gated by the coupling law
@@ -195,9 +204,14 @@ The crux is the small-Ψ behaviour:
 
 The `sin²Ψ` factor (≈Ψ² at 0) makes egate's restoring pull **vanish quadratically at
 sameness**, so f is *cubic* not linear → a stable interior fixed point that **floors away
-from fusion** (cube root) and folds to segregation at large detuning. **Numerical
-confirmation:** log–log Ψ\*-vs-μ exponent = **diff −1.00, cos −1.01, egate −0.41 (≈ −1/3)**;
-analytic Ψ\* matches the numerical θ_LR at high μ (22/19° vs 20/18°). Honest break: the
+from fusion** (cube root *asymptotically*, μ→∞) and folds to segregation at large
+detuning. **Numerical confirmation (corrected — see R3 below):** the cube-root −1/3 is the
+*asymptotic* (Ψ→0) exponent; over the realistic μ band the measured floor is *sub-linear
+but not −1/3*. Fitting the **correct reduced variable Ψ** (mean relative phase, not θ_LR):
+**diff = μ^−1.00 exactly** (matches the analytic δ/2μ), **egate = μ^−0.5…−0.61** (sub-linear
+floor), **cos steeper** — egate is the unique sub-linear floor, but the precise exponent is
+~−0.6, not −1/3. (The earlier "−0.41 ≈ −1/3" was fit on θ_LR, which conflates coherence and
+phase — see R3.) Honest break: the
 uniform reduction over-predicts a cos interior at low μ (a spatial/amplitude effect it
 omits) — the *robust, scale-free* claim is egate's `f'(0)=0` cube-root floor, which cos and
 diff structurally lack. **Mechanism proven, not just observed.**
@@ -281,3 +295,92 @@ exchange is a trickle; the uniform analytic reduction over-predicts cos at low �
 (64²) and the σ-band tested. **Merge note:** per the handoff, T-B and T-G have landed, so
 the standalone probe is complete; still **not wired into Eris** — that remains a separate,
 deliberate step.
+
+---
+
+# R-series (R1 conservation · R2 N-ness · R3 exponent) — post-clarification
+
+The reframe: E is read not as a "meaning" law but as the **exchange rate of a conserved
+two-channel budget** (the conservation law Σcos²θ = 1, peaking at the 45° equal-partition).
+Two lobes = two channels; the hive = N channels.
+
+## R1 — conservation-budget test (decisive) — `r1_conservation.py`, `r1_analytic.py`, `r1_conservation.png`
+
+Two independent derivations (sympy) + an audit + numerics, all agreeing:
+
+* **A conserved budget exists.** `Q = Σ_cells(φ_L + φ_R)` (total amplitude) is conserved by
+  the membrane **exactly** — to machine precision (relative drift ~10⁻¹⁶ over thousands of
+  steps, all gates) — while the *split* is reallocated (with mirror-symmetry broken, the lobe
+  budgets swing 60–76 units, `dQ_L = −dQ_R` to ~10⁻¹⁴). The membrane only **moves** amplitude
+  between lobes, never creates/destroys it. (Phase channel: the **mean phase θ_L+θ_R is also
+  conserved**; the **relative phase Ψ is purely dissipative** — exact gradient flow. **Σ|φ|²
+  is *not* conserved** — a strictly-decreasing Lyapunov function; no hidden Hamiltonian.)
+* **The reallocation rate is E(θ).** The per-cell re-split rate is `μ·cg(Δ)·(φ_R−φ_L)`; the
+  gate `cg(Δ)` is the angular weight. For **egate** it is exactly `E(Δ)=¼sin²(2Δ)` — **0 at
+  sameness, peak ¼ at 45° (equal partition), 0 at orthogonality** (verified to all digits,
+  `r1_conservation.png` right panel). `diff` is flat (exchanges even at sameness); `cos` peaks
+  at sameness (pulls hardest toward fusion).
+* **Verdict (per the handoff rule): EARNED**, via the non-trivial route (a genuine dynamical
+  invariant, *not* the trivial cos²+sin²=1 identity). **Honest bounds:** sum-conservation is
+  *generic* to any symmetric pore (diff/cos conserve Q too); the **E-shaped rate** (vanishing
+  at sameness *and* orthogonality) is the **egate-specific** signature. The rate law is exact
+  on the *local per-cell* angle Δ (≈θ_LR when the field is roughly uniform). And **only the
+  membrane conserves Q** — under full dynamics (forcing/noise/decay on) Q drifts ~30%, so the
+  conservation is the membrane's structure overlaid on non-conservative reaction, not an
+  adiabatic invariant of the running model.
+
+So "the coupling law *is* the membrane" is earned in the conservation sense: the E-gated
+membrane is the **exchange operator of a conserved amplitude budget**, reallocating it at rate
+E(θ) that peaks at equal-partition and shuts off at both sameness and orthogonality.
+
+## R2 — N-lobe generalization (bifurcation n=2 ↔ hive n=N) — `n_agents.py`, `r2_r3.png`
+
+`NAgents`: N distinct, non-mirror lobes, every coupled pair E-gated (ring + all-to-all),
+reusing the multi-neighbour `others` path.
+
+* **Sustained N-ness is real (egate) and absent (cos).** egate has a genuine **interior
+  attractor** — pairwise angle returns from *both* a global-sameness kick and a decoherence
+  kick — at **N=3 (μ=0.6/0.9/1.3), N=4 (all-to-all + ring), and N=6 (low μ)**: interior-return
+  **100% (8/8)**. `cos` is **0%** for N=3 and N=6 (collapses to fusion from sameness, stays
+  segregated from decoherence). So the two-lobe result generalises: bifurcation and the hive
+  are the same E-gated law at different n.
+* **N-channel conserved budget:** the total amplitude `Σ_i Σ_cells φ_i` is conserved by the N
+  membranes to **~10⁻¹⁶** for N=3,4,6 (R1 extends to N channels).
+* **Scaling (honest).** All-to-all coupling sums N−1 neighbours, so the fusion pressure grows
+  ~ (N−1)·μ; the pairwise angle θ\* **shrinks with N** (≈22°/18°/15° at μ=0.9 for N=3/4/6) and
+  by **N=6 the all-to-all interior collapses toward fusion at μ≥0.9** (sustained only at lower
+  μ≈0.6). So **sustained N-ness persists but gets harder with N** — the band shifts to lower μ
+  (μ ~ 1/(N−1)); ring topology (fixed degree 2) holds the angle better but its
+  decoherence-return on large rings (N=6) is messy. No clean critical-N collapse was reached
+  through N=6 when μ is matched, but the trend predicts one for all-to-all at fixed μ.
+
+## R3 — exponent cleanup (overclaim corrected) — `r3_exponent.py`, `r2_r3.png`
+
+The verdict's "Ψ\*~(δ/2μ)^(1/3), slope −0.41≈−1/3" was wrong on two counts: it was fit on
+**θ_LR** (the overlap angle, which conflates the coherence magnitude r≈0.89–0.98 with the
+phase), and (δ/2μ)^(1/3) is only the **asymptotic** small-Ψ law. Measuring the **actual
+reduced variable Ψ** (amplitude-weighted mean relative phase) and fitting log Ψ vs log μ
+(δ=0.1, N=20):
+
+| arm | slope on Ψ (all μ) | slope on Ψ (μ≥1.3) | reading |
+|---|---|---|---|
+| diff | **−1.00** | −1.00 | exactly linear (matches analytic δ/2μ → fusion) |
+| **egate** | **−0.61** | **−0.50** | **sub-linear floor** (→ cube-root −⅓ only as μ→∞) |
+| cos | −2.11 | −1.08 | steeper-than-linear collapse |
+
+**Corrected claim:** egate is the **unique sub-linear floor** (measured exponent ≈ −0.5…−0.6
+on Ψ over the band; the analytic cube-root −⅓ is the μ→∞ asymptote, not the in-band value),
+while diff falls **exactly linearly** (μ^−1.00) toward fusion. The *mechanism* (sin² → f∼Ψ³ →
+f′(0)=0 → a sub-linear interior floor that diff/cos lack) **stands**; only the precise
+scaling exponent is downgraded from −⅓ to the measured ≈ −0.6. (The verdict's T-A section
+above is corrected accordingly.)
+
+## R-series net
+
+The mechanism now has a **conservation-law reading that is earned** (R1: a conserved budget
+the E-gated membrane re-splits at rate E(θ), with honest "generic conservation vs egate-
+specific rate" bounds), **generalises from two-ness to N-ness** (R2: interior attractors and
+a conserved N-channel budget for N=3,4,6, harder with N), and the **one scaling overclaim is
+fixed** (R3: sub-linear ≈−0.6 floor, not −⅓ in-band). Next layer (κ-wiring / P300) is
+deliberately **not started** — it waits on the P300 pre-registration. **Still not merged to
+main; not wired into Eris** — the branch decision remains pending.
