@@ -119,10 +119,14 @@ def coupling_angles(emb, n_channels=12):
     theta = np.arccos(np.sqrt(np.clip(cos2, 0.0, 1.0)))
     return theta, cos2
 
-def encode_text(text, size=64, n_channels=12, amp=0.6, B_max=1.0):
+def encode_text(text, size=64, n_channels=12, amp=0.6, B_max=1.0, embedding=None):
+    """Plane-wave seed from a text embedding. `embedding` is the seam (Phase-2 Step 4): pass a real
+    semantic vector (e.g. eris.knowledge.embeddings.get_embedding(text), bge-m3) to seed on MEANING;
+    when None it falls back to the in-module hashed bag-of-words stopgap (get_bge_m3_embedding)."""
     if not text or not text.strip():
         return (np.full((size, size), 0.25), np.zeros((size, size)))
-    th_v, c2_v = coupling_angles(get_bge_m3_embedding(text), n_channels)
+    emb = get_bge_m3_embedding(text) if embedding is None else np.asarray(embedding, dtype=np.float64).ravel()
+    th_v, c2_v = coupling_angles(emb, n_channels)
     y, x = np.mgrid[0:size, 0:size].astype(np.float64)
     Psi = np.zeros((size, size), dtype=complex)
     for i, (a, c2) in enumerate(zip(th_v, c2_v)):
@@ -214,8 +218,15 @@ class FractalField:
         
 
     def seed_from_text(self, text: str, use_frt: bool = False, amp: float = 0.6) -> None:
-        # Unify seed_from_text directly to encode_text.
-        phi_seed, theta_seed = encode_text(text, self.size, amp=amp, B_max=self.p.B_max)
+        # `use_frt` is now honored (it was previously ignored): True → the fast FRT hash path
+        # (text_to_field_arrays); False → the plane-wave encode_text path. Default False keeps the
+        # current behavior for every caller.
+        if use_frt:
+            from eris.field.frt import text_to_field_arrays
+            _p, _t = text_to_field_arrays(text, self.size)
+            phi_seed, theta_seed = to_gpu(_p.astype(np.float32)), to_gpu(_t.astype(np.float32))
+        else:
+            phi_seed, theta_seed = encode_text(text, self.size, amp=amp, B_max=self.p.B_max)
         self.phi = phi_seed
         self.theta = theta_seed
         self.regime = xp.zeros((self.size, self.size), dtype=xp.float32)
