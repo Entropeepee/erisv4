@@ -116,13 +116,28 @@ class TestSGT:
 class TestActivations:
 
     def test_uniform_high_phi(self):
+        # Boundary is now the MEMBRANE/SPREAD measure (φ − mean φ), not "fraction near the ceiling".
+        # A UNIFORM field has zero spread → B ≈ 0; saturation is captured by S (which stays high).
         from eris.computation.activations import compute_bvec_from_field
         size = 32
         phi = np.ones((size, size), dtype=np.float32) * 0.99
         theta = np.zeros((size, size), dtype=np.float32)
         tau = np.zeros((size, size), dtype=np.float32)
         bvec = compute_bvec_from_field(phi, theta, tau, phi.copy())
-        assert bvec.B > 0.5 and bvec.S > 0.5 and bvec.E < 0.1
+        assert bvec.S > 0.5, "uniform-high is saturated → S high"
+        assert bvec.B < 0.2, "uniform field has no membrane spread → Boundary low (new semantics)"
+        assert bvec.E < 0.1
+
+    def test_boundary_measures_spread_not_saturation(self):
+        # A high-CONTRAST field (half near 0, half near ceiling) has large |φ − mean| → high Boundary,
+        # even though its mean is mid-range. This is the I/O-membrane / amplitude-ceiling reading.
+        from eris.computation.activations import compute_bvec_from_field
+        size = 32
+        phi = np.full((size, size), 0.05, dtype=np.float32)
+        phi[:, size // 2:] = 0.95                      # half low, half high → strong spread
+        z = np.zeros((size, size), dtype=np.float32)
+        bvec = compute_bvec_from_field(phi, z, z, phi.copy())
+        assert bvec.B > 0.5, f"a high-spread field should read high Boundary, got {bvec.B}"
 
     def test_growing_field_emergence(self):
         from eris.computation.activations import compute_bvec_from_field

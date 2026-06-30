@@ -411,13 +411,18 @@ def inject_seeds(field, compilation: CompiledContradiction) -> None:
         Output of compile_contradiction().
     """
     from eris.config import xp, to_gpu
+    from eris.field.pde import _soft_clamp
 
+    hi = float(getattr(field.p, "B_max", 1.0)) - 1e-4
     for seed in compilation.seeds:
         phi_add = to_gpu(seed.phi_patch)
         theta_add = to_gpu(seed.theta_patch)
 
-        # Add φ perturbation (clamped to [0, 1])
-        field.phi = xp.clip(field.phi + phi_add, 0.0, 1.0)
+        # Add φ perturbation. Mid-run injection uses the SAME soft ceiling as step() (Codex #2): a
+        # hard clip flattens φ to a plateau at the ceiling (0.8 + 0.5 → exactly 1.0), kinking the
+        # gradient and dirtying τ. _soft_clamp gives a differentiable restoring response and keeps φ
+        # below B_max (no IBT pole).
+        field.phi = _soft_clamp(field.phi + phi_add, 0.0, hi)
 
         # Add θ perturbation (wrapped to [0, 2π])
         field.theta = (field.theta + theta_add) % (2.0 * float(np.pi))
