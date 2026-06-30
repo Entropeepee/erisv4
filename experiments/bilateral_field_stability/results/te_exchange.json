@@ -1,0 +1,28 @@
+{
+ "egate_gp_d0.1_m0.6_s0.016": {
+  "transport": 0.00183951653066992,
+  "dt_transport": 9.1975826533496e-05,
+  "frac_of_intrinsic": 0.03374290068698499
+ },
+ "egate_gp_d0.1_m0.9_s0.016": {
+  "transport": 0.0021199787562267026,
+  "dt_transport": 0.00010599893781133514,
+  "frac_of_intrinsic": 0.038887518234926685
+ },
+ "egate_gp_d0.1_m1.3_s0.016": {
+  "transport": 0.0023080279051131544,
+  "dt_transport": 0.00011540139525565773,
+  "frac_of_intrinsic": 0.04233697011500125
+ },
+ "egate_gp_d0.05_m0.9_s0.016": {
+  "transport": 0.0016512314905676733,
+  "dt_transport": 8.256157452838367e-05,
+  "frac_of_intrinsic": 0.0302891217711188
+ },
+ "cos_gp_d0.1_m0.9_s0.016": {
+  "transport": 0.007686101115279591,
+  "dt_transport": 0.0003843050557639796,
+  "frac_of_intrinsic": 0.1409888643449986
+ },
+ "intrinsic_dphi": 0.0027257830435713577
+}
