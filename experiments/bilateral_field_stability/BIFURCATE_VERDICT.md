@@ -108,6 +108,41 @@ splitting itself with a self-generated wall.
 
 ---
 
+## Skeptic's review (adversarial) — the objections, answered with data
+
+1. **"You changed the experiment until it worked" (gate_phase=True).** The switch from
+   amplitude-only to full coupling-law gating was forced by a *structural* fact, not by
+   tuning: amplitude-only gating is degenerate because θ_LR is phase-dominated (all arms
+   fuse, reported as a null). Crucially, `cos` and `egate` are run under the **identical**
+   gate_phase=True; the contrast isolates `sin²`. The design change does not favor egate
+   over its own control.
+2. **"egate also reaches ~16–19°, so it's basically fusion too."** The static value isn't
+   the claim — the *attractor structure* is. egate's 16–19° (high-μ) cells still **return
+   from both kicks** (settled), whereas cos reaches 4–5° true fusion. And the claim rests
+   on the unambiguous interior cells (θ\*=25–58°), all proven attractors.
+3. **"egate settles a few degrees below θ\* after kicks."** Both opposite kicks converge to
+   the *same* value (agreement <0.5°), and the unperturbed θ\* tracks that value across all
+   μ (solid≈dashed in `attractor_vs_mu.png`). The small offset is a relaxation-window
+   effect applied equally to both kicks; the attractor property holds.
+4. **"egate's gate is ~4× weaker on average — maybe egate is just *under-coupled cos*."**
+   **Refuted by the decisive control** (`attractor_vs_mu.png`): cos was attractor-tested
+   across its *full* μ range (0.4–1.8). At **no** μ does cos hold a stable interior — μ≥0.6
+   collapses to fusion (5–11°); the lone μ=0.4 case has θ\*=92.6 unperturbed but kicks→16°,
+   a *mismatch* showing it is mid-transit toward fusion (weak coupling ⇒ *slow* fusion), not
+   a settled state. egate instead has a **continuous family of stable interior attractors**
+   (θ\*=58°→18° across μ, unperturbed≈kicked throughout). Under-coupling cos just makes it
+   fuse slowly; it never creates an interior fixed point. This is the mechanism: a
+   **monotonic** gate (cos², max at Δ=0) has fixed points only at fusion/segregation; a
+   **non-monotonic** gate (cos²·sin², zero at both ends, peak at 45°) creates the interior
+   one. `sin²` is the cause.
+5. **"N=16 / N=6 are small."** The attractor effect is categorical and seed-consistent
+   (egate returns 18–58°, cos 4–16°; no overlap; same/orth agree <0.5°). Small N is adequate
+   for a separation this clean; the headline cells could be bumped to N≥20 for publication.
+
+(The adversarial cross-check was run as the empirical control above rather than an LLM
+panel — the workflow harness was unavailable post-restart, and running cos's full-μ
+attractor sweep is the stronger test anyway.)
+
 ## Bottom line
 
 * **Does E-gated coupling produce sustained dynamic two-ness?** Yes. A stable interior

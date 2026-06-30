@@ -152,3 +152,30 @@ conclusions:
 Figures: `results/verify_delay_curve.png` (the decisive delay-not-prevention curve),
 `results/controls_bars.png`, `results/controls_unimodality.png`. Raw data:
 `results/controls/`, `results/verify_extra.json`. Full write-up: **`CONTROLS_VERDICT.md`**.
+
+---
+
+## Experiment 3 — Sustained two-ness via E-gated coupling — **`BIFURCATE_VERDICT.md`**
+
+The mirror work showed diffusive coupling only *fuses-then-locks* (one attractor =
+sameness). This experiment asks whether **E-gated** coupling (the coupling law
+`E(Δ)=cos²Δ·sin²Δ`, with `sin²` zero at sameness) between two *distinct, detuned*
+agents can sustain a **stable related-but-distinct** coupling angle θ\* — genuine
+two-ness — that cosine-only coupling cannot.
+
+**Verdict: CONFIRMED — `sin²` is the cause.** In a sustained-alive regime (σ≥0.013,
+T=2500), egate holds a continuous **family of stable interior attractors** (θ\*≈18–58°
+across μ): perturbing θ_LR toward sameness *or* orthogonality, it returns to the same
+interior value from both sides, with both domains alive and exchange live. The
+cosine-only control (`cos`) has **no** interior attractor at *any* μ — it collapses to
+fusion; plain `diff` fuses; `iso` segregates. Faithful caveat: this requires the
+coupling law to gate the **phase** membrane (θ_LR is phase-dominated; the amplitude-only
+contrast is a null) — the handoff's sanctioned `egate_phase`. The §7 dispersion probe
+finds **no** Turing band, so spontaneous *spatial* division is not native to this PDE;
+the relational route is the route.
+
+Engine: `bifurcate.py` (+ `field_core.py` gated coupling, backward-compatible).
+Regime: `stage_a_regime.py`. Map: `run_bifurcate_sweep.sh` → `analyze_bifurcate.py`.
+Attractor test: `run_attractor.sh`. Dispersion: `dispersion.py`. Figures:
+`results/bifurcate_map.png`, `bifurcate_curves.png`, `attractor_test.png`,
+`attractor_vs_mu.png` (decisive control), `dispersion.png`.
