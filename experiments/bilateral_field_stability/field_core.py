@@ -212,7 +212,8 @@ class SingleField:
         memory_bias = self.p.memory_coupling * (self.memory - self.phi)
         return dphi, memory_bias
 
-    def _phase_step(self, theta_other=None, mu=0.0, coupling_kind="diff", gate_phase=False):
+    def _phase_step(self, theta_other=None, mu=0.0, coupling_kind="diff", gate_phase=False,
+                    others=None):
         p = self.p
         ph = np.exp(1j * self.theta)
         nbr = (np.roll(ph, 1, 0) + np.roll(ph, -1, 0)
@@ -222,11 +223,14 @@ class SingleField:
         dtheta = self.omega0 + p.K_phase * g * coupling
         # membrane phase exchange (wrap-safe), Robin/Newton-cooling.
         # Plain diffusive by default; gate_phase=True applies the same E-gate as the
-        # amplitude transport (the optional `egate_phase` variant).
-        if theta_other is not None and mu != 0.0:
-            d = wrap_diff(theta_other, self.theta)
-            cg = coupling_gate(d, coupling_kind) if gate_phase else 1.0
-            dtheta = dtheta + mu * cg * d
+        # amplitude transport. `others` (list of theta_j) sums the gated exchange over
+        # multiple neighbours (the N-lobe generalisation); default keeps the 2-lobe path.
+        if mu != 0.0 and (others is not None or theta_other is not None):
+            th_list = others if others is not None else [theta_other]
+            for to in th_list:
+                d = wrap_diff(to, self.theta)
+                cg = coupling_gate(d, coupling_kind) if gate_phase else 1.0
+                dtheta = dtheta + mu * cg * d
         noise = self.rng.standard_normal(self.phi.shape)
         self.theta = (self.theta + p.dt * dtheta
                       + p.sigma_phase * np.sqrt(p.dt) * noise) % (2 * np.pi)
@@ -237,7 +241,7 @@ class SingleField:
         self.step_with_coupling(None, None, 0.0)
 
     def step_with_coupling(self, phi_other, theta_other, mu,
-                           coupling_kind="diff", gate_phase=False):
+                           coupling_kind="diff", gate_phase=False, others=None):
         """One integration step. If phi_other/theta_other given and mu!=0, a membrane
         term mu*g(delta)*(other - self) is added to the amplitude update (and, with
         gate_phase, to the phase update). g is the per-cell coupling_gate of the
@@ -245,7 +249,9 @@ class SingleField:
           coupling_kind='diff'  -> g=1               (plain diffusive; the mirror class)
           coupling_kind='cos'   -> g=cos^2(delta)    (fuses; negative control)
           coupling_kind='egate' -> g=cos^2 sin^2     (E-gated; vanishes at sameness)
-        Defaults reproduce the original plain-diffusive coupling exactly."""
+        `others` (list of (phi_j, theta_j)) sums the gated membrane over MULTIPLE
+        neighbours -- the N-lobe generalisation; default keeps the single-other 2-lobe
+        path. Defaults reproduce the original plain-diffusive coupling exactly."""
         p = self.p
         self.phi_prev = self.phi.copy()
         self.tau = vorticity(self.phi, self.theta)
@@ -266,12 +272,16 @@ class SingleField:
 
         phi_new = (self.phi + p.dt * self.attention * (dphi + memory_bias)
                    + p.sigma_noise * np.sqrt(p.dt) * eta)
-        # --- membrane amplitude exchange, E-gated by phase relatedness ---
+        # --- membrane amplitude exchange, E-gated by phase relatedness (summed over
+        #     all neighbours when `others` is given) ---
         self._last_transport = 0.0
-        if phi_other is not None and mu != 0.0:
-            d = wrap_diff(theta_other, self.theta)
-            cg = coupling_gate(d, coupling_kind)
-            transport = mu * cg * (phi_other - self.phi)
+        if mu != 0.0 and (others is not None or phi_other is not None):
+            pairs = others if others is not None else [(phi_other, theta_other)]
+            transport = np.zeros_like(self.phi)
+            for (po, to) in pairs:
+                d = wrap_diff(to, self.theta)
+                cg = coupling_gate(d, coupling_kind)
+                transport = transport + mu * cg * (po - self.phi)
             phi_new = phi_new + p.dt * transport
             self._last_transport = float(np.mean(np.abs(transport)))  # ⟨mu·g·|Δφ|⟩
 
@@ -279,8 +289,10 @@ class SingleField:
         # floor + amplitude ceiling) -- pde.py:step's xp.clip(.,0,B_max-1e-4)
         self.phi = np.clip(phi_new, 0.0, p.B_max - 1e-4)
 
+        theta_others = ([to for (_, to) in others] if others is not None else None)
         self._phase_step(theta_other=theta_other, mu=mu,
-                         coupling_kind=coupling_kind, gate_phase=gate_phase)
+                         coupling_kind=coupling_kind, gate_phase=gate_phase,
+                         others=theta_others)
         self.theta_prev = self.theta.copy()
         self.tau = vorticity(self.phi, self.theta)
         self.step_count += 1

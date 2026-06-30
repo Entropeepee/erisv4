@@ -1,0 +1,8 @@
+{
+ "note": "conservative-limit N-channel total amplitude drift",
+ "results": {
+  "N3": 1.740330439735761e-16,
+  "N4": 1.3056837401115659e-16,
+  "N6": 3.483782143457192e-16
+ }
+}
