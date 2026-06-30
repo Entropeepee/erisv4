@@ -1,0 +1,489 @@
+{
+  "scale_factor_s": 1.7091620337103504,
+  "delta_eff_def": "delta_eff = s * delta",
+  "reduced_ode": "dPsi/dt = delta_eff - 2*mu*cg(Psi)*Psi",
+  "fixed_point": "cg(Psi*)*Psi* = delta_eff/(2*mu)",
+  "stability": "stable iff d/dPsi[cg(Psi)*Psi] > 0",
+  "cells": {
+    "diff|delta=0.05|mu=0.4": {
+      "kind": "diff",
+      "delta": 0.05,
+      "mu": 0.4,
+      "delta_eff": 0.08545810168551753,
+      "class": "fusion",
+      "Psi_star_deg": 6.12
+    },
+    "diff|delta=0.05|mu=0.6": {
+      "kind": "diff",
+      "delta": 0.05,
+      "mu": 0.6,
+      "delta_eff": 0.08545810168551753,
+      "class": "fusion",
+      "Psi_star_deg": 4.08
+    },
+    "diff|delta=0.05|mu=0.9": {
+      "kind": "diff",
+      "delta": 0.05,
+      "mu": 0.9,
+      "delta_eff": 0.08545810168551753,
+      "class": "fusion",
+      "Psi_star_deg": 2.72
+    },
+    "diff|delta=0.05|mu=1.3": {
+      "kind": "diff",
+      "delta": 0.05,
+      "mu": 1.3,
+      "delta_eff": 0.08545810168551753,
+      "class": "fusion",
+      "Psi_star_deg": 1.88
+    },
+    "diff|delta=0.05|mu=1.8": {
+      "kind": "diff",
+      "delta": 0.05,
+      "mu": 1.8,
+      "delta_eff": 0.08545810168551753,
+      "class": "fusion",
+      "Psi_star_deg": 1.36
+    },
+    "diff|delta=0.1|mu=0.4": {
+      "kind": "diff",
+      "delta": 0.1,
+      "mu": 0.4,
+      "delta_eff": 0.17091620337103505,
+      "class": "fusion",
+      "Psi_star_deg": 12.24
+    },
+    "diff|delta=0.1|mu=0.6": {
+      "kind": "diff",
+      "delta": 0.1,
+      "mu": 0.6,
+      "delta_eff": 0.17091620337103505,
+      "class": "fusion",
+      "Psi_star_deg": 8.16
+    },
+    "diff|delta=0.1|mu=0.9": {
+      "kind": "diff",
+      "delta": 0.1,
+      "mu": 0.9,
+      "delta_eff": 0.17091620337103505,
+      "class": "fusion",
+      "Psi_star_deg": 5.44
+    },
+    "diff|delta=0.1|mu=1.3": {
+      "kind": "diff",
+      "delta": 0.1,
+      "mu": 1.3,
+      "delta_eff": 0.17091620337103505,
+      "class": "fusion",
+      "Psi_star_deg": 3.77
+    },
+    "diff|delta=0.1|mu=1.8": {
+      "kind": "diff",
+      "delta": 0.1,
+      "mu": 1.8,
+      "delta_eff": 0.17091620337103505,
+      "class": "fusion",
+      "Psi_star_deg": 2.72
+    },
+    "diff|delta=0.2|mu=0.4": {
+      "kind": "diff",
+      "delta": 0.2,
+      "mu": 0.4,
+      "delta_eff": 0.3418324067420701,
+      "class": "sustained",
+      "Psi_star_deg": 24.48
+    },
+    "diff|delta=0.2|mu=0.6": {
+      "kind": "diff",
+      "delta": 0.2,
+      "mu": 0.6,
+      "delta_eff": 0.3418324067420701,
+      "class": "fusion",
+      "Psi_star_deg": 16.32
+    },
+    "diff|delta=0.2|mu=0.9": {
+      "kind": "diff",
+      "delta": 0.2,
+      "mu": 0.9,
+      "delta_eff": 0.3418324067420701,
+      "class": "fusion",
+      "Psi_star_deg": 10.88
+    },
+    "diff|delta=0.2|mu=1.3": {
+      "kind": "diff",
+      "delta": 0.2,
+      "mu": 1.3,
+      "delta_eff": 0.3418324067420701,
+      "class": "fusion",
+      "Psi_star_deg": 7.53
+    },
+    "diff|delta=0.2|mu=1.8": {
+      "kind": "diff",
+      "delta": 0.2,
+      "mu": 1.8,
+      "delta_eff": 0.3418324067420701,
+      "class": "fusion",
+      "Psi_star_deg": 5.44
+    },
+    "diff|delta=0.4|mu=0.4": {
+      "kind": "diff",
+      "delta": 0.4,
+      "mu": 0.4,
+      "delta_eff": 0.6836648134841402,
+      "class": "sustained",
+      "Psi_star_deg": 48.96
+    },
+    "diff|delta=0.4|mu=0.6": {
+      "kind": "diff",
+      "delta": 0.4,
+      "mu": 0.6,
+      "delta_eff": 0.6836648134841402,
+      "class": "sustained",
+      "Psi_star_deg": 32.64
+    },
+    "diff|delta=0.4|mu=0.9": {
+      "kind": "diff",
+      "delta": 0.4,
+      "mu": 0.9,
+      "delta_eff": 0.6836648134841402,
+      "class": "sustained",
+      "Psi_star_deg": 21.76
+    },
+    "diff|delta=0.4|mu=1.3": {
+      "kind": "diff",
+      "delta": 0.4,
+      "mu": 1.3,
+      "delta_eff": 0.6836648134841402,
+      "class": "fusion",
+      "Psi_star_deg": 15.07
+    },
+    "diff|delta=0.4|mu=1.8": {
+      "kind": "diff",
+      "delta": 0.4,
+      "mu": 1.8,
+      "delta_eff": 0.6836648134841402,
+      "class": "fusion",
+      "Psi_star_deg": 10.88
+    },
+    "cos|delta=0.05|mu=0.4": {
+      "kind": "cos",
+      "delta": 0.05,
+      "mu": 0.4,
+      "delta_eff": 0.08545810168551753,
+      "class": "fusion",
+      "Psi_star_deg": 6.19
+    },
+    "cos|delta=0.05|mu=0.6": {
+      "kind": "cos",
+      "delta": 0.05,
+      "mu": 0.6,
+      "delta_eff": 0.08545810168551753,
+      "class": "fusion",
+      "Psi_star_deg": 4.1
+    },
+    "cos|delta=0.05|mu=0.9": {
+      "kind": "cos",
+      "delta": 0.05,
+      "mu": 0.9,
+      "delta_eff": 0.08545810168551753,
+      "class": "fusion",
+      "Psi_star_deg": 2.73
+    },
+    "cos|delta=0.05|mu=1.3": {
+      "kind": "cos",
+      "delta": 0.05,
+      "mu": 1.3,
+      "delta_eff": 0.08545810168551753,
+      "class": "fusion",
+      "Psi_star_deg": 1.89
+    },
+    "cos|delta=0.05|mu=1.8": {
+      "kind": "cos",
+      "delta": 0.05,
+      "mu": 1.8,
+      "delta_eff": 0.08545810168551753,
+      "class": "fusion",
+      "Psi_star_deg": 1.36
+    },
+    "cos|delta=0.1|mu=0.4": {
+      "kind": "cos",
+      "delta": 0.1,
+      "mu": 0.4,
+      "delta_eff": 0.17091620337103505,
+      "class": "fusion",
+      "Psi_star_deg": 12.88
+    },
+    "cos|delta=0.1|mu=0.6": {
+      "kind": "cos",
+      "delta": 0.1,
+      "mu": 0.6,
+      "delta_eff": 0.17091620337103505,
+      "class": "fusion",
+      "Psi_star_deg": 8.34
+    },
+    "cos|delta=0.1|mu=0.9": {
+      "kind": "cos",
+      "delta": 0.1,
+      "mu": 0.9,
+      "delta_eff": 0.17091620337103505,
+      "class": "fusion",
+      "Psi_star_deg": 5.49
+    },
+    "cos|delta=0.1|mu=1.3": {
+      "kind": "cos",
+      "delta": 0.1,
+      "mu": 1.3,
+      "delta_eff": 0.17091620337103505,
+      "class": "fusion",
+      "Psi_star_deg": 3.78
+    },
+    "cos|delta=0.1|mu=1.8": {
+      "kind": "cos",
+      "delta": 0.1,
+      "mu": 1.8,
+      "delta_eff": 0.17091620337103505,
+      "class": "fusion",
+      "Psi_star_deg": 2.73
+    },
+    "cos|delta=0.2|mu=0.4": {
+      "kind": "cos",
+      "delta": 0.2,
+      "mu": 0.4,
+      "delta_eff": 0.3418324067420701,
+      "class": "segregation",
+      "Psi_star_deg": 90.0
+    },
+    "cos|delta=0.2|mu=0.6": {
+      "kind": "cos",
+      "delta": 0.2,
+      "mu": 0.6,
+      "delta_eff": 0.3418324067420701,
+      "class": "fusion",
+      "Psi_star_deg": 18.06
+    },
+    "cos|delta=0.2|mu=0.9": {
+      "kind": "cos",
+      "delta": 0.2,
+      "mu": 0.9,
+      "delta_eff": 0.3418324067420701,
+      "class": "fusion",
+      "Psi_star_deg": 11.32
+    },
+    "cos|delta=0.2|mu=1.3": {
+      "kind": "cos",
+      "delta": 0.2,
+      "mu": 1.3,
+      "delta_eff": 0.3418324067420701,
+      "class": "fusion",
+      "Psi_star_deg": 7.67
+    },
+    "cos|delta=0.2|mu=1.8": {
+      "kind": "cos",
+      "delta": 0.2,
+      "mu": 1.8,
+      "delta_eff": 0.3418324067420701,
+      "class": "fusion",
+      "Psi_star_deg": 5.49
+    },
+    "cos|delta=0.4|mu=0.4": {
+      "kind": "cos",
+      "delta": 0.4,
+      "mu": 0.4,
+      "delta_eff": 0.6836648134841402,
+      "class": "segregation",
+      "Psi_star_deg": 90.0
+    },
+    "cos|delta=0.4|mu=0.6": {
+      "kind": "cos",
+      "delta": 0.4,
+      "mu": 0.6,
+      "delta_eff": 0.6836648134841402,
+      "class": "segregation",
+      "Psi_star_deg": 90.0
+    },
+    "cos|delta=0.4|mu=0.9": {
+      "kind": "cos",
+      "delta": 0.4,
+      "mu": 0.9,
+      "delta_eff": 0.6836648134841402,
+      "class": "sustained",
+      "Psi_star_deg": 27.82
+    },
+    "cos|delta=0.4|mu=1.3": {
+      "kind": "cos",
+      "delta": 0.4,
+      "mu": 1.3,
+      "delta_eff": 0.6836648134841402,
+      "class": "fusion",
+      "Psi_star_deg": 16.36
+    },
+    "cos|delta=0.4|mu=1.8": {
+      "kind": "cos",
+      "delta": 0.4,
+      "mu": 1.8,
+      "delta_eff": 0.6836648134841402,
+      "class": "fusion",
+      "Psi_star_deg": 11.32
+    },
+    "egate|delta=0.05|mu=0.4": {
+      "kind": "egate",
+      "delta": 0.05,
+      "mu": 0.4,
+      "delta_eff": 0.08545810168551753,
+      "class": "sustained",
+      "Psi_star_deg": 31.19
+    },
+    "egate|delta=0.05|mu=0.6": {
+      "kind": "egate",
+      "delta": 0.05,
+      "mu": 0.6,
+      "delta_eff": 0.08545810168551753,
+      "class": "sustained",
+      "Psi_star_deg": 26.12
+    },
+    "egate|delta=0.05|mu=0.9": {
+      "kind": "egate",
+      "delta": 0.05,
+      "mu": 0.9,
+      "delta_eff": 0.08545810168551753,
+      "class": "sustained",
+      "Psi_star_deg": 22.21
+    },
+    "egate|delta=0.05|mu=1.3": {
+      "kind": "egate",
+      "delta": 0.05,
+      "mu": 1.3,
+      "delta_eff": 0.08545810168551753,
+      "class": "fusion",
+      "Psi_star_deg": 19.32
+    },
+    "egate|delta=0.05|mu=1.8": {
+      "kind": "egate",
+      "delta": 0.05,
+      "mu": 1.8,
+      "delta_eff": 0.08545810168551753,
+      "class": "fusion",
+      "Psi_star_deg": 17.14
+    },
+    "egate|delta=0.1|mu=0.4": {
+      "kind": "egate",
+      "delta": 0.1,
+      "mu": 0.4,
+      "delta_eff": 0.17091620337103505,
+      "class": "sustained",
+      "Psi_star_deg": 52.09
+    },
+    "egate|delta=0.1|mu=0.6": {
+      "kind": "egate",
+      "delta": 0.1,
+      "mu": 0.6,
+      "delta_eff": 0.17091620337103505,
+      "class": "sustained",
+      "Psi_star_deg": 36.05
+    },
+    "egate|delta=0.1|mu=0.9": {
+      "kind": "egate",
+      "delta": 0.1,
+      "mu": 0.9,
+      "delta_eff": 0.17091620337103505,
+      "class": "sustained",
+      "Psi_star_deg": 29.55
+    },
+    "egate|delta=0.1|mu=1.3": {
+      "kind": "egate",
+      "delta": 0.1,
+      "mu": 1.3,
+      "delta_eff": 0.17091620337103505,
+      "class": "sustained",
+      "Psi_star_deg": 25.27
+    },
+    "egate|delta=0.1|mu=1.8": {
+      "kind": "egate",
+      "delta": 0.1,
+      "mu": 1.8,
+      "delta_eff": 0.17091620337103505,
+      "class": "sustained",
+      "Psi_star_deg": 22.21
+    },
+    "egate|delta=0.2|mu=0.4": {
+      "kind": "egate",
+      "delta": 0.2,
+      "mu": 0.4,
+      "delta_eff": 0.3418324067420701,
+      "class": "segregation",
+      "Psi_star_deg": 90.0
+    },
+    "egate|delta=0.2|mu=0.6": {
+      "kind": "egate",
+      "delta": 0.2,
+      "mu": 0.6,
+      "delta_eff": 0.3418324067420701,
+      "class": "segregation",
+      "Psi_star_deg": 90.0
+    },
+    "egate|delta=0.2|mu=0.9": {
+      "kind": "egate",
+      "delta": 0.2,
+      "mu": 0.9,
+      "delta_eff": 0.3418324067420701,
+      "class": "sustained",
+      "Psi_star_deg": 43.62
+    },
+    "egate|delta=0.2|mu=1.3": {
+      "kind": "egate",
+      "delta": 0.2,
+      "mu": 1.3,
+      "delta_eff": 0.3418324067420701,
+      "class": "sustained",
+      "Psi_star_deg": 34.54
+    },
+    "egate|delta=0.2|mu=1.8": {
+      "kind": "egate",
+      "delta": 0.2,
+      "mu": 1.8,
+      "delta_eff": 0.3418324067420701,
+      "class": "sustained",
+      "Psi_star_deg": 29.55
+    },
+    "egate|delta=0.4|mu=0.4": {
+      "kind": "egate",
+      "delta": 0.4,
+      "mu": 0.4,
+      "delta_eff": 0.6836648134841402,
+      "class": "segregation",
+      "Psi_star_deg": 90.0
+    },
+    "egate|delta=0.4|mu=0.6": {
+      "kind": "egate",
+      "delta": 0.4,
+      "mu": 0.6,
+      "delta_eff": 0.6836648134841402,
+      "class": "segregation",
+      "Psi_star_deg": 90.0
+    },
+    "egate|delta=0.4|mu=0.9": {
+      "kind": "egate",
+      "delta": 0.4,
+      "mu": 0.9,
+      "delta_eff": 0.6836648134841402,
+      "class": "segregation",
+      "Psi_star_deg": 90.0
+    },
+    "egate|delta=0.4|mu=1.3": {
+      "kind": "egate",
+      "delta": 0.4,
+      "mu": 1.3,
+      "delta_eff": 0.6836648134841402,
+      "class": "segregation",
+      "Psi_star_deg": 90.0
+    },
+    "egate|delta=0.4|mu=1.8": {
+      "kind": "egate",
+      "delta": 0.4,
+      "mu": 1.8,
+      "delta_eff": 0.6836648134841402,
+      "class": "sustained",
+      "Psi_star_deg": 43.62
+    }
+  }
+}

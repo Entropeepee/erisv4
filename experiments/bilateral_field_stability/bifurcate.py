@@ -48,9 +48,11 @@ def regime(sigma, omega_spread=0.25, **ov):
 
 
 class TwoAgents:
-    def __init__(self, size, params, mu, kind, delta, seed, gate_phase=False):
+    def __init__(self, size, params, mu, kind, delta, seed, gate_phase=False, params_R=None):
+        # params_R (optional) gives lobe R a DIFFERENT law (T-F distinct-laws / kappa-lambda
+        # lateralization). Default None => both lobes share `params` (the frequency-detuning case).
         self.L = cc.SingleField(size, params, seed=seed, phi_init=PHI_INIT, phi_jitter=JITTER)
-        self.R = cc.SingleField(size, params, seed=seed + SEED_OFFSET,
+        self.R = cc.SingleField(size, params_R or params, seed=seed + SEED_OFFSET,
                                 phi_init=PHI_INIT, phi_jitter=JITTER)
         # intrinsic-frequency detuning between two DISTINCT fields (not mirror sign-flip)
         self.L.omega0 = self.L.omega0 + delta / 2.0
@@ -78,11 +80,37 @@ class TwoAgents:
         denom = np.sqrt(np.sum(self.L.phi ** 2)) * np.sqrt(np.sum(self.R.phi ** 2)) + 1e-12
         return float(np.degrees(np.arccos(np.clip(np.real(ov) / denom, -1.0, 1.0))))
 
+    @staticmethod
+    def _snap_field(f):
+        # FULL mutable state of a lobe, incl. the RNG stream and the slow/hysteretic
+        # auxiliary fields (memory/regime/attention/_lc/phi_prev/theta_prev). Restoring
+        # only phi/theta leaks state (and a different noise draw) from one relax run into
+        # the next -- the bug the T-G audit caught. Capturing the rng state makes the two
+        # attractor-test relaxations leakage-free and reproducible.
+        return {
+            "phi": f.phi.copy(), "theta": f.theta.copy(),
+            "phi_prev": f.phi_prev.copy(), "theta_prev": f.theta_prev.copy(),
+            "tau": f.tau.copy(), "memory": f.memory.copy(), "_lc": f._lc.copy(),
+            "attention": f.attention.copy(), "regime": f.regime.copy(),
+            "step_count": f.step_count, "rng_state": f.rng.bit_generator.state,
+        }
+
+    @staticmethod
+    def _restore_field(f, s):
+        f.phi = s["phi"].copy(); f.theta = s["theta"].copy()
+        f.phi_prev = s["phi_prev"].copy(); f.theta_prev = s["theta_prev"].copy()
+        f.tau = s["tau"].copy(); f.memory = s["memory"].copy(); f._lc = s["_lc"].copy()
+        f.attention = s["attention"].copy(); f.regime = s["regime"].copy()
+        f.step_count = s["step_count"]
+        import copy as _copy
+        f.rng.bit_generator.state = _copy.deepcopy(s["rng_state"])
+
     def snapshot(self):
-        return (self.L.phi.copy(), self.L.theta.copy(), self.R.phi.copy(), self.R.theta.copy())
+        return (self._snap_field(self.L), self._snap_field(self.R))
 
     def restore(self, snap):
-        self.L.phi, self.L.theta, self.R.phi, self.R.theta = (s.copy() for s in snap)
+        self._restore_field(self.L, snap[0])
+        self._restore_field(self.R, snap[1])
 
 
 # classification thresholds (degrees)
