@@ -1,0 +1,35 @@
+{
+ "KAPPA": {
+  "r_sat": 0.95,
+  "d_decay": 0.15,
+  "K_phase": 2.0
+ },
+ "LAMBDA": {
+  "r_sat": 0.72,
+  "d_decay": 0.28,
+  "K_phase": 1.1
+ },
+ "mu": 0.9,
+ "delta": 0.0,
+ "N": 14,
+ "arms": {
+  "egate": {
+   "theta_star": 21.565263242720828,
+   "after_same": 19.992630387750573,
+   "after_orth": 20.35470367503973,
+   "verdict": "INTERIOR ATTRACTOR"
+  },
+  "cos": {
+   "theta_star": 18.340672991482325,
+   "after_same": 7.294010476284661,
+   "after_orth": 7.753694663649847,
+   "verdict": "fusion"
+  },
+  "diff": {
+   "theta_star": 7.050528236970543,
+   "after_same": 7.016182650127109,
+   "after_orth": 7.016182650127106,
+   "verdict": "fusion"
+  }
+ }
+}
