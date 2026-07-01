@@ -18,7 +18,15 @@
 > generalises to N-ness** (R2: interior attractors + a conserved N-channel budget for N=3,4,6,
 > harder with N); and the one scaling **overclaim is corrected** (R3: the floor is sub-linear
 > ≈ μ^−0.6 on the reduced variable Ψ, **not −⅓** in-band — that's only the μ→∞ asymptote).
-> Next layer (κ-wiring/P300) deliberately **not started**. **Not merged; not wired into Eris.**
+>
+> **P300 Level-1 (structural oddball):** built with the R1 corrections. **Structural
+> integration NOT confirmed** — the response does not peak at the meaningful 45° angle (P2
+> fails); it peaks at the standard. But the architecture effect is **real**: an E-gated
+> internal boundary amplifies the receiver's integrative re-solving *beyond* mass transport
+> (P4-post p=3e-7), beyond a diffusive boundary (P5 p=5e-4), and beyond a monolith (P1-post
+> p=0.02) — just **not meaning-selectively**. This motivates **Level-2 (κ-wiring)**: meaning-
+> selective ignition needs a receiver *state* the input restructures. Level-2 deliberately
+> **not started** (awaits pre-registration). **Not merged; not wired into Eris.**
 
 **Hypothesis (handoff):** mirror/diffusive coupling has one attractor — *sameness* —
 so it can only fuse-then-lock. Replacing it with transport gated by the coupling law
@@ -387,3 +395,58 @@ a conserved N-channel budget for N=3,4,6, harder with N), and the **one scaling 
 fixed** (R3: sub-linear ≈−0.6 floor, not −⅓ in-band). Next layer (κ-wiring / P300) is
 deliberately **not started** — it waits on the P300 pre-registration. **Still not merged to
 main; not wired into Eris** — the branch decision remains pending.
+
+---
+
+# P300 Level-1 (structural oddball) — `p300_oddball.py`, `results/p300_summary.png`
+
+Built per the pre-registration with the R1 corrections (C1: the response is the receiver's
+*dissipative re-solving*, not conserved-amplitude redistribution; C2: transport-only matched-
+mass is the primary control; C3: divided+egate / divided+diff / monolith arms de-confound
+"divided" from "has an E-gate"). Structural (no-semantics) oddball: a phase-textured stimulus
+injected at a controlled mean relatedness angle Δ (0°=standard, 45°=meaningful, 90°=surprise)
+via the egate gate; observable = receiver global phase-coherence restructuring (peak excursion
+and post-offset re-solving). 3 arms × oddball+equiprobable streams × 6 seeds, N=120 trials.
+
+## Verdict: structural integration NOT confirmed (P2 fails) — but the architecture *does* amplify integration
+
+Per the decision rule (P1 ∧ P2 ∧ P4), the headline is **not confirmed**, because **P2 fails**.
+
+* **P2 (E vs novelty) — FAILS.** The response does **not** peak at the meaningful 45° deviant;
+  it peaks at **0° (the standard)** on every observable (peak-excursion and post-offset
+  re-solving), for A_egate, B_diff and C alike. So there is **no meaning-selective (E-shaped)
+  integrative response** to a purely structural oddball. (It does not peak at 90° either, so
+  it is not a novelty response — it is simply not angle-selective.)
+* **P1 (division+gate > monolith) — weak.** A>C at 45° directionally on both observables;
+  significant on post-offset re-solving (+0.0016, p=0.02) but not on peak-excursion (p=0.17).
+* **P4 (transport-only) — real ≫ matched-mass, but not 45-selective.** The real phase-structured
+  input drives far more restructuring than the matched-mass injection with the phase drive
+  removed, in both the full window (p=8e-10, partly circular) **and** the non-circular
+  post-offset window (+0.0022, p=3e-7). So the effect is **not mass influx** — it is the
+  phase-structured re-solving. But it is amplified at *all* Δ, not selectively at 45°.
+
+**The one robust positive (P5):** the **E-gate matters vs plain division** — A_egate's receiver
+restructures significantly more than B_diff's (post-offset +0.0018, **p=5e-4**). Combined with
+A>C and A>transport-only, the honest reading is: **a divided architecture with an E-gated
+internal boundary genuinely amplifies the receiver's integrative re-solving of a phase-structured
+input — beyond mass transport and beyond a plain-diffusive boundary — but this amplification is
+NOT selective for the "meaningful" 45° angle.**
+
+## Why (and what it means for the program)
+
+At realistic stimulus strength (μ_stim≈1.6) the response is a flat **null** — the gated input's
+effect sits below the field's intrinsic coherence fluctuations (verified on fresh rigs with
+global-coherence, post-offset, and local-coherence spatial observables; `results/p300_mu1.6/`).
+Only a strong stimulus (μ≈4–8) yields a detectable response, and even then it is not
+45-selective. R1 guarantees the *transport* peaks at 45° by construction, but that E-selectivity
+**does not translate into a selective restructuring response** — because a purely **structural**
+input has no receiver *state* to restructure meaningfully; it just perturbs-and-re-solves.
+
+**This is a clean motivation for Level-2 (κ-wiring):** the E-gate governs the *amount* of
+integrative restructuring (architecture effect, real), but *meaning-selective* ignition (the
+P300 proper) requires a **κ-bearing receiver whose semantic state the input restructures** —
+exactly the layer the handoff gates on the P300 pre-registration. Level-1 shows the necessary
+substrate (an E-gated boundary amplifies integration) without the sufficient condition
+(selectivity), so **Level-2 is warranted and Level-1 does not, by itself, demonstrate the P300**.
+Per hygiene, Level-2 is **not started** (awaits the pre-registration); **not merged; not wired
+into Eris.**
