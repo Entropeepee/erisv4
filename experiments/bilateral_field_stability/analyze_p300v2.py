@@ -189,6 +189,74 @@ def analyze_propagation(tag):
     print(f"  self_extinct fraction = {np.mean(ext):.2f}  (n={len(ext)})")
 
 
+def analyze_adapt(tag):
+    recs = load("adapt", tag)
+    if not recs:
+        print(f"  [adapt{tag}] MISSING"); return
+    print(f"\n=== AUDIT(i) kappa_pred IS PREDICTIVE / ADAPTS  (adapt{tag}) ===")
+    ks = sorted(set(r["k"] for r in recs))
+    curve = []
+    for k in ks:
+        w = [r["wave_amp"] for r in recs if r["k"] == k]
+        e = [r["error"] for r in recs if r["k"] == k]
+        curve.append((k, np.mean(w), np.mean(e)))
+    for k, w, e in curve:
+        print(f"    after-shift k={k:2d}: wave {w:.4f}  error {e:.4f}")
+    w0 = curve[0][1]; wend = np.mean([c[1] for c in curve[-4:]])
+    # is the post-shift wave decaying (adaptation)? Spearman(k, wave) should be negative
+    rho = spearman([r["k"] for r in recs], [r["wave_amp"] for r in recs])
+    print(f"  wave at first post-shift = {w0:.4f}; settled tail = {wend:.4f}; decay ratio = {wend/max(w0,1e-9):.2f}")
+    print(f"  Spearman(k, wave) = {rho:+.3f}  (negative => wave decays as kappa learns => ADAPTS)")
+
+
+def analyze_robust(tag):
+    recs = load("robust", tag)
+    if not recs:
+        print(f"  [robust{tag}] MISSING"); return
+    print(f"\n=== AUDIT(iii) EXCITABILITY NOT KNIFE-EDGE  (robust{tag}) ===")
+    variants = []
+    seen = set()
+    for r in recs:
+        key = (r["variant"], r["param"], r["mult"])
+        if key not in seen:
+            seen.add(key); variants.append(key)
+    print("  double-dissociation gap (violating wave - predicted wave) per FHN perturbation:")
+    all_ok = True
+    for name, param, mult in variants:
+        vw = [r["wave_amp"] for r in recs if r["variant"] == name and r["param"] == param
+              and r["mult"] == mult and r["kind"] == "violating"]
+        pw = [r["wave_amp"] for r in recs if r["variant"] == name and r["param"] == param
+              and r["mult"] == mult and r["kind"] == "predicted"]
+        gap = np.mean(vw) - np.mean(pw)
+        U, z, p, A = mannwhitney(vw, pw)
+        survives = A > 0.75 and gap > 0.005
+        all_ok = all_ok and survives
+        lbl = name if name == "baseline" else f"{param}x{mult}"
+        print(f"    {lbl:18s} gap={gap:.4f}  A(viol>pred)={A:.3f} p={p:.1e}  {'OK' if survives else 'weak'}")
+    print(f"  dissociation survives ALL {len(variants)} perturbations? {all_ok}")
+
+
+def analyze_trace(tag):
+    recs = load("trace", tag)
+    if not recs:
+        print(f"  [trace{tag}] MISSING"); return
+    print(f"\n=== AUDIT(ii) WAVE IS A TRANSIENT PULSE  (trace{tag}) ===")
+    for kind in ["predicted", "violating"]:
+        sub = [r for r in recs if r["kind"] == kind]
+        a = np.array([r["trace_a"] for r in sub]).mean(0)
+        sp = np.array([r["trace_spread"] for r in sub]).mean(0)
+        if a.max() > 1e-9:
+            t_peak = int(np.argmax(a))
+            rise = a[:t_peak + 1]; fall = a[t_peak:]
+            monotone_rise = bool(np.all(np.diff(rise) >= -1e-6)) if len(rise) > 1 else True
+            decays = bool(a[-1] < 0.1 * a.max())
+            print(f"    {kind:10s} a: peak={a.max():.4f}@t{t_peak}  final={a[-1]:.4f}  "
+                  f"spread peak={sp.max():.3f} final={sp[-1]:.3f}  "
+                  f"rise+fall pulse? {monotone_rise and decays}")
+        else:
+            print(f"    {kind:10s} a: no activation (floor) -- peak={a.max():.5f}")
+
+
 def main():
     for tag in ["_base", "_exc"]:
         print("\n" + "#" * 70)
@@ -199,6 +267,9 @@ def main():
         analyze_p2(tag)
         analyze_p3(tag)
         analyze_propagation(tag)
+        analyze_adapt(tag)
+        analyze_robust(tag)
+        analyze_trace(tag)
 
 
 if __name__ == "__main__":

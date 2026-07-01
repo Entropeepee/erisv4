@@ -63,6 +63,11 @@ class PredRig:
         self.pred_frozen = False       # no-prediction control
         # excitable recovery variable per site (0 = ready, high = refractory)
         self.w = np.zeros((N, N))
+        # FHN excitable-layer constants (defaults = the values used for the main runs). Exposed so
+        # the robustness sweep can perturb them and show the qualitative signatures are NOT a
+        # knife-edge tuning artifact (audit point iii).
+        self.fhn = dict(seed_thr=0.12, seed_gain=3.0, thr=0.25, diff=0.18,
+                        rec=0.02, rec_w=1.5, theta_gain=0.25)
 
     def settle(self, steps=300):
         for _ in range(steps):
@@ -88,7 +93,7 @@ class PredRig:
         dev = violation * colored_noise((N, N), rng, 2)
         return (base + dev) % (2 * np.pi)
 
-    def probe(self, delta_deg, texture, localized=False, use_precision=True):
+    def probe(self, delta_deg, texture, localized=False, use_precision=True, return_trace=False):
         """Present a probe: measure EXCHANGE (E-gated transport, a function of delta) and the
         WAVE (transient from the PRECISION-WEIGHTED prediction-error residual). kappa_pred is
         NOT updated here. With excitable=True the residual seeds a FitzHugh-Nagumo activator
@@ -110,14 +115,15 @@ class PredRig:
         if self.pred_frozen:
             drive = np.zeros((N, N))                                # no-prediction control
         if self.excitable:
+            f = self.fhn
             a = np.zeros((N, N)); w = np.zeros((N, N))
-            a += np.clip(drive - 0.12, 0.0, 1.0) * 3.0             # threshold seeding of activator
+            a += np.clip(drive - f["seed_thr"], 0.0, 1.0) * f["seed_gain"]   # threshold seeding
             for t in range(W_POST):
                 lap = (np.roll(a, 1, 0) + np.roll(a, -1, 0) + np.roll(a, 1, 1) + np.roll(a, -1, 1) - 4 * a)
-                a = a + 0.5 * (a * (a - 0.25) * (1.0 - a) - w + 0.18 * lap)   # FHN activator + diffusion
-                w = w + 0.5 * 0.02 * (a - 1.5 * w)                            # slow refractory recovery
+                a = a + 0.5 * (a * (a - f["thr"]) * (1.0 - a) - w + f["diff"] * lap)  # FHN + diffusion
+                w = w + 0.5 * f["rec"] * (a - f["rec_w"] * w)                         # slow recovery
                 a = np.clip(a, 0.0, 1.5)
-                self.R.theta = (self.R.theta + 0.25 * a * np.sign(residual)) % (2 * np.pi)
+                self.R.theta = (self.R.theta + f["theta_gain"] * a * np.sign(residual)) % (2 * np.pi)
                 self.R.step(); self._recover()
                 Cs.append(gcoh(self.R.theta)); a_energy.append(float(np.mean(a)))
                 spread.append(float(np.mean(a > 0.15)))
@@ -131,11 +137,16 @@ class PredRig:
         Cs = np.array(Cs)
         wave_amp = float(np.max(np.abs(Cs - C0)))
         tail = float(np.mean(np.abs(Cs[-8:] - C0)))
-        return {"delta": delta_deg, "error": err, "exchange": exchange, "precision": prec,
-                "wave_amp": wave_amp, "spread_peak": float(np.max(spread)),
-                "spread_final": float(np.mean(spread[-8:])),
-                "a_peak": float(np.max(a_energy)), "a_final": float(np.mean(a_energy[-8:])),
-                "self_extinct": bool(tail < 0.4 * wave_amp + 1e-9)}
+        out = {"delta": delta_deg, "error": err, "exchange": exchange, "precision": prec,
+               "wave_amp": wave_amp, "spread_peak": float(np.max(spread)),
+               "spread_final": float(np.mean(spread[-8:])),
+               "a_peak": float(np.max(a_energy)), "a_final": float(np.mean(a_energy[-8:])),
+               "self_extinct": bool(tail < 0.4 * wave_amp + 1e-9)}
+        if return_trace:
+            out["trace_C"] = [float(x) for x in Cs]
+            out["trace_a"] = [float(x) for x in a_energy]
+            out["trace_spread"] = [float(x) for x in spread]
+        return out
 
     def update_pred(self, texture):
         if not self.pred_frozen:
@@ -227,12 +238,71 @@ def run_p5_flow(excitable, n_seeds, n_stream=40):
     return recs
 
 
+def run_adaptation(excitable, n_seeds, shift=1.6, n_after=14):
+    """Audit (i): is kappa_pred GENUINELY PREDICTIVE (does it LEARN)? Establish kappa on stream A,
+    then STEP-CHANGE the input mean. A genuine running predictor mispredicts the first post-shift
+    input (error spike -> wave), then ADAPTS: as kappa_pred tracks the new mean over presentations,
+    the error -- and the wave -- decay back to floor. A fixed (non-learning) reference could not
+    show this decay. kappa is updated ONLY AFTER each response is measured (no peek)."""
+    recs = []
+    for s in range(n_seeds):
+        rig = _mkrig(s, excitable)                      # kappa established on stream A
+        base = rig.kappa_angle().copy()
+        new_center = (base + shift * colored_noise((N, N), np.random.default_rng(s + 9999), 2))
+        for k in range(n_after):
+            tex = (new_center + 0.02 * rig.rng.standard_normal((N, N))) % (2 * np.pi)
+            r = rig.probe(45.0, tex, localized=True)    # measure BEFORE updating (no peek)
+            rig.update_pred(tex)                         # kappa learns the new mean -> adapts
+            recs.append({"seed": s, "k": k, "wave_amp": r["wave_amp"],
+                         "error": r["error"], "precision": r["precision"]})
+    return recs
+
+
+def run_excite_robustness(excitable, n_seeds):
+    """Audit (iii): is the excitable result a knife-edge tuning artifact? Perturb each FHN constant
+    +/-40% (one at a time) and re-measure the double-dissociation gap (violating wave - predicted
+    wave) and the ignition threshold. If the qualitative signatures survive across the sweep, the
+    excitability is a generic ingredient, not hand-tuned to manufacture the headline."""
+    recs = []
+    base_fhn = dict(seed_thr=0.12, seed_gain=3.0, thr=0.25, diff=0.18, rec=0.02, rec_w=1.5, theta_gain=0.25)
+    variants = [("baseline", None, 1.0)]
+    for key in ["seed_gain", "thr", "diff", "rec", "theta_gain"]:
+        for mult in [0.6, 1.4]:
+            variants.append((key, key, mult))
+    for name, key, mult in variants:
+        for s in range(n_seeds):
+            for kind in ["predicted", "violating"]:
+                rig = _mkrig(s, True)                    # excitable always (this is the excitable audit)
+                if key is not None:
+                    rig.fhn = dict(base_fhn); rig.fhn[key] = base_fhn[key] * mult
+                r = rig.probe(45.0, rig.make_texture(kind, violation=1.2), localized=True)
+                recs.append({"variant": name, "param": key, "mult": mult, "seed": s,
+                             "kind": kind, "wave_amp": r["wave_amp"]})
+    return recs
+
+
+def run_trace(excitable, n_seeds):
+    """Audit (ii): capture the full post-stimulus time course to show the WAVE is a TRANSIENT
+    propagating PULSE (activator rises then self-extinguishes; spread rises then collapses), not a
+    steady-state step. Records one predicted + one violating trace per seed."""
+    recs = []
+    for s in range(n_seeds):
+        for kind in ["predicted", "violating"]:
+            rig = _mkrig(s, excitable)
+            r = rig.probe(45.0, rig.make_texture(kind, violation=1.6), localized=True, return_trace=True)
+            recs.append({"seed": s, "kind": kind, "trace_C": r["trace_C"],
+                         "trace_a": r["trace_a"], "trace_spread": r["trace_spread"],
+                         "wave_amp": r["wave_amp"]})
+    return recs
+
+
 def main():
     import sys
     cmd = sys.argv[1]; ns = int(sys.argv[sys.argv.index("--seeds") + 1]) if "--seeds" in sys.argv else 20
     exc = "--excitable" in sys.argv
     tag = "_exc" if exc else "_base"
-    fn = {"crossed": run_crossed, "p2": run_p2_sweep, "p3": run_p3_sweep, "p5": run_p5_flow}[cmd]
+    fn = {"crossed": run_crossed, "p2": run_p2_sweep, "p3": run_p3_sweep, "p5": run_p5_flow,
+          "adapt": run_adaptation, "robust": run_excite_robustness, "trace": run_trace}[cmd]
     recs = fn(exc, ns)
     out = os.path.join(OUTDIR, f"{cmd}{tag}.json")
     json.dump({"cmd": cmd, "excitable": exc, "n_seeds": ns, "records": recs}, open(out, "w"))
