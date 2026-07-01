@@ -184,8 +184,10 @@ def analyze_propagation(tag):
     sp = [r["spread_peak"] for r in viol]; sf = [r["spread_final"] for r in viol]
     ap = [r["a_peak"] for r in viol]; af = [r["a_final"] for r in viol]
     ext = [r["self_extinct"] for r in viol]
+    cr = [r.get("coh_return", float("nan")) for r in viol]
     print(f"  spread_peak {summ(sp)}  spread_final {summ(sf)}")
     print(f"  a_peak {summ(ap)}  a_final {summ(af)}  (a_final~0 => refractory self-extinction)")
+    print(f"  coherence return-to-baseline (1=fully returned, 0=permanent step) = {summ(cr)}")
     print(f"  self_extinct fraction = {np.mean(ext):.2f}  (n={len(ext)})")
 
 
@@ -217,23 +219,26 @@ def analyze_robust(tag):
     variants = []
     seen = set()
     for r in recs:
-        key = (r["variant"], r["param"], r["mult"])
-        if key not in seen:
-            seen.add(key); variants.append(key)
-    print("  double-dissociation gap (violating wave - predicted wave) per FHN perturbation:")
+        if r["variant"] not in seen:
+            seen.add(r["variant"]); variants.append(r["variant"])
+    # for each FHN perturbation: does the IGNITION THRESHOLD survive?  sub-threshold viol (0.3) must
+    # stay near the ~0.008 floor; supra-threshold viol (1.4) must ignite well above it.
+    print("  ignition threshold per FHN perturbation (sub=viol0.3 floor, supra=viol1.4 ignited):")
+    base_sub = np.mean([r["wave_amp"] for r in recs if r["variant"] == "baseline" and r["band"] == "sub"])
     all_ok = True
-    for name, param, mult in variants:
-        vw = [r["wave_amp"] for r in recs if r["variant"] == name and r["param"] == param
-              and r["mult"] == mult and r["kind"] == "violating"]
-        pw = [r["wave_amp"] for r in recs if r["variant"] == name and r["param"] == param
-              and r["mult"] == mult and r["kind"] == "predicted"]
-        gap = np.mean(vw) - np.mean(pw)
-        U, z, p, A = mannwhitney(vw, pw)
-        survives = A > 0.75 and gap > 0.005
+    for name in variants:
+        sub = [r["wave_amp"] for r in recs if r["variant"] == name and r["band"] == "sub"]
+        supra = [r["wave_amp"] for r in recs if r["variant"] == name and r["band"] == "supra"]
+        U, z, p, A = mannwhitney(supra, sub)
+        gap = np.mean(supra) - np.mean(sub)
+        # threshold preserved: supra ignites above sub (A high, gap sizeable) AND sub stays near floor
+        sub_low = np.mean(sub) < 3 * base_sub + 0.004
+        survives = A > 0.75 and gap > 0.008 and sub_low
         all_ok = all_ok and survives
-        lbl = name if name == "baseline" else f"{param}x{mult}"
-        print(f"    {lbl:18s} gap={gap:.4f}  A(viol>pred)={A:.3f} p={p:.1e}  {'OK' if survives else 'weak'}")
-    print(f"  dissociation survives ALL {len(variants)} perturbations? {all_ok}")
+        print(f"    {name:14s} sub={np.mean(sub):.4f} supra={np.mean(supra):.4f} "
+              f"gap={gap:.4f} A={A:.3f} p={p:.1e}  {'OK' if survives else 'WEAK'}")
+    print(f"  ignition threshold (floor-below / ignite-above) survives ALL {len(variants)} "
+          f"perturbations (incl. 9 one-at-a-time and 6 joint)? {all_ok}")
 
 
 def analyze_trace(tag):

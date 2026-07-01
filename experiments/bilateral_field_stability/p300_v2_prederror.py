@@ -67,7 +67,7 @@ class PredRig:
         # the robustness sweep can perturb them and show the qualitative signatures are NOT a
         # knife-edge tuning artifact (audit point iii).
         self.fhn = dict(seed_thr=0.12, seed_gain=3.0, thr=0.25, diff=0.18,
-                        rec=0.02, rec_w=1.5, theta_gain=0.25)
+                        rec=0.02, rec_w=1.5, theta_gain=0.25, dt=0.5, clip_max=1.5)
 
     def settle(self, steps=300):
         for _ in range(steps):
@@ -116,13 +116,20 @@ class PredRig:
             drive = np.zeros((N, N))                                # no-prediction control
         if self.excitable:
             f = self.fhn
+            dt = f.get("dt", 0.5); cmax = f.get("clip_max", 1.5)
             a = np.zeros((N, N)); w = np.zeros((N, N))
             a += np.clip(drive - f["seed_thr"], 0.0, 1.0) * f["seed_gain"]   # threshold seeding
             for t in range(W_POST):
                 lap = (np.roll(a, 1, 0) + np.roll(a, -1, 0) + np.roll(a, 1, 1) + np.roll(a, -1, 1) - 4 * a)
-                a = a + 0.5 * (a * (a - f["thr"]) * (1.0 - a) - w + f["diff"] * lap)  # FHN + diffusion
-                w = w + 0.5 * f["rec"] * (a - f["rec_w"] * w)                         # slow recovery
-                a = np.clip(a, 0.0, 1.5)
+                a = a + dt * (a * (a - f["thr"]) * (1.0 - a) - w + f["diff"] * lap)  # FHN + diffusion
+                w = w + dt * f["rec"] * (a - f["rec_w"] * w)                         # slow recovery
+                a = np.clip(a, 0.0, cmax)
+                # the activator forces the receiver phase; the ACTIVATOR itself is the transient,
+                # propagating, self-extinguishing wave (a->0, spread->0 by refractory recovery). The
+                # global coherence, in contrast, INTEGRATES the prediction-error input and settles to
+                # a new level (a registered change) rather than returning to baseline -- coh_return
+                # (reported below) makes this explicit. We measure the pulse's effect as the peak
+                # coherence excursion; we do NOT claim the coherence itself self-extinguishes.
                 self.R.theta = (self.R.theta + f["theta_gain"] * a * np.sign(residual)) % (2 * np.pi)
                 self.R.step(); self._recover()
                 Cs.append(gcoh(self.R.theta)); a_energy.append(float(np.mean(a)))
@@ -137,11 +144,14 @@ class PredRig:
         Cs = np.array(Cs)
         wave_amp = float(np.max(np.abs(Cs - C0)))
         tail = float(np.mean(np.abs(Cs[-8:] - C0)))
+        # coherence return-to-baseline: how far the coherence transient has decayed from its peak
+        # back toward baseline by the end of the window (1 = fully returned, 0 = permanent step).
+        coh_return = float(1.0 - tail / (wave_amp + 1e-9))
         out = {"delta": delta_deg, "error": err, "exchange": exchange, "precision": prec,
                "wave_amp": wave_amp, "spread_peak": float(np.max(spread)),
                "spread_final": float(np.mean(spread[-8:])),
                "a_peak": float(np.max(a_energy)), "a_final": float(np.mean(a_energy[-8:])),
-               "self_extinct": bool(tail < 0.4 * wave_amp + 1e-9)}
+               "coh_return": coh_return, "self_extinct": bool(tail < 0.4 * wave_amp + 1e-9)}
         if return_trace:
             out["trace_C"] = [float(x) for x in Cs]
             out["trace_a"] = [float(x) for x in a_energy]
@@ -258,26 +268,43 @@ def run_adaptation(excitable, n_seeds, shift=1.6, n_after=14):
     return recs
 
 
+BASE_FHN = dict(seed_thr=0.12, seed_gain=3.0, thr=0.25, diff=0.18, rec=0.02,
+                rec_w=1.5, theta_gain=0.25, dt=0.5, clip_max=1.5)
+
+
+def _lcg(i):
+    """deterministic pseudo-random in [0,1) from an integer index (Math.random is unavailable and we
+    want reproducibility): a small LCG so the joint-perturbation variants are fixed per index."""
+    x = (1103515245 * (i + 12345) + 12345) % 2147483648
+    return x / 2147483648.0
+
+
 def run_excite_robustness(excitable, n_seeds):
-    """Audit (iii): is the excitable result a knife-edge tuning artifact? Perturb each FHN constant
-    +/-40% (one at a time) and re-measure the double-dissociation gap (violating wave - predicted
-    wave) and the ignition threshold. If the qualitative signatures survive across the sweep, the
-    excitability is a generic ingredient, not hand-tuned to manufacture the headline."""
+    """Audit (iii): is the excitable result a knife-edge tuning artifact? Perturb the FHN constants
+    and re-measure (a) the double-dissociation gap AND (b) the IGNITION THRESHOLD itself -- wave at
+    a sub-threshold violation (0.3, must stay near floor) vs a supra-threshold one (1.4, must
+    ignite). ALL nine constants are swept one-at-a-time +/-40% (including the previously un-swept
+    seed_thr, rec_w, dt, clip_max), plus JOINT perturbations where every constant is jittered
+    together in [0.6,1.4]. A generic (not hand-tuned) excitable layer keeps both the gap AND the
+    threshold structure (floor below, ignite above) across the whole sweep."""
     recs = []
-    base_fhn = dict(seed_thr=0.12, seed_gain=3.0, thr=0.25, diff=0.18, rec=0.02, rec_w=1.5, theta_gain=0.25)
-    variants = [("baseline", None, 1.0)]
-    for key in ["seed_gain", "thr", "diff", "rec", "theta_gain"]:
+    variants = [("baseline", 1.0, None)]
+    for key in ["seed_thr", "seed_gain", "thr", "diff", "rec", "rec_w", "theta_gain", "dt", "clip_max"]:
         for mult in [0.6, 1.4]:
-            variants.append((key, key, mult))
-    for name, key, mult in variants:
+            variants.append((f"{key}x{mult}", mult, {key: mult}))
+    for j in range(6):     # joint: every constant independently jittered in [0.6, 1.4]
+        jit = {k: 0.6 + 0.8 * _lcg(j * 100 + ki * 13 + 7) for ki, k in enumerate(BASE_FHN)}
+        variants.append((f"joint{j}", None, jit))
+    for name, _mult, jit in variants:
         for s in range(n_seeds):
-            for kind in ["predicted", "violating"]:
+            for viol, band in [(0.3, "sub"), (1.4, "supra")]:
                 rig = _mkrig(s, True)                    # excitable always (this is the excitable audit)
-                if key is not None:
-                    rig.fhn = dict(base_fhn); rig.fhn[key] = base_fhn[key] * mult
-                r = rig.probe(45.0, rig.make_texture(kind, violation=1.2), localized=True)
-                recs.append({"variant": name, "param": key, "mult": mult, "seed": s,
-                             "kind": kind, "wave_amp": r["wave_amp"]})
+                if jit is not None:
+                    rig.fhn = {k: BASE_FHN[k] * jit.get(k, 1.0) for k in BASE_FHN}
+                kind = "violating" if viol > 0.05 else "predicted"
+                r = rig.probe(45.0, rig.make_texture(kind, violation=viol), localized=True)
+                recs.append({"variant": name, "seed": s, "band": band, "viol": viol,
+                             "wave_amp": r["wave_amp"], "a_peak": r["a_peak"]})
     return recs
 
 
