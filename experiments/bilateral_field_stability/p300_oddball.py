@@ -29,7 +29,7 @@ OUTDIR = os.path.join(RES, "p300")
 os.makedirs(OUTDIR, exist_ok=True)
 SIG = 0.016
 W_STIM, W_POST, W_ISI, W_BASE = 12, 48, 36, 12
-MU_PARTNER, MU_STIM = 0.9, 1.6
+MU_PARTNER, MU_STIM = 0.9, 4.0
 SEED_OFFSET = 20000
 
 
@@ -114,14 +114,19 @@ def run_trial(rig, delta_deg, mu_stim, gate_phase=True):
     for t in range(W_STIM):
         mass += rig.stim_step(stim_theta, mu_stim, gate_phase=gate_phase)
         C.append(rig.receiver_coherence())
+    C_offset = rig.receiver_coherence()   # coherence at stimulus OFFSET
+    post = [C_offset]
     for t in range(W_POST):
-        rig.free_step(); C.append(rig.receiver_coherence())
-    C = np.array(C)
+        rig.free_step(); C.append(rig.receiver_coherence()); post.append(rig.receiver_coherence())
+    C = np.array(C); post = np.array(post)
     rates = np.abs(np.diff(C))
     peak_rate = float(np.max(rates) - base_rate)
     peak_excursion = float(np.max(np.abs(C - base_C)))
+    # POST-OFFSET re-solving (C1: the receiver's DISSIPATIVE restructuring AFTER the direct kick
+    # ends) -- isolates integration from the during-stim drive; the rigorous P4 observable.
+    post_resolve = float(np.max(np.abs(post - C_offset)))
     return {"delta": delta_deg, "peak_rate": peak_rate, "peak_excursion": peak_excursion,
-            "mass": float(mass)}
+            "post_resolve": post_resolve, "mass": float(mass)}
 
 
 def make_sequence(stream, n_trials, seed):
